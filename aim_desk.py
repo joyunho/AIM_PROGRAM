@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v2.1 — 코박스 자동 기록 + 성장 시각화
+에임 데스크 v2.2 — 코박스 자동 기록 + 성장 시각화 + 루틴 자동 진행
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
+· 자동 진행: 코박스 공식 딥링크(steam://run/824270/?action=jump-to-scenario)로 한 판이 끝나면 다음 판을 자동 전송
 · 기록 보호: 원자적 저장 · 손상 파일 백업 · 스캔 실패 시 기록 보존 · 오류 로그
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
@@ -341,6 +342,27 @@ def open_uri(uri):
 def launch_kovaaks():
     return open_uri("steam://rungameid/824270")
 
+KOVAAKS_EXE = "FPSAimTrainer-Win64-Shipping.exe"
+
+def scenario_uri(name: str) -> str:
+    """코박스 공식 딥링크(3.0.0+, 공백은 %20): 게임이 꺼져 있으면 켜서, 켜져 있으면 그 자리에서 해당 시나리오를 바로 시작"""
+    return "steam://run/824270/?action=jump-to-scenario;name=" + name.replace(" ", "%20")
+
+def launch_scenario(key: str) -> bool:
+    return open_uri(scenario_uri(SCEN[key][0]))
+
+def kovaaks_running() -> bool:
+    """코박스 프로세스가 떠 있는지 (Windows tasklist). 판단 불가면 True — 자동 진행을 괜히 막지 않기 위해"""
+    if sys.platform != "win32": return True
+    try:
+        import subprocess
+        r = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {KOVAAKS_EXE}", "/NH"],
+                           capture_output=True, timeout=5,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return KOVAAKS_EXE.lower().encode() in r.stdout.lower()
+    except Exception:
+        return True
+
 ICON_B64 = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAACkUlEQVR4nO1bwWrDMAxNxo6Dwc6D0vYy9v/fMnppS2HnQCD37WQwiSVL1pPTpn6nrY4dvWfZsmyn6xqeG31Jpbf3jz+0IShM46DiJH74nklTkIghEsCL/OV6O4e/D/vd0eMdORFeucJH7PU5AgdKiJdcxa2A4pMUYGvkA1K8SA94FiwE2GrvB8z59VyhB+KZn4JXRIgRJsUqAkhIU/AOj24CWEhTQIqxEKAW+ZgEtRCS1rdiGoeeXQhpQRmuNZoTI/yPEgIWBlPkD/vd0Woo1QZqiEEEmBuDID5Hqk2ECOY5IEXealStd07j0JsEKDUEMckhRDAJoDWgxF21bWpFmMahh8wBHuQl9RDDrcgDpBsZJWHRWkcjSpEHSHuzNCxaw57W20xDgCKDCIuasGcZCu77AYiFEMqWFFQCSMaax0anJE+Q5hJzQD3AIwP0fg80GYqR6/3T9+fit6+fX7Y9D4HFHoB07RR57ncpSoaBSzbICZQjyZWXjnMOVXeFpT1s9QQNFnOARNk1MkCpLZKy2N52LrC2AWtjMQRqLnAQ4JbLEjuregAX50ueQwAmgDRE5chx5R5eKBYAGYMpktaeLxHIbSl8ud7OnBFasl55BnQOqDU5It+jEsAzLeXgmYa7RwGrCN4ptkkA6RbV5Xo7a4mk6ki34DRQCyB1L2pjM2cs9YzlvRwgByNe5wLatlc7GPE6wPAUNqCdDYZ/2umw4YoMwhNq9nyA2+FoSdjLQRMWNXDJBgMQQljDYg7QZCgYRV1sip/hUOuWWNe1e4Ltpmi7KzwvqHlbfK2N1vjrkUUU0H519WiY83v6c4GkAFv1ghQv0gO2JgLFh10IhUqP/BlNriPbl6MlDd+zGFsbuu74B4fxI3bL2IpFAAAAAElFTkSuQmCC"
 # ══════════════════ GUI (v2 — 커스텀 위젯) ══════════════════
 C = {"bg":"#0B0E11","card":"#14191F","card2":"#1D242C","c3":"#242C35","line":"#28313B",
@@ -548,8 +570,13 @@ def main():
     day_state = {"dt": "v", "pl": None}
     routine_rows = []
 
-    # ── 순서창: 오늘 칠 시나리오 전체를 위에서 아래로 한 번에 나열, 끝난 판은 자동 체크 ──
-    seq_win = {"win": None, "rows": [], "prog": None}
+    # ── 순서창 + 자동 진행 ──
+    #   오늘 칠 시나리오를 순서대로 나열하고, 코박스 딥링크로 한 판씩 전송한다.
+    #   판이 끝나 stats CSV가 생기면(2초 감시) 대기 시간 뒤 다음 시나리오 딥링크를 보낸다 → 결과창에서 NEXT를 누를 필요가 없다.
+    seq_win = {"win": None, "rows": [], "prog": None, "auto_lbl": None, "auto_btn": None,
+               "seq": [], "base": {}, "skipped": {}}
+    auto = {"on": False, "fired": None, "due": None}     # fired/due: 전송했거나 전송 예약된 순서창 인덱스
+    def auto_delay(): return int(data.get("auto_delay", 4))
 
     def sequence_for(plname):
         """플레이리스트(또는 토요일 벤치 18개)를 실제 치는 순서대로 펼친 key 목록"""
@@ -559,24 +586,43 @@ def main():
             return [k for s in SUBS for k, _ in s[3]]
         return []
 
+    def seq_status():
+        """각 줄의 완료 여부 목록과 '다음에 칠' 인덱스(None이면 전부 완료).
+        완료 = (오늘 판 수 − 처음부터 눌렀을 때의 기준 판 수 + 건너뛴 수) ≥ 그 시나리오의 n번째 줄"""
+        day = data["days"].get(today_key[0], blank_day())
+        seen, done, nxt = {}, [], None
+        for i, k in enumerate(seq_win["seq"]):
+            seen[k] = seen.get(k, 0) + 1
+            played = day["count"].get(k, 0) - seq_win["base"].get(k, 0) + seq_win["skipped"].get(k, 0)
+            d_ = played >= seen[k]
+            done.append(d_)
+            if not d_ and nxt is None: nxt = i
+        return done, nxt
+
+    def seq_alive():
+        w = seq_win["win"]
+        return w is not None and w.winfo_exists()
+
     def open_sequence(plname):
         seq = sequence_for(plname)
         if not seq: return
-        old = seq_win["win"]
-        if old is not None and old.winfo_exists(): old.destroy()
-        w = tk.Toplevel(root); seq_win["win"] = w; seq_win["rows"] = []
+        if seq_alive(): seq_win["win"].destroy()
+        w = tk.Toplevel(root)
+        seq_win.update(win=w, rows=[], seq=seq, base={}, skipped={})
         title = plname or "볼테익 벤치마크 18"
         w.title("오늘 순서 — " + title); w.configure(bg=C["bg"])
         w.attributes("-topmost", True); w.resizable(False, False)
+        w.protocol("WM_DELETE_WINDOW", lambda: (stop_auto(), w.destroy()))
         hd = tk.Frame(w, bg=C["bg"]); hd.pack(fill="x", padx=12, pady=(10, 2))
         tk.Label(hd, text=title, font=FB, bg=C["bg"], fg=C["txt"]).pack(side="left")
         seq_win["prog"] = tk.Label(hd, text="", font=FNS, bg=C["bg"], fg=C["sub"])
         seq_win["prog"].pack(side="right")
-        tk.Label(w, text="위에서 아래로 · 끝난 판은 자동 체크 · 항상 위에 떠 있음",
-                 font=FS, bg=C["bg"], fg=C["dim"]).pack(anchor="w", padx=12)
+        seq_win["auto_lbl"] = tk.Label(w, text="", font=FS, bg=C["bg"], fg=C["dim"],
+                                       wraplength=300, justify="left")
+        seq_win["auto_lbl"].pack(anchor="w", padx=12)
         box = tk.Frame(w, bg=C["card"], padx=10, pady=8,
                        highlightbackground=C["line"], highlightthickness=1)
-        box.pack(fill="both", expand=True, padx=12, pady=(6, 12))
+        box.pack(fill="both", expand=True, padx=12, pady=(6, 8))
         for i, k in enumerate(seq, 1):
             row = tk.Frame(box, bg=C["card"]); row.pack(fill="x", pady=1)
             num = tk.Label(row, text=f"{i:02d}", font=FNS, width=3, anchor="e", bg=C["card"], fg=C["dim"])
@@ -587,6 +633,18 @@ def main():
             st = tk.Label(row, text="", font=FN, width=2, bg=C["card"], fg=C["dim"])
             st.pack(side="right")
             seq_win["rows"].append((k, num, nm, st))
+        # 조작 줄: 자동 진행 토글 · 다음 판(건너뛰기) · 다시 보내기 · 처음부터 · 판 사이 대기
+        ctl = tk.Frame(w, bg=C["bg"]); ctl.pack(fill="x", padx=12, pady=(0, 6))
+        seq_win["auto_btn"] = Toggle(ctl, "자동 진행", lambda: auto["on"], set_auto)
+        seq_win["auto_btn"].pack(side="left")
+        RBtn(ctl, "다음 판 ▶", skip_current, padx=10, pady=5).pack(side="left", padx=(6, 0))
+        RBtn(ctl, "다시 보내기", resend_current, padx=10, pady=5).pack(side="left", padx=(6, 0))
+        RBtn(ctl, "처음부터", restart_sequence, padx=10, pady=5).pack(side="left", padx=(6, 0))
+        dl = tk.Frame(w, bg=C["bg"]); dl.pack(fill="x", padx=12, pady=(0, 10))
+        tk.Label(dl, text="판 끝난 뒤 다음 판까지 대기(초)", font=FS, bg=C["bg"], fg=C["sub"]).pack(side="left")
+        Stepper(dl, auto_delay,
+                lambda v: (data.__setitem__("auto_delay", max(1, min(30, v))), save_data(data), update_sequence())
+                ).pack(side="left", padx=(8, 0))
         # 본창 오른쪽에 붙이되 화면 밖으로 나가면 본창 위에 겹쳐서
         root.update_idletasks(); w.update_idletasks()
         x = root.winfo_x() + root.winfo_width() + 8
@@ -595,34 +653,107 @@ def main():
         update_sequence()
 
     def update_sequence():
-        w = seq_win["win"]
-        if w is None or not w.winfo_exists(): return
-        day = data["days"].get(today_key[0], blank_day())
-        seen, done_n, marked = {}, 0, False
-        for k, num, nm, st in seq_win["rows"]:
-            seen[k] = seen.get(k, 0) + 1
-            if day["count"].get(k, 0) >= seen[k]:          # 그 시나리오의 n번째 판까지 끝남
-                done_n += 1
+        if not seq_alive(): return
+        done, nxt = seq_status()
+        for i, (k, num, nm, st) in enumerate(seq_win["rows"]):
+            if done[i]:
                 st.configure(text="✓", fg=C["ok"]); nm.configure(fg=C["dim"]); num.configure(fg=C["dim"])
-            elif not marked:                                 # 다음에 칠 판
-                marked = True
+            elif i == nxt:
                 st.configure(text="▶", fg=C["gold"]); nm.configure(fg=C["txt"]); num.configure(fg=C["gold"])
             else:
                 st.configure(text=""); nm.configure(fg=C["sub"]); num.configure(fg=C["dim"])
-        total = len(seq_win["rows"])
+        total, done_n = len(done), sum(done)
         seq_win["prog"].configure(text=f"{done_n}/{total}" + ("  완료 ✓" if done_n >= total else ""),
                                   fg=C["ok"] if done_n >= total else C["sub"])
+        if nxt is None:
+            msg = "오늘 순서 전부 완료 🎉  ·  한 번 더 돌리려면 '처음부터'"
+        elif auto["on"]:
+            msg = (f"자동 진행 중 · 판이 끝나면 {auto_delay()}초 뒤 다음 판을 코박스로 보냅니다"
+                   if auto["fired"] == nxt else f"{sname(seq_win['seq'][nxt])} 전송 대기…")
+        else:
+            msg = "자동 진행 꺼짐 — 코박스에서 직접 고르거나 '다음 판 ▶'로 보내세요"
+        seq_win["auto_lbl"].configure(text=msg, fg=C["ok"] if (auto["on"] and nxt is not None) else C["dim"])
+        if seq_win["auto_btn"] is not None and seq_win["auto_btn"].winfo_exists():
+            seq_win["auto_btn"].sync()
+
+    # ── 자동 진행 엔진 ──
+    def fire(idx):
+        """seq[idx] 시나리오 딥링크 전송 (코박스가 꺼져 있으면 스팀이 켜서 시작한다)"""
+        seq = seq_win["seq"]
+        if idx is None or idx >= len(seq): return False
+        ok = launch_scenario(seq[idx])
+        auto["fired"] = idx; auto["due"] = None
+        if not ok: show_toast("스팀 실행 실패 — Steam이 켜져 있는지 확인하세요")
+        update_sequence()
+        return ok
+
+    def fire_due(idx):
+        auto["due"] = None
+        if not auto["on"] or not seq_alive(): return
+        _, nxt = seq_status()
+        if nxt != idx: return                          # 그 사이 상황이 바뀜(다른 판을 쳤거나 건너뜀)
+        if auto["fired"] is not None and not kovaaks_running():
+            stop_auto("코박스가 꺼져 있어 자동 진행을 멈췄습니다"); return
+        fire(idx)
+
+    def auto_step():
+        """스캔 후 호출: 다음 칠 판이 아직 전송 전이면 대기 시간 뒤 전송을 예약"""
+        if not auto["on"]: return
+        if not seq_alive(): auto["on"] = False; return
+        _, nxt = seq_status()
+        if nxt is None:
+            stop_auto("오늘 순서 전부 완료 🎉 수고했어요"); return
+        if auto["fired"] == nxt or auto["due"] == nxt: return
+        auto["due"] = nxt
+        root.after(auto_delay() * 1000, lambda: fire_due(nxt))
+
+    def stop_auto(msg=None):
+        auto["on"] = False; auto["due"] = None
+        if msg: show_toast(msg)
+        update_sequence()
+
+    def set_auto(v):
+        auto["on"] = bool(v)
+        if auto["on"]:
+            _, nxt = seq_status()
+            if nxt is not None and auto["fired"] != nxt: fire(nxt)    # 켜는 즉시 현재 차례를 보낸다
+        update_sequence()
+
+    def skip_current():
+        """지금 차례를 건너뛰고 다음 판을 바로 보낸다"""
+        _, nxt = seq_status()
+        if nxt is None: return
+        k = seq_win["seq"][nxt]
+        seq_win["skipped"][k] = seq_win["skipped"].get(k, 0) + 1
+        _, nxt2 = seq_status()
+        if nxt2 is None: stop_auto("오늘 순서 전부 완료 🎉"); return
+        fire(nxt2)
+
+    def resend_current():
+        _, nxt = seq_status()
+        if nxt is not None: fire(nxt)
+
+    def restart_sequence():
+        """지금까지 친 판은 그대로 두고 순서를 1번부터 다시 (오늘 두 번째 세션용)"""
+        day = data["days"].get(today_key[0], blank_day())
+        seq_win["base"] = dict(day["count"]); seq_win["skipped"] = {}
+        auto["fired"] = None; auto["due"] = None
+        update_sequence()
+        if auto["on"]: fire(0)
 
     def run_playlist(plname):
         sd = data.get("stats_dir")
-        if sd: ensure_playlists(sd)
-        launched = launch_kovaaks()
+        if sd: ensure_playlists(sd)                    # 수동으로 돌릴 때를 위해 로컬 플레이리스트도 계속 설치
         open_sequence(plname)
-        if plname:
-            show_toast(f"▶ LOCAL PLAYLISTS → \"{plname}\" 재생  ·  좌하단 토글이 FREEPLAY면 CHALLENGE로! (프리플레이는 기록이 안 남습니다)"
-                       + ("" if launched else "  · 스팀 실행은 수동으로"))
-        elif not launched:
-            show_toast("스팀 실행 실패 — Steam이 켜져 있는지 확인하고 코박스를 직접 실행하세요")
+        if not seq_win["seq"] or not seq_alive():
+            if not launch_kovaaks(): show_toast("스팀 실행 실패 — Steam이 켜져 있는지 확인하고 코박스를 직접 실행하세요")
+            return
+        auto.update(on=True, fired=None, due=None)
+        _, nxt = seq_status()
+        if nxt is None: restart_sequence()             # 오늘 이미 다 쳤으면 1번부터 한 번 더
+        else: fire(nxt)
+        show_toast(f"▶ 자동 진행 시작 — 코박스가 꺼져 있으면 켜지고, 한 판이 끝날 때마다 {auto_delay()}초 뒤 다음 판이 자동으로 뜹니다"
+                   "  ·  좌하단 토글이 FREEPLAY면 CHALLENGE로! (프리플레이는 기록이 안 남습니다)")
 
     def add_section(title):
         f = tk.Frame(left, bg=C["card"]); f.pack(fill="x", pady=(10, 3))
@@ -661,7 +792,7 @@ def main():
         lh = tk.Frame(left, bg=C["card"]); lh.pack(fill="x")
         lt = tk.Frame(lh, bg=C["card"]); lt.pack(side="left")
         tk.Label(lt, text="오늘 루틴", font=FH, bg=C["card"], fg=C["txt"]).pack(anchor="w")
-        tk.Label(lt, text="판 수 자동 집계 · 결과창에서 NEXT 한 번이 다음 시나리오",
+        tk.Label(lt, text="실행하면 코박스에 시나리오가 순서대로 자동 전송됩니다 · 한 판이 끝나면 다음 판이 저절로 뜸 · 판 수 자동 집계",
                  font=FS, bg=C["card"], fg=C["dim"], wraplength=300, justify="left").pack(anchor="w", pady=(0, 6))
         pl = day_state["pl"]
         if pl:
@@ -693,7 +824,7 @@ def main():
                      font=FS, bg=C["card"], fg=C["dim"]).pack(anchor="w", padx=14)
         elif dt == "b":
             add_section("벤치마크 18개 풀런")
-            tk.Label(left, text="볼테익 Open playlist로 실행 — 점수는 자동 수집, 벤치 탭에서 실시간으로 차오릅니다.",
+            tk.Label(left, text="▶ 코박스 실행을 누르면 18개 시나리오가 순서대로 자동 진행됩니다 — 점수는 자동 수집, 벤치 탭에서 실시간으로 차오릅니다.",
                      font=F, bg=C["card"], fg=C["sub"], wraplength=520, justify="left").pack(anchor="w", pady=6)
         else:
             add_section("휴식")
@@ -1012,6 +1143,7 @@ def main():
         """자정 통과: 데이터 키·스캔 캐시·날짜 UI·입력칸을 모두 오늘로 (켜 둔 채 밤을 넘겨도 어제 루틴이 남지 않게)"""
         today_key[0] = nk
         _SCORE_CACHE.clear()
+        auto.update(on=False, fired=None, due=None)
         w = seq_win["win"]
         if w is not None and w.winfo_exists(): w.destroy()
         build_day_ui()
@@ -1043,6 +1175,7 @@ def main():
                         show_toast(f"🏆 신기록 — {sname(k)}  {sc_}  (+{diff})")
                     if changed or events:
                         save_data(data); refresh()
+                    auto_step()
             if SAVE_ERROR[0]:
                 scan_lbl.configure(fg=C["val"],
                     text=f"⚠ 저장 실패 — 기록이 저장되지 않고 있습니다 ({SAVE_ERROR[0][:70]})")
@@ -1091,6 +1224,8 @@ if __name__ == "__main__":
         assert d1["first"]["pasu"] == 500 and d1["best"]["pasu"] == 520 and d1["count"]["pasu"] == 2 and ev == [("pasu", 520, 20)], (d1, ev)
         # 플레이리스트 펼치기: Day = 웜업 4 + 프로브 6 + 본훈련 17
         assert sum(n for _, n in dict(PLAYLISTS)["AIMDESK Day"]) == 27
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK")
+        # 코박스 딥링크 형식 (3.0.0 패치노트: 공백은 %20)
+        assert scenario_uri("VT Pasu Novice S5") == "steam://run/824270/?action=jump-to-scenario;name=VT%20Pasu%20Novice%20S5"
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK")
         sys.exit(0)
     main()
