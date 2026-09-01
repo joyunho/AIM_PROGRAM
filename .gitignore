@@ -1,0 +1,9 @@
+build/
+dist/
+*.spec
+build_log.txt
+AimDesk.exe
+aim_desk_data*.json
+aim_desk.log
+*.corrupt-*.json
+__pycache__/
