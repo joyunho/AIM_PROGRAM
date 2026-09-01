@@ -4,6 +4,25 @@
 코박스 `stats` 폴더를 2초마다 읽어 오늘 친 판 수 · 점수 · 신기록을 자동 기록하고,
 볼테익(Voltaic) Novice S5 벤치마크와 같은 수식으로 에너지·랭크를, 그날 첫 판으로 컨디션(프로브 지수)을 계산합니다.
 
+## 다운로드
+
+**완성된 exe** (파이썬 설치 불필요) — `main` 에 푸시될 때마다 GitHub Actions 가 Windows 에서 자동 빌드합니다.
+
+- 주소: https://github.com/joyunho/AIM_PROGRAM/releases/latest/download/AimDesk.exe
+- PowerShell 한 줄 (바탕화면 `AimDesk` 폴더에 받고 SmartScreen 차단 해제):
+
+```powershell
+$d="$env:USERPROFILE\Desktop\AimDesk"; New-Item -ItemType Directory -Force $d | Out-Null; Invoke-WebRequest "https://github.com/joyunho/AIM_PROGRAM/releases/latest/download/AimDesk.exe" -OutFile "$d\AimDesk.exe"; Unblock-File "$d\AimDesk.exe"; explorer $d
+```
+
+**소스로 직접 빌드** (git + 파이썬 필요):
+
+```bat
+git clone https://github.com/joyunho/AIM_PROGRAM.git && cd AIM_PROGRAM && make_exe.bat
+```
+
+기존에 쓰던 `aim_desk_data.json` 이 있으면 새 exe 옆으로 복사해야 기록이 이어집니다.
+
 ## 파일
 
 | 파일 | 역할 |
@@ -11,6 +30,7 @@
 | `aim_desk.py` | 프로그램 전체 (파이썬 3.9+, 표준 라이브러리만 사용) |
 | `make_exe.bat` | 더블클릭 → PyInstaller로 `AimDesk.exe` 생성 + 바탕화면 바로가기 |
 | `app.ico` (선택) | exe 아이콘. 없으면 기본 아이콘으로 빌드 |
+| `.github/workflows/build-exe.yml` | main 푸시 시 exe 자동 빌드 → `latest` 릴리스에 업로드 |
 
 실행: `python aim_desk.py` 또는 빌드한 `AimDesk.exe`. 자가 점검: `python aim_desk.py --selftest`.
 

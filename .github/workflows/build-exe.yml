@@ -1,0 +1,54 @@
+name: Build AimDesk.exe
+
+# main 에 푸시될 때마다 Windows 에서 exe 를 빌드해
+#  1) Actions 아티팩트로 올리고
+#  2) "latest" 릴리스에 AimDesk.exe 를 덮어써서 항상 같은 주소로 받을 수 있게 한다:
+#     https://github.com/joyunho/AIM_PROGRAM/releases/latest/download/AimDesk.exe
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip "pyinstaller>=6,<7"
+
+      - name: Self-test
+        run: python aim_desk.py --selftest
+
+      - name: Build exe
+        shell: bash
+        run: |
+          ICON=""; [ -f app.ico ] && ICON="--icon app.ico"
+          python -m PyInstaller --noconfirm --clean --onefile --windowed $ICON --name AimDesk aim_desk.py
+          ls -la dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AimDesk-exe
+          path: dist/AimDesk.exe
+
+      - name: Publish to "latest" release
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f latest
+          git push -f origin latest
+          gh release view latest >/dev/null 2>&1 \
+            || gh release create latest --title "AimDesk 최신 빌드" --notes "main 브랜치에서 자동 빌드된 AimDesk.exe 입니다. 다운로드 후 SmartScreen 경고가 뜨면 '추가 정보 → 실행'."
+          gh release upload latest dist/AimDesk.exe --clobber
