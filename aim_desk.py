@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v2.3 — 코박스 자동 기록 + 성장 시각화 + 루틴 자동 진행
+에임 데스크 v2.4 — 코박스 자동 기록 + 성장 시각화 + 루틴 자동 진행
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
 · 자동 진행: 코박스 공식 딥링크(steam://run/824270/?action=jump-to-scenario)로 한 판이 끝나면 다음 판을 자동 전송
 · 순서창/루틴 줄에 판별 점수 + 최근 7일 평균 대비 ▲▼ + 역대 최고 경신(PB!) 표시
+· 보낸 시나리오가 60초를 훌쩍 넘겨도 기록이 없으면 FREEPLAY(타이머 없음) 의심 경고
 · 기록 보호: 원자적 저장 · 손상 파일 백업 · 스캔 실패 시 기록 보존 · 오류 로그
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
 from __future__ import annotations
-import json, os, re, sys, traceback
+import json, os, re, sys, time, traceback
 from datetime import date, datetime
 from pathlib import Path
 
@@ -355,6 +356,8 @@ def launch_kovaaks():
     return open_uri("steam://rungameid/824270")
 
 KOVAAKS_EXE = "FPSAimTrainer-Win64-Shipping.exe"
+STALL_SEC = 100          # 60초 시나리오를 보낸 뒤 이 시간이 지나도 기록이 없으면 FREEPLAY 의심 (게임이 이미 켜져 있던 경우)
+STALL_SEC_LAUNCH = 240   # 딥링크로 게임을 새로 켠 경우 — 스팀·로딩 시간까지 감안
 
 def scenario_uri(name: str) -> str:
     """코박스 공식 딥링크(3.0.0+, 공백은 %20): 게임이 꺼져 있으면 켜서, 켜져 있으면 그 자리에서 해당 시나리오를 바로 시작"""
@@ -587,7 +590,8 @@ def main():
     #   판이 끝나 stats CSV가 생기면(2초 감시) 대기 시간 뒤 다음 시나리오 딥링크를 보낸다 → 결과창에서 NEXT를 누를 필요가 없다.
     seq_win = {"win": None, "rows": [], "prog": None, "auto_lbl": None, "auto_btn": None, "sum": None,
                "seq": [], "base": {}, "skipped": set()}      # skipped: 건너뛴 줄 번호
-    auto = {"on": False, "fired": None, "due": None}     # fired/due: 전송했거나 전송 예약된 순서창 인덱스
+    auto = {"on": False, "fired": None, "due": None,      # fired/due: 전송했거나 전송 예약된 순서창 인덱스
+            "fired_at": None, "fired_running": True, "warned": False}
     def auto_delay(): return int(data.get("auto_delay", 4))
 
     def sequence_for(plname):
@@ -727,14 +731,26 @@ def main():
                 parts.append(f"최근 평균 대비 {'▲' if m >= 0 else '▼'}{abs(m):.1f}%")
             summ = " · ".join(parts)
         seq_win["sum"].configure(text=summ, fg=C["gold"] if n_pb else C["sub"])
+        col = C["ok"] if (auto["on"] and nxt is not None) else C["dim"]
         if nxt is None:
             msg = "오늘 순서 전부 완료 🎉  ·  한 번 더 돌리려면 '처음부터'"
+        elif auto["on"] and auto["fired"] == nxt and auto["fired_at"] is not None:
+            nm_ = sname(seq_win["seq"][nxt]); el = int(time.monotonic() - auto["fired_at"])
+            if el > (STALL_SEC if auto["fired_running"] else STALL_SEC_LAUNCH):
+                # 60초 시나리오가 끝났어야 할 시간인데 CSV가 없다 = 프리플레이(타이머 없음)로 열렸을 가능성
+                msg = (f"⚠ {nm_} 보낸 지 {el}초 — 60초 시나리오인데 기록이 없습니다. 코박스가 FREEPLAY(타이머 없음) 모드일 "
+                       "가능성이 큽니다: 게임에서 ESC → 좌하단 토글을 CHALLENGE로 → 여기서 '다시 보내기'. (쉬는 중이면 무시)")
+                col = C["val"]
+                if not auto["warned"]:
+                    auto["warned"] = True
+                    show_toast("⚠ 기록이 안 들어옵니다 — 코박스에서 ESC → FREEPLAY/CHALLENGE 토글을 CHALLENGE로 바꾸고 '다시 보내기'")
+            else:
+                msg = f"자동 진행 중 · {nm_} 보낸 지 {el}초 · 끝나면 {auto_delay()}초 뒤 다음 판을 보냅니다"
         elif auto["on"]:
-            msg = (f"자동 진행 중 · 판이 끝나면 {auto_delay()}초 뒤 다음 판을 코박스로 보냅니다"
-                   if auto["fired"] == nxt else f"{sname(seq_win['seq'][nxt])} 전송 대기…")
+            msg = f"{sname(seq_win['seq'][nxt])} 전송 대기…"
         else:
             msg = "자동 진행 꺼짐 — 코박스에서 직접 고르거나 '다음 판 ▶'로 보내세요"
-        seq_win["auto_lbl"].configure(text=msg, fg=C["ok"] if (auto["on"] and nxt is not None) else C["dim"])
+        seq_win["auto_lbl"].configure(text=msg, fg=col)
         if seq_win["auto_btn"] is not None and seq_win["auto_btn"].winfo_exists():
             seq_win["auto_btn"].sync()
 
@@ -743,8 +759,9 @@ def main():
         """seq[idx] 시나리오 딥링크 전송 (코박스가 꺼져 있으면 스팀이 켜서 시작한다)"""
         seq = seq_win["seq"]
         if idx is None or idx >= len(seq): return False
+        auto["fired_running"] = kovaaks_running()      # 이미 켜져 있었으면 60초+여유, 새로 켜는 거면 로딩까지 감안
         ok = launch_scenario(seq[idx])
-        auto["fired"] = idx; auto["due"] = None
+        auto.update(fired=idx, due=None, fired_at=time.monotonic(), warned=False)
         if not ok: show_toast("스팀 실행 실패 — Steam이 켜져 있는지 확인하세요")
         update_sequence()
         return ok
@@ -812,8 +829,8 @@ def main():
         _, nxt, _ = seq_status()
         if nxt is None: restart_sequence()             # 오늘 이미 다 쳤으면 1번부터 한 번 더
         else: fire(nxt)
-        show_toast(f"▶ 자동 진행 시작 — 코박스가 꺼져 있으면 켜지고, 한 판이 끝날 때마다 {auto_delay()}초 뒤 다음 판이 자동으로 뜹니다"
-                   "  ·  좌하단 토글이 FREEPLAY면 CHALLENGE로! (프리플레이는 기록이 안 남습니다)")
+        show_toast(f"▶ 자동 진행 시작 — 한 판이 끝나면 {auto_delay()}초 뒤 다음 판이 자동으로 뜹니다. 결과창에선 아무것도 누르지 마세요"
+                   "  ·  타이머가 안 보이면 ESC → 좌하단 토글을 CHALLENGE로 (프리플레이는 타이머·기록이 없습니다)")
 
     def add_section(title):
         f = tk.Frame(left, bg=C["card"]); f.pack(fill="x", pady=(10, 3))
@@ -852,7 +869,7 @@ def main():
         lh = tk.Frame(left, bg=C["card"]); lh.pack(fill="x")
         lt = tk.Frame(lh, bg=C["card"]); lt.pack(side="left")
         tk.Label(lt, text="오늘 루틴", font=FH, bg=C["card"], fg=C["txt"]).pack(anchor="w")
-        tk.Label(lt, text="실행하면 코박스에 시나리오가 순서대로 자동 전송됩니다 · 한 판이 끝나면 다음 판이 저절로 뜸 · 판 수 자동 집계",
+        tk.Label(lt, text="실행하면 코박스에 시나리오가 순서대로 자동 전송 · 결과창에선 아무것도 누르지 말고 기다리기 (FREEPLAY 누르면 타이머 없는 모드로 바뀜)",
                  font=FS, bg=C["card"], fg=C["dim"], wraplength=300, justify="left").pack(anchor="w", pady=(0, 6))
         pl = day_state["pl"]
         if pl:
@@ -1246,6 +1263,7 @@ def main():
                     if changed or events:
                         save_data(data); refresh()
                     auto_step()
+                    if auto["on"] and seq_alive(): update_sequence()     # 보낸 지 n초 / FREEPLAY 경고 갱신
             if SAVE_ERROR[0]:
                 scan_lbl.configure(fg=C["val"],
                     text=f"⚠ 저장 실패 — 기록이 저장되지 않고 있습니다 ({SAVE_ERROR[0][:70]})")
