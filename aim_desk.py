@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v2.4 — 코박스 자동 기록 + 성장 시각화 + 루틴 자동 진행
+에임 데스크 v2.5 — 코박스 자동 기록 + 성장 시각화 + 루틴 자동 진행
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
-· 자동 진행: 코박스 공식 딥링크(steam://run/824270/?action=jump-to-scenario)로 한 판이 끝나면 다음 판을 자동 전송
+· 자동 진행(기본): 코박스 자체 플레이리스트로 돌리고, 판이 끝나 CSV가 생기면 앱이 PlaylistNext 키를 대신 눌러 다음 판으로
+· 자동 진행(선택): 코박스 공식 딥링크(steam://run/824270/?action=jump-to-scenario)로 다음 시나리오를 직접 전송
 · 순서창/루틴 줄에 판별 점수 + 최근 7일 평균 대비 ▲▼ + 역대 최고 경신(PB!) 표시
 · 보낸 시나리오가 60초를 훌쩍 넘겨도 기록이 없으면 FREEPLAY(타이머 없음) 의심 경고
 · 기록 보호: 원자적 저장 · 손상 파일 백업 · 스캔 실패 시 기록 보존 · 오류 로그
@@ -366,6 +367,86 @@ def scenario_uri(name: str) -> str:
 def launch_scenario(key: str) -> bool:
     return open_uri(scenario_uri(SCEN[key][0]))
 
+# ── 플레이리스트 NEXT 키 자동 입력 (렉 없는 진행 방식) ──
+KOVAAKS_INPUT_INI = Path(os.environ.get("LOCALAPPDATA", "")) / "FPSAimTrainer" / "Saved" / "Config" / "WindowsNoEditor" / "Input.ini"
+_NEXT_RE = re.compile(r'ActionMappings=\(ActionName="PlaylistNext"[^)]*?Key=(\w+)')
+
+def playlist_next_key():
+    """코박스 Input.ini에서 PlaylistNext에 묶인 키 이름. 미지정/파일 없음이면 None"""
+    try:
+        raw = KOVAAKS_INPUT_INI.read_bytes()
+    except OSError:
+        return None
+    txt = None
+    for enc in ("utf-8-sig", "utf-16", "cp1252"):
+        try: txt = raw.decode(enc); break
+        except UnicodeDecodeError: pass
+    m = _NEXT_RE.search(txt or "")
+    return None if (not m or m.group(1) == "None") else m.group(1)
+
+_VK = {"SpaceBar":0x20,"Enter":0x0D,"Tab":0x09,"Escape":0x1B,"BackSpace":0x08,"Insert":0x2D,"Delete":0x2E,"Home":0x24,"End":0x23,
+       "PageUp":0x21,"PageDown":0x22,"Left":0x25,"Up":0x26,"Right":0x27,"Down":0x28,"CapsLock":0x14,"Pause":0x13,"ScrollLock":0x91,
+       "NumLock":0x90,"Multiply":0x6A,"Add":0x6B,"Subtract":0x6D,"Decimal":0x6E,"Divide":0x6F,"Tilde":0xC0,"Semicolon":0xBA,
+       "Equals":0xBB,"Comma":0xBC,"Hyphen":0xBD,"Period":0xBE,"Slash":0xBF,"LeftBracket":0xDB,"Backslash":0xDC,"RightBracket":0xDD,
+       "Apostrophe":0xDE}
+_DIGITS = ["Zero","One","Two","Three","Four","Five","Six","Seven","Eight","Nine"]
+_EXTENDED = {"Insert","Delete","Home","End","PageUp","PageDown","Left","Up","Right","Down","Divide","NumLock"}
+
+def vk_of(name: str):
+    """언리얼 키 이름 → Windows 가상 키 코드 (모르면 None)"""
+    if not name: return None
+    if name in _VK: return _VK[name]
+    if re.fullmatch(r"F([1-9]|1\d|2[0-4])", name): return 0x70 + int(name[1:]) - 1
+    if len(name) == 1 and name.isalpha(): return ord(name.upper())
+    if name in _DIGITS: return ord("0") + _DIGITS.index(name)
+    if name.startswith("NumPad") and name[6:] in _DIGITS: return 0x60 + _DIGITS.index(name[6:])
+    return None
+
+def send_key(name: str) -> bool:
+    """키 한 번 누르기 — SendInput + 스캔코드(게임이 받도록). Windows 전용"""
+    vk = vk_of(name)
+    if vk is None or sys.platform != "win32": return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD), ("dwFlags", wintypes.DWORD),
+                        ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+        class _U(ctypes.Union):
+            _fields_ = [("ki", KEYBDINPUT), ("pad", ctypes.c_byte * 32)]
+        class INPUT(ctypes.Structure):
+            _anonymous_ = ("u",)
+            _fields_ = [("type", wintypes.DWORD), ("u", _U)]
+        scan = user32.MapVirtualKeyW(vk, 0)
+        ext = 0x0001 if name in _EXTENDED else 0
+        down = INPUT(type=1); down.ki = KEYBDINPUT(vk, scan, 0x0008 | ext, 0, 0)
+        up = INPUT(type=1);   up.ki = KEYBDINPUT(vk, scan, 0x0008 | ext | 0x0002, 0, 0)
+        arr = (INPUT * 2)(down, up)
+        return user32.SendInput(2, arr, ctypes.sizeof(INPUT)) == 2
+    except Exception:
+        log_exc("send_key"); return False
+
+def foreground_exe() -> str:
+    """지금 앞에 있는 창의 실행 파일 이름 (Windows). 모르면 빈 문자열"""
+    if sys.platform != "win32": return ""
+    try:
+        import ctypes
+        user32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+        hwnd = user32.GetForegroundWindow()
+        pid = ctypes.c_ulong(); user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        h = k32.OpenProcess(0x1000, False, pid.value)          # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h: return ""
+        buf = ctypes.create_unicode_buffer(1024); n = ctypes.c_ulong(1024)
+        ok = k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)); k32.CloseHandle(h)
+        return os.path.basename(buf.value) if ok else ""
+    except Exception:
+        return ""
+
+def kovaaks_foreground() -> bool:
+    if sys.platform != "win32": return True
+    return foreground_exe().lower() == KOVAAKS_EXE.lower()
+
 def kovaaks_running() -> bool:
     """코박스 프로세스가 떠 있는지 (Windows tasklist). 판단 불가면 True — 자동 진행을 괜히 막지 않기 위해"""
     if sys.platform != "win32": return True
@@ -590,8 +671,10 @@ def main():
     #   판이 끝나 stats CSV가 생기면(2초 감시) 대기 시간 뒤 다음 시나리오 딥링크를 보낸다 → 결과창에서 NEXT를 누를 필요가 없다.
     seq_win = {"win": None, "rows": [], "prog": None, "auto_lbl": None, "auto_btn": None, "sum": None,
                "seq": [], "base": {}, "skipped": set()}      # skipped: 건너뛴 줄 번호
-    auto = {"on": False, "fired": None, "due": None,      # fired/due: 전송했거나 전송 예약된 순서창 인덱스
-            "fired_at": None, "fired_running": True, "warned": False}
+    auto = {"on": False, "fired": None, "due": None,      # fired/due: 넘겼거나 넘기기로 예약된 순서창 인덱스
+            "fired_at": None, "fired_running": True, "warned": False,
+            "mode": data.get("auto_mode", "key")}         # "key" = 코박스 플레이리스트 + NEXT 키 자동 입력, "link" = 딥링크
+    def next_key(): return data.get("next_key") or playlist_next_key()
     def auto_delay(): return int(data.get("auto_delay", 4))
 
     def sequence_for(plname):
@@ -637,7 +720,7 @@ def main():
         seq_win.update(win=w, rows=[], seq=seq, base={}, skipped=set())
         title = plname or "볼테익 벤치마크 18"
         w.title("오늘 순서 — " + title); w.configure(bg=C["bg"])
-        w.attributes("-topmost", True); w.resizable(False, False)
+        w.attributes("-topmost", bool(data.get("seq_topmost", True))); w.resizable(False, False)
         w.protocol("WM_DELETE_WINDOW", lambda: (stop_auto(), w.destroy()))
         hd = tk.Frame(w, bg=C["bg"]); hd.pack(fill="x", padx=12, pady=(10, 2))
         tk.Label(hd, text=title, font=FB, bg=C["bg"], fg=C["txt"]).pack(side="left")
@@ -672,11 +755,25 @@ def main():
         RBtn(ctl, "다음 판 ▶", skip_current, padx=10, pady=5).pack(side="left", padx=(6, 0))
         RBtn(ctl, "다시 보내기", resend_current, padx=10, pady=5).pack(side="left", padx=(6, 0))
         RBtn(ctl, "처음부터", restart_sequence, padx=10, pady=5).pack(side="left", padx=(6, 0))
-        dl = tk.Frame(w, bg=C["bg"]); dl.pack(fill="x", padx=12, pady=(0, 10))
-        tk.Label(dl, text="판 끝난 뒤 다음 판까지 대기(초)", font=FS, bg=C["bg"], fg=C["sub"]).pack(side="left")
+        seq_win["hint"] = tk.Label(w, text="", font=FS, bg=C["bg"], fg=C["dim"], wraplength=340, justify="left")
+        seq_win["hint"].pack(anchor="w", padx=12, pady=(0, 4))
+        dl = tk.Frame(w, bg=C["bg"]); dl.pack(fill="x", padx=12, pady=(0, 4))
+        tk.Label(dl, text="판 끝난 뒤 대기(초)", font=FS, bg=C["bg"], fg=C["sub"]).pack(side="left")
         Stepper(dl, auto_delay,
                 lambda v: (data.__setitem__("auto_delay", max(1, min(30, v))), save_data(data), update_sequence())
-                ).pack(side="left", padx=(8, 0))
+                ).pack(side="left", padx=(8, 12))
+        tk.Label(dl, text="NEXT 키", font=FS, bg=C["bg"], fg=C["sub"]).pack(side="left")
+        key_var = tk.StringVar(value=next_key() or "")
+        key_ent = tk.Entry(dl, textvariable=key_var, width=9, font=FNS, bg=C["card2"], fg=C["txt"],
+                           insertbackground=C["txt"], bd=0, justify="center")
+        key_ent.pack(side="left", padx=(6, 0), ipady=3)
+        def commit_key(*_):
+            v = key_var.get().strip()
+            data["next_key"] = v or None; save_data(data); update_sequence()
+        key_ent.bind("<Return>", commit_key); key_ent.bind("<FocusOut>", commit_key)
+        opt = tk.Frame(w, bg=C["bg"]); opt.pack(fill="x", padx=12, pady=(0, 10))
+        Toggle(opt, "항상 위", lambda: bool(data.get("seq_topmost", True)), set_topmost).pack(side="left")
+        Toggle(opt, "딥링크 방식", lambda: auto["mode"] == "link", set_mode_link).pack(side="left", padx=(6, 0))
         # 본창 오른쪽에 붙이되 화면 밖으로 나가면 본창 위에 겹쳐서
         root.update_idletasks(); w.update_idletasks()
         x = root.winfo_x() + root.winfo_width() + 8
@@ -732,37 +829,65 @@ def main():
             summ = " · ".join(parts)
         seq_win["sum"].configure(text=summ, fg=C["gold"] if n_pb else C["sub"])
         col = C["ok"] if (auto["on"] and nxt is not None) else C["dim"]
+        mode_txt = "딥링크" if auto["mode"] == "link" else f"NEXT 키 {next_key() or '미지정'}"
         if nxt is None:
             msg = "오늘 순서 전부 완료 🎉  ·  한 번 더 돌리려면 '처음부터'"
         elif auto["on"] and auto["fired"] == nxt and auto["fired_at"] is not None:
             nm_ = sname(seq_win["seq"][nxt]); el = int(time.monotonic() - auto["fired_at"])
             if el > (STALL_SEC if auto["fired_running"] else STALL_SEC_LAUNCH):
                 # 60초 시나리오가 끝났어야 할 시간인데 CSV가 없다 = 프리플레이(타이머 없음)로 열렸을 가능성
-                msg = (f"⚠ {nm_} 보낸 지 {el}초 — 60초 시나리오인데 기록이 없습니다. 코박스가 FREEPLAY(타이머 없음) 모드일 "
-                       "가능성이 큽니다: 게임에서 ESC → 상단 '플레이' 버튼 왼쪽의 [프리 플레이 | 도전 과제] 토글에서 '도전 과제'(CHALLENGE) → 여기서 '다시 보내기'. (쉬는 중이면 무시)")
+                msg = (f"⚠ {nm_} 시작 후 {el}초 — 60초 시나리오인데 기록이 없습니다. 코박스가 프리 플레이(타이머 없음)면 "
+                       "ESC → 상단 '플레이' 버튼 왼쪽 토글을 '도전 과제'(CHALLENGE)로 바꾸고 플레이리스트를 다시 시작하세요. (쉬는 중이면 무시)")
                 col = C["val"]
                 if not auto["warned"]:
                     auto["warned"] = True
-                    show_toast("⚠ 기록이 안 들어옵니다 — 코박스 ESC → 상단 '플레이' 왼쪽 토글을 '도전 과제'(CHALLENGE)로 → '다시 보내기'")
+                    show_toast("⚠ 기록이 안 들어옵니다 — 코박스 ESC → 상단 '플레이' 왼쪽 토글을 '도전 과제'(CHALLENGE)로")
             else:
-                msg = f"자동 진행 중 · {nm_} 보낸 지 {el}초 · 끝나면 {auto_delay()}초 뒤 다음 판을 보냅니다"
+                msg = f"자동 진행 중 ({mode_txt}) · {nm_} 시작 후 {el}초 · 끝나면 {auto_delay()}초 뒤 다음 판"
+        elif auto["on"] and auto["fired"] == nxt:
+            msg = f"자동 진행 중 ({mode_txt}) · {sname(seq_win['seq'][nxt])} 진행 중 · 끝나면 {auto_delay()}초 뒤 다음 판"
         elif auto["on"]:
-            msg = f"{sname(seq_win['seq'][nxt])} 전송 대기…"
+            msg = f"{sname(seq_win['seq'][nxt])} 넘기는 중…"
         else:
-            msg = "자동 진행 꺼짐 — 코박스에서 직접 고르거나 '다음 판 ▶'로 보내세요"
+            msg = f"자동 진행 꺼짐 ({mode_txt}) — 코박스에서 직접 넘기거나 '다음 판 ▶'"
         seq_win["auto_lbl"].configure(text=msg, fg=col)
         if seq_win["auto_btn"] is not None and seq_win["auto_btn"].winfo_exists():
             seq_win["auto_btn"].sync()
 
     # ── 자동 진행 엔진 ──
-    def fire(idx):
-        """seq[idx] 시나리오 딥링크 전송 (코박스가 꺼져 있으면 스팀이 켜서 시작한다)"""
+    #   key  방식(기본): 코박스가 자체 플레이리스트로 판을 잇고, 판이 끝나 CSV가 생기면 앱이 PlaylistNext 키를 대신 누른다 (Steam 개입 없음 → 렉 없음)
+    #   link 방식      : 판이 끝나면 다음 시나리오 딥링크를 보낸다 (매 판 Steam이 끼어들어 렉·포커스 문제가 날 수 있음)
+    def set_hint(text, col=None):
+        if seq_alive() and seq_win.get("hint") is not None and seq_win["hint"].winfo_exists():
+            seq_win["hint"].configure(text=text, fg=col or C["dim"])
+
+    def press_next():
+        """코박스 결과창에서 PlaylistNext 키를 대신 누른다"""
+        key = next_key()
+        if not key:
+            set_hint("PlaylistNext 키가 없습니다 — 코박스 설정 → 키 설정 → PlaylistNext 에 F10 같은 키를 지정하고, 위 'NEXT 키' 칸에도 적어 주세요", C["val"]); return False
+        if vk_of(key) is None:
+            set_hint(f"'{key}' 는 앱이 모르는 키 이름입니다 — F1~F12 같은 키로 지정하세요", C["val"]); return False
+        if not kovaaks_foreground():
+            set_hint(f"코박스 창이 앞에 있어야 {key} 키를 보낼 수 있습니다 — 게임 창을 클릭하세요 (잠시 뒤 다시 시도)", C["gold"]); return False
+        if not send_key(key):
+            set_hint(f"{key} 키 전송 실패 — aim_desk.log 확인", C["val"]); return False
+        set_hint(f"{key} 키 전송 ✓")
+        return True
+
+    def advance(idx):
+        """순서창 idx번 판으로 넘긴다: key 방식은 NEXT 키, link 방식은 딥링크"""
         seq = seq_win["seq"]
         if idx is None or idx >= len(seq): return False
-        auto["fired_running"] = kovaaks_running()      # 이미 켜져 있었으면 60초+여유, 새로 켜는 거면 로딩까지 감안
-        ok = launch_scenario(seq[idx])
-        auto.update(fired=idx, due=None, fired_at=time.monotonic(), warned=False)
-        if not ok: show_toast("스팀 실행 실패 — Steam이 켜져 있는지 확인하세요")
+        if auto["mode"] == "link":
+            auto["fired_running"] = kovaaks_running()      # 이미 켜져 있었으면 60초+여유, 새로 켜는 거면 로딩까지 감안
+            ok = launch_scenario(seq[idx])
+            if not ok: show_toast("스팀 실행 실패 — Steam이 켜져 있는지 확인하세요")
+        else:
+            auto["fired_running"] = True
+            ok = press_next()
+        if ok: auto.update(fired=idx, due=None, fired_at=time.monotonic(), warned=False)
+        else: auto["due"] = None
         update_sequence()
         return ok
 
@@ -773,10 +898,10 @@ def main():
         if nxt != idx: return                          # 그 사이 상황이 바뀜(다른 판을 쳤거나 건너뜀)
         if auto["fired"] is not None and not kovaaks_running():
             stop_auto("코박스가 꺼져 있어 자동 진행을 멈췄습니다"); return
-        fire(idx)
+        advance(idx)
 
     def auto_step():
-        """스캔 후 호출: 다음 칠 판이 아직 전송 전이면 대기 시간 뒤 전송을 예약"""
+        """스캔 후 호출: 다음 칠 판으로 아직 안 넘겼으면 대기 시간 뒤 넘기기를 예약 (실패했으면 다음 틱에 다시 예약)"""
         if not auto["on"]: return
         if not seq_alive(): auto["on"] = False; return
         _, nxt, _ = seq_status()
@@ -795,42 +920,75 @@ def main():
         auto["on"] = bool(v)
         if auto["on"]:
             _, nxt, _ = seq_status()
-            if nxt is not None and auto["fired"] != nxt: fire(nxt)    # 켜는 즉시 현재 차례를 보낸다
+            if auto["mode"] == "link":
+                if nxt is not None and auto["fired"] != nxt: advance(nxt)     # 켜는 즉시 현재 차례를 보낸다
+            else:
+                auto.update(fired=nxt, due=None, fired_at=None)                # 지금 치고 있는 판이 현재 차례라고 본다
         update_sequence()
 
+    def set_mode_link(v):
+        auto["mode"] = "link" if v else "key"
+        data["auto_mode"] = auto["mode"]; save_data(data)
+        if auto["on"] and auto["mode"] == "key":
+            _, nxt, _ = seq_status(); auto.update(fired=nxt, due=None, fired_at=None)
+        update_sequence()
+
+    def set_topmost(v):
+        data["seq_topmost"] = bool(v); save_data(data)
+        if seq_alive(): seq_win["win"].attributes("-topmost", bool(v))
+
     def skip_current():
-        """지금 차례를 건너뛰고 다음 판을 바로 보낸다"""
+        """지금 차례를 건너뛰고 다음 판으로 바로 넘긴다"""
         _, nxt, _ = seq_status()
         if nxt is None: return
         seq_win["skipped"].add(nxt)
         _, nxt2, _ = seq_status()
         if nxt2 is None: stop_auto("오늘 순서 전부 완료 🎉"); return
-        fire(nxt2)
+        advance(nxt2)
 
     def resend_current():
         _, nxt, _ = seq_status()
-        if nxt is not None: fire(nxt)
+        if nxt is not None: advance(nxt)
 
     def restart_sequence():
         """지금까지 친 판은 그대로 두고 순서를 1번부터 다시 (오늘 두 번째 세션용)"""
         seq_win["base"] = {k: len(v) for k, v in today_plays_by_key().items()}; seq_win["skipped"] = set()
-        auto["fired"] = None; auto["due"] = None
+        auto.update(fired=None, due=None, fired_at=None)
+        if auto["on"] and auto["mode"] == "link": advance(0)
+        elif auto["on"]:
+            auto["fired"] = 0
+            set_hint("코박스에서 플레이리스트를 처음부터 다시 시작하세요 — 판이 끝나면 앱이 NEXT 키로 넘깁니다", C["gold"])
         update_sequence()
-        if auto["on"]: fire(0)
 
     def run_playlist(plname):
         sd = data.get("stats_dir")
-        if sd: ensure_playlists(sd)                    # 수동으로 돌릴 때를 위해 로컬 플레이리스트도 계속 설치
+        if sd: ensure_playlists(sd)                    # 로컬 플레이리스트 AIMDESK Day/Friday/Probe 설치
         open_sequence(plname)
         if not seq_win["seq"] or not seq_alive():
             if not launch_kovaaks(): show_toast("스팀 실행 실패 — Steam이 켜져 있는지 확인하고 코박스를 직접 실행하세요")
             return
-        auto.update(on=True, fired=None, due=None)
         _, nxt, _ = seq_status()
-        if nxt is None: restart_sequence()             # 오늘 이미 다 쳤으면 1번부터 한 번 더
-        else: fire(nxt)
-        show_toast(f"▶ 자동 진행 시작 — 한 판이 끝나면 {auto_delay()}초 뒤 다음 판이 자동으로 뜹니다. 결과창에선 아무것도 누르지 마세요"
-                   "  ·  타이머가 안 보이면 ESC → 상단 '플레이' 왼쪽 토글을 '도전 과제'(CHALLENGE)로 (프리플레이는 타이머·기록이 없습니다)")
+        if auto["mode"] == "link":
+            auto.update(on=True, fired=None, due=None)
+            if nxt is None: restart_sequence()         # 오늘 이미 다 쳤으면 1번부터 한 번 더
+            else: advance(nxt)
+            show_toast(f"▶ 딥링크 자동 진행 — 한 판이 끝나면 {auto_delay()}초 뒤 다음 시나리오를 보냅니다. 결과창에선 아무것도 누르지 마세요")
+            return
+        if not kovaaks_running():
+            launch_kovaaks()                            # 게임만 켠다 (딥링크 없음)
+        if nxt is None: restart_sequence()
+        auto.update(on=True, fired=(0 if nxt is None else nxt), due=None, fired_at=None, warned=False)
+        key = next_key()
+        target = plname or "볼테익 Novice 벤치마크 플레이리스트"
+        if key:
+            set_hint(f"코박스: ESC → 샌드박스 브라우저 '로컬 재생 목록' → {target} ▶ 플레이 (상단 토글 '도전 과제'). "
+                     f"판이 끝나면 앱이 {auto_delay()}초 뒤 {key} 키로 다음 판을 넘깁니다", C["ok"])
+            show_toast(f"▶ 코박스에서 '로컬 재생 목록' → {target} 를 재생하세요 — 판이 끝날 때마다 앱이 {key} 키로 다음 판을 넘깁니다")
+        else:
+            set_hint("NEXT 키가 아직 없습니다: 코박스 설정 → 키 설정 → PlaylistNext 에 F10 지정 → 위 'NEXT 키' 칸에 F10 입력. "
+                     f"그 다음 '로컬 재생 목록' → {target} ▶ 플레이", C["val"])
+            show_toast("코박스 설정 → 키 설정 → PlaylistNext 에 F10 을 지정하고 순서창 'NEXT 키' 칸에 F10 을 적어 주세요")
+        update_sequence()
 
     def add_section(title):
         f = tk.Frame(left, bg=C["card"]); f.pack(fill="x", pady=(10, 3))
@@ -869,7 +1027,7 @@ def main():
         lh = tk.Frame(left, bg=C["card"]); lh.pack(fill="x")
         lt = tk.Frame(lh, bg=C["card"]); lt.pack(side="left")
         tk.Label(lt, text="오늘 루틴", font=FH, bg=C["card"], fg=C["txt"]).pack(anchor="w")
-        tk.Label(lt, text="실행하면 코박스에 시나리오가 순서대로 자동 전송 · 결과창에선 아무것도 누르지 말고 기다리기 (FREEPLAY 누르면 타이머 없는 모드로 바뀜)",
+        tk.Label(lt, text="코박스 플레이리스트로 돌리고, 판이 끝나면 앱이 NEXT 키를 대신 눌러 다음 판으로 · 결과창에선 아무것도 누르지 말고 기다리기",
                  font=FS, bg=C["card"], fg=C["dim"], wraplength=300, justify="left").pack(anchor="w", pady=(0, 6))
         pl = day_state["pl"]
         if pl:
@@ -1320,6 +1478,8 @@ if __name__ == "__main__":
         assert recent_stats(t2, "pasu", "2026-01-03") == (750.0, 800)
         assert recent_stats(t2, "pasu", "2026-01-03", "first") == (650.0, 800)
         assert recent_stats(t2, "zzz", "2026-01-03") == (None, None)
+        assert vk_of("F10") == 0x79 and vk_of("PageDown") == 0x22 and vk_of("N") == 0x4E and vk_of("Nine") == 0x39 and vk_of("Gamepad_X") is None
+        assert _NEXT_RE.search('+ActionMappings=(ActionName="PlaylistNext",bShift=False,bCtrl=False,bAlt=False,bCmd=False,Key=F10)').group(1) == "F10"
         print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK")
         sys.exit(0)
     main()
