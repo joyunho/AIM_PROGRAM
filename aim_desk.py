@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v2.2 — 코박스 자동 기록 + 성장 시각화 + 루틴 자동 진행
+에임 데스크 v2.3 — 코박스 자동 기록 + 성장 시각화 + 루틴 자동 진행
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
 · 자동 진행: 코박스 공식 딥링크(steam://run/824270/?action=jump-to-scenario)로 한 판이 끝나면 다음 판을 자동 전송
+· 순서창/루틴 줄에 판별 점수 + 최근 7일 평균 대비 ▲▼ + 역대 최고 경신(PB!) 표시
 · 기록 보호: 원자적 저장 · 손상 파일 백업 · 스캔 실패 시 기록 보존 · 오류 로그
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
@@ -278,6 +279,17 @@ def probe_series(data: dict):
             w = [q[a] for q in out[max(0,i-6):i+1] if q[a] is not None]
             p[b] = sum(w)/len(w) if w else None
     return out
+
+TODAY_PLAYS: list = []      # 오늘 판 (key, 'HH.MM.SS', score) 시간순 — 순서창에 판별 점수를 붙이기 위해
+
+def recent_stats(data: dict, key: str, before_day: str, field: str = "best", n: int = 7):
+    """before_day 이전 기록의 (최근 n일 평균 of field, 역대 최고 of best). 기록이 없으면 (None, None)"""
+    days = [data["days"][d] for d in sorted(data["days"]) if d < before_day]
+    vals = [e[field].get(key) for e in days if e[field].get(key) is not None]
+    bests = [e["best"].get(key) for e in days if e["best"].get(key) is not None]
+    if not vals and not bests: return None, None
+    recent = vals[-n:]
+    return (sum(recent) / len(recent) if recent else None), (max(bests) if bests else None)
 
 def bench_days(data: dict):
     out = []
@@ -573,8 +585,8 @@ def main():
     # ── 순서창 + 자동 진행 ──
     #   오늘 칠 시나리오를 순서대로 나열하고, 코박스 딥링크로 한 판씩 전송한다.
     #   판이 끝나 stats CSV가 생기면(2초 감시) 대기 시간 뒤 다음 시나리오 딥링크를 보낸다 → 결과창에서 NEXT를 누를 필요가 없다.
-    seq_win = {"win": None, "rows": [], "prog": None, "auto_lbl": None, "auto_btn": None,
-               "seq": [], "base": {}, "skipped": {}}
+    seq_win = {"win": None, "rows": [], "prog": None, "auto_lbl": None, "auto_btn": None, "sum": None,
+               "seq": [], "base": {}, "skipped": set()}      # skipped: 건너뛴 줄 번호
     auto = {"on": False, "fired": None, "due": None}     # fired/due: 전송했거나 전송 예약된 순서창 인덱스
     def auto_delay(): return int(data.get("auto_delay", 4))
 
@@ -586,18 +598,28 @@ def main():
             return [k for s in SUBS for k, _ in s[3]]
         return []
 
+    def today_plays_by_key():
+        by = {}
+        for k, _, s_ in TODAY_PLAYS: by.setdefault(k, []).append(s_)
+        return by
+
     def seq_status():
-        """각 줄의 완료 여부 목록과 '다음에 칠' 인덱스(None이면 전부 완료).
-        완료 = (오늘 판 수 − 처음부터 눌렀을 때의 기준 판 수 + 건너뛴 수) ≥ 그 시나리오의 n번째 줄"""
-        day = data["days"].get(today_key[0], blank_day())
-        seen, done, nxt = {}, [], None
+        """(각 줄 완료 여부, 다음에 칠 인덱스(None이면 전부 완료), 각 줄의 점수(없으면 None)).
+        오늘 친 판을 시간순으로 같은 시나리오의 줄에 차례로 배정한다 — '처음부터' 기준 판 수 이후부터."""
+        by = today_plays_by_key()
+        used, done, scores, nxt = {}, [], [], None
         for i, k in enumerate(seq_win["seq"]):
-            seen[k] = seen.get(k, 0) + 1
-            played = day["count"].get(k, 0) - seq_win["base"].get(k, 0) + seq_win["skipped"].get(k, 0)
-            d_ = played >= seen[k]
-            done.append(d_)
-            if not d_ and nxt is None: nxt = i
-        return done, nxt
+            if i in seq_win["skipped"]:
+                done.append(True); scores.append(None); continue
+            idx = seq_win["base"].get(k, 0) + used.get(k, 0)
+            lst = by.get(k, [])
+            if idx < len(lst):
+                used[k] = used.get(k, 0) + 1
+                done.append(True); scores.append(lst[idx])
+            else:
+                done.append(False); scores.append(None)
+                if nxt is None: nxt = i
+        return done, nxt, scores
 
     def seq_alive():
         w = seq_win["win"]
@@ -608,7 +630,7 @@ def main():
         if not seq: return
         if seq_alive(): seq_win["win"].destroy()
         w = tk.Toplevel(root)
-        seq_win.update(win=w, rows=[], seq=seq, base={}, skipped={})
+        seq_win.update(win=w, rows=[], seq=seq, base={}, skipped=set())
         title = plname or "볼테익 벤치마크 18"
         w.title("오늘 순서 — " + title); w.configure(bg=C["bg"])
         w.attributes("-topmost", True); w.resizable(False, False)
@@ -632,7 +654,13 @@ def main():
             nm.pack(side="left")
             st = tk.Label(row, text="", font=FN, width=2, bg=C["card"], fg=C["dim"])
             st.pack(side="right")
-            seq_win["rows"].append((k, num, nm, st))
+            sc = tk.Label(row, text="", font=FN, width=6, anchor="e", bg=C["card"], fg=C["txt"])
+            sc.pack(side="right", padx=(6, 4))
+            dl = tk.Label(row, text="", font=FNS, width=8, anchor="e", bg=C["card"], fg=C["dim"])
+            dl.pack(side="right")
+            seq_win["rows"].append((k, num, nm, st, sc, dl))
+        seq_win["sum"] = tk.Label(w, text="", font=FS, bg=C["bg"], fg=C["sub"], wraplength=340, justify="left")
+        seq_win["sum"].pack(anchor="w", padx=12, pady=(0, 6))
         # 조작 줄: 자동 진행 토글 · 다음 판(건너뛰기) · 다시 보내기 · 처음부터 · 판 사이 대기
         ctl = tk.Frame(w, bg=C["bg"]); ctl.pack(fill="x", padx=12, pady=(0, 6))
         seq_win["auto_btn"] = Toggle(ctl, "자동 진행", lambda: auto["on"], set_auto)
@@ -654,17 +682,51 @@ def main():
 
     def update_sequence():
         if not seq_alive(): return
-        done, nxt = seq_status()
-        for i, (k, num, nm, st) in enumerate(seq_win["rows"]):
+        done, nxt, scores = seq_status()
+        dkey = today_key[0]
+        n_pb, rel = 0, []                 # 오늘 신기록 수, 최근 평균 대비 비율 목록
+        for i, (k, num, nm, st, sc, dl) in enumerate(seq_win["rows"]):
+            s_ = scores[i]
             if done[i]:
-                st.configure(text="✓", fg=C["ok"]); nm.configure(fg=C["dim"]); num.configure(fg=C["dim"])
+                nm.configure(fg=C["dim"]); num.configure(fg=C["dim"])
+                if s_ is None:                                     # 건너뛴 줄
+                    st.configure(text="–", fg=C["dim"]); sc.configure(text=""); dl.configure(text="")
+                    continue
+                st.configure(text="✓", fg=C["ok"])
+                avg, pmax = recent_stats(data, k, dkey)
+                if avg is not None: rel.append(s_ / avg - 1)
+                new_pb = pmax is not None and s_ > pmax
+                if new_pb: n_pb += 1
+                sc.configure(text=str(s_), fg=C["gold"] if new_pb else C["txt"])
+                if new_pb:
+                    dl.configure(text="PB!", fg=C["gold"])
+                elif avg is not None:
+                    d_ = s_ - avg
+                    dl.configure(text=f"{'▲' if d_ >= 0 else '▼'}{abs(d_):.0f}", fg=C["ok"] if d_ >= 0 else C["val"])
+                else:
+                    dl.configure(text="")
             elif i == nxt:
                 st.configure(text="▶", fg=C["gold"]); nm.configure(fg=C["txt"]); num.configure(fg=C["gold"])
+                avg, pmax = recent_stats(data, k, dkey)              # 목표: 최근 평균 (넘기면 ▲)
+                sc.configure(text=f"{avg:.0f}" if avg is not None else "", fg=C["dim"])
+                dl.configure(text="평균" if avg is not None else "", fg=C["dim"])
             else:
                 st.configure(text=""); nm.configure(fg=C["sub"]); num.configure(fg=C["dim"])
+                sc.configure(text=""); dl.configure(text="")
         total, done_n = len(done), sum(done)
         seq_win["prog"].configure(text=f"{done_n}/{total}" + ("  완료 ✓" if done_n >= total else ""),
                                   fg=C["ok"] if done_n >= total else C["sub"])
+        played = sum(1 for i in range(total) if done[i] and scores[i] is not None)
+        if played == 0:
+            summ = "점수 옆 ▲▼ = 최근 7일 평균 대비 · PB! = 역대 최고 경신"
+        else:
+            parts = [f"오늘 {played}판"]
+            if n_pb: parts.append(f"신기록 {n_pb}개 🏆")
+            if rel:
+                m = sum(rel) / len(rel) * 100
+                parts.append(f"최근 평균 대비 {'▲' if m >= 0 else '▼'}{abs(m):.1f}%")
+            summ = " · ".join(parts)
+        seq_win["sum"].configure(text=summ, fg=C["gold"] if n_pb else C["sub"])
         if nxt is None:
             msg = "오늘 순서 전부 완료 🎉  ·  한 번 더 돌리려면 '처음부터'"
         elif auto["on"]:
@@ -690,7 +752,7 @@ def main():
     def fire_due(idx):
         auto["due"] = None
         if not auto["on"] or not seq_alive(): return
-        _, nxt = seq_status()
+        _, nxt, _ = seq_status()
         if nxt != idx: return                          # 그 사이 상황이 바뀜(다른 판을 쳤거나 건너뜀)
         if auto["fired"] is not None and not kovaaks_running():
             stop_auto("코박스가 꺼져 있어 자동 진행을 멈췄습니다"); return
@@ -700,7 +762,7 @@ def main():
         """스캔 후 호출: 다음 칠 판이 아직 전송 전이면 대기 시간 뒤 전송을 예약"""
         if not auto["on"]: return
         if not seq_alive(): auto["on"] = False; return
-        _, nxt = seq_status()
+        _, nxt, _ = seq_status()
         if nxt is None:
             stop_auto("오늘 순서 전부 완료 🎉 수고했어요"); return
         if auto["fired"] == nxt or auto["due"] == nxt: return
@@ -715,28 +777,26 @@ def main():
     def set_auto(v):
         auto["on"] = bool(v)
         if auto["on"]:
-            _, nxt = seq_status()
+            _, nxt, _ = seq_status()
             if nxt is not None and auto["fired"] != nxt: fire(nxt)    # 켜는 즉시 현재 차례를 보낸다
         update_sequence()
 
     def skip_current():
         """지금 차례를 건너뛰고 다음 판을 바로 보낸다"""
-        _, nxt = seq_status()
+        _, nxt, _ = seq_status()
         if nxt is None: return
-        k = seq_win["seq"][nxt]
-        seq_win["skipped"][k] = seq_win["skipped"].get(k, 0) + 1
-        _, nxt2 = seq_status()
+        seq_win["skipped"].add(nxt)
+        _, nxt2, _ = seq_status()
         if nxt2 is None: stop_auto("오늘 순서 전부 완료 🎉"); return
         fire(nxt2)
 
     def resend_current():
-        _, nxt = seq_status()
+        _, nxt, _ = seq_status()
         if nxt is not None: fire(nxt)
 
     def restart_sequence():
         """지금까지 친 판은 그대로 두고 순서를 1번부터 다시 (오늘 두 번째 세션용)"""
-        day = data["days"].get(today_key[0], blank_day())
-        seq_win["base"] = dict(day["count"]); seq_win["skipped"] = {}
+        seq_win["base"] = {k: len(v) for k, v in today_plays_by_key().items()}; seq_win["skipped"] = set()
         auto["fired"] = None; auto["due"] = None
         update_sequence()
         if auto["on"]: fire(0)
@@ -749,7 +809,7 @@ def main():
             if not launch_kovaaks(): show_toast("스팀 실행 실패 — Steam이 켜져 있는지 확인하고 코박스를 직접 실행하세요")
             return
         auto.update(on=True, fired=None, due=None)
-        _, nxt = seq_status()
+        _, nxt, _ = seq_status()
         if nxt is None: restart_sequence()             # 오늘 이미 다 쳤으면 1번부터 한 번 더
         else: fire(nxt)
         show_toast(f"▶ 자동 진행 시작 — 코박스가 꺼져 있으면 켜지고, 한 판이 끝날 때마다 {auto_delay()}초 뒤 다음 판이 자동으로 뜹니다"
@@ -770,7 +830,7 @@ def main():
         bar.pack(side="left", fill="x", expand=True, padx=(4, 10))
         cl = tk.Label(row, text="", font=FNS, width=5, anchor="e", bg=C["card"], fg=C["sub"])
         cl.pack(side="left")
-        sl = tk.Label(row, text="", font=FNS, width=9, anchor="e", bg=C["card"], fg=C["dim"])
+        sl = tk.Label(row, text="", font=FNS, width=12, anchor="e", bg=C["card"], fg=C["dim"])
         sl.pack(side="left")
         routine_rows.append((kind, key, target, bar, cl, sl, gc))
 
@@ -1090,9 +1150,18 @@ def main():
                 rrect(bar, 0, 1, max(10, bw*frac), 7, 4,
                       fill=C["ok"] if done else gc, outline="")
             cl.configure(text=f"{min(c,99)}/{target}", fg=C["ok"] if done else C["sub"])
-            if kind == "probe":
-                fs = day["first"].get(key)
-                sl.configure(text=f"{fs}" if fs is not None else "")
+            # 점수 + 최근 7일 평균 대비 (프로브는 그날 첫 판, 나머지는 오늘 베스트 기준)
+            val, field = (day["first"].get(key), "first") if kind == "probe" else (day["best"].get(key), "best")
+            if val is None:
+                sl.configure(text="", fg=C["dim"])
+            else:
+                avg, pmax = recent_stats(data, key, dkey, field)
+                if pmax is not None and val > pmax: txt, col = f"{val} PB!", C["gold"]
+                elif avg is not None:
+                    d_ = val - avg
+                    txt, col = f"{val} {'▲' if d_ >= 0 else '▼'}{abs(d_):.0f}", (C["ok"] if d_ >= 0 else C["val"])
+                else: txt, col = f"{val}", C["txt"]
+                sl.configure(text=txt, fg=col)
         # 헤더 지수 / 준비 카운트
         s = probe_series(data)
         last = s[-1] if s and s[-1]["date"] == dkey else None
@@ -1142,7 +1211,7 @@ def main():
     def on_day_change(nk):
         """자정 통과: 데이터 키·스캔 캐시·날짜 UI·입력칸을 모두 오늘로 (켜 둔 채 밤을 넘겨도 어제 루틴이 남지 않게)"""
         today_key[0] = nk
-        _SCORE_CACHE.clear()
+        _SCORE_CACHE.clear(); TODAY_PLAYS.clear()
         auto.update(on=False, fired=None, due=None)
         w = seq_win["win"]
         if w is not None and w.winfo_exists(): w.destroy()
@@ -1161,6 +1230,7 @@ def main():
                     scan_lbl.configure(fg=C["val"],
                         text="stats 폴더를 읽지 못했습니다 — 기록은 보존됩니다. 일시적이면 자동 복구")
                 else:
+                    TODAY_PLAYS[:] = sorted(plays, key=lambda x: x[1])
                     events, changed = apply_scan(data, plays, nk)
                     if SCAN_INFO["plays"] == 0:
                         scan_lbl.configure(fg=C["gold"],
@@ -1226,6 +1296,12 @@ if __name__ == "__main__":
         assert sum(n for _, n in dict(PLAYLISTS)["AIMDESK Day"]) == 27
         # 코박스 딥링크 형식 (3.0.0 패치노트: 공백은 %20)
         assert scenario_uri("VT Pasu Novice S5") == "steam://run/824270/?action=jump-to-scenario;name=VT%20Pasu%20Novice%20S5"
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK")
+        t2 = {"days": {"2026-01-01": {"best": {"pasu": 700}, "first": {"pasu": 650}},
+                       "2026-01-02": {"best": {"pasu": 800}, "first": {}},
+                       "2026-01-03": {"best": {"pasu": 900}, "first": {"pasu": 850}}}}
+        assert recent_stats(t2, "pasu", "2026-01-03") == (750.0, 800)
+        assert recent_stats(t2, "pasu", "2026-01-03", "first") == (650.0, 800)
+        assert recent_stats(t2, "zzz", "2026-01-03") == (None, None)
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK")
         sys.exit(0)
     main()
