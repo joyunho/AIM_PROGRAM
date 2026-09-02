@@ -739,11 +739,11 @@ def main():
             if el > (STALL_SEC if auto["fired_running"] else STALL_SEC_LAUNCH):
                 # 60초 시나리오가 끝났어야 할 시간인데 CSV가 없다 = 프리플레이(타이머 없음)로 열렸을 가능성
                 msg = (f"⚠ {nm_} 보낸 지 {el}초 — 60초 시나리오인데 기록이 없습니다. 코박스가 FREEPLAY(타이머 없음) 모드일 "
-                       "가능성이 큽니다: 게임에서 ESC → 좌하단 토글을 CHALLENGE로 → 여기서 '다시 보내기'. (쉬는 중이면 무시)")
+                       "가능성이 큽니다: 게임에서 ESC → 상단 '플레이' 버튼 왼쪽의 [프리 플레이 | 도전 과제] 토글에서 '도전 과제'(CHALLENGE) → 여기서 '다시 보내기'. (쉬는 중이면 무시)")
                 col = C["val"]
                 if not auto["warned"]:
                     auto["warned"] = True
-                    show_toast("⚠ 기록이 안 들어옵니다 — 코박스에서 ESC → FREEPLAY/CHALLENGE 토글을 CHALLENGE로 바꾸고 '다시 보내기'")
+                    show_toast("⚠ 기록이 안 들어옵니다 — 코박스 ESC → 상단 '플레이' 왼쪽 토글을 '도전 과제'(CHALLENGE)로 → '다시 보내기'")
             else:
                 msg = f"자동 진행 중 · {nm_} 보낸 지 {el}초 · 끝나면 {auto_delay()}초 뒤 다음 판을 보냅니다"
         elif auto["on"]:
@@ -830,7 +830,7 @@ def main():
         if nxt is None: restart_sequence()             # 오늘 이미 다 쳤으면 1번부터 한 번 더
         else: fire(nxt)
         show_toast(f"▶ 자동 진행 시작 — 한 판이 끝나면 {auto_delay()}초 뒤 다음 판이 자동으로 뜹니다. 결과창에선 아무것도 누르지 마세요"
-                   "  ·  타이머가 안 보이면 ESC → 좌하단 토글을 CHALLENGE로 (프리플레이는 타이머·기록이 없습니다)")
+                   "  ·  타이머가 안 보이면 ESC → 상단 '플레이' 왼쪽 토글을 '도전 과제'(CHALLENGE)로 (프리플레이는 타이머·기록이 없습니다)")
 
     def add_section(title):
         f = tk.Frame(left, bg=C["card"]); f.pack(fill="x", pady=(10, 3))
