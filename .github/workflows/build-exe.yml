@@ -13,6 +13,19 @@ permissions:
   contents: write
 
 jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tk + Xvfb
+        run: sudo apt-get update -q && sudo apt-get install -y -q python3-tk xvfb
+      - name: Self-test
+        run: python3 aim_desk.py --selftest
+      - name: GUI smoke test (Xvfb)
+        run: |
+          AIMDESK_DATA_DIR=/tmp/aimdesk_smoke xvfb-run -a -s "-screen 0 1700x1000x24" python3 smoke_test.py
+          AIMDESK_DATA_DIR=/tmp/aimdesk_smoke15 AIMDESK_SCALE=1.5 xvfb-run -a -s "-screen 0 2400x1400x24" python3 smoke_test.py
+
   build:
     runs-on: windows-latest
     steps:
