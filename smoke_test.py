@@ -49,7 +49,8 @@ def btn(top, label):
     for w in walk(top):
         if isinstance(w, tk.Canvas) and hasattr(w, "lbl") and hasattr(w, "cmd"):
             try:
-                if w.itemcget(w.lbl, "text") == label: return w
+                txt = w.itemcget(w.lbl, "text")
+                if txt == label or txt[2:] == label: return w          # 토글은 '● ' / '○ ' 글리프가 앞에 붙는다
             except tk.TclError: pass
     return None
 def texts(top): return [w.cget("text") for w in walk(top) if isinstance(w, tk.Label)]
@@ -61,16 +62,16 @@ D = ad._DBG; root = D["root"]; data = D["data"]
 pump(700)                                       # tick(300ms)·refresh(450ms) 가 돌도록
 
 # ── 시작 상태 ──
-check("window geometry remembered (1000x700)", root.winfo_width() == 1000 and abs(root.winfo_x() - 30) <= 2, f"{root.winfo_width()} {root.winfo_x()}")
+check("window geometry remembered (1000x700, clamped to minsize)", root.winfo_width() == max(1000, ad.px(960)) and abs(root.winfo_x() - 30) <= 2, f"{root.winfo_width()} {root.winfo_x()}")
 check("today tab visible", D["frames"]["today"].winfo_ismapped())
 check("status bar shows 0판 warn", "0판" in D["status_lbl"].cget("text"), D["status_lbl"].cget("text"))
 b = btn(root, "▶ 오늘 루틴 실행"); check("routine button exists (v-day)", b is not None)
 c0 = D["counters"]["refresh_tab"]
 D["refresh"](); check("refresh() on today leaves grow dirty", D["dirty"]["grow"] is True and len(D["cv_idx"].find_all()) == 0)
-D["tabbtns"]["grow"].event_generate("<Button-1>"); pump(100)
+D["tabbtns"]["grow"].event_generate("<Button-1>"); pump(400)        # 첫 표시 뒤 캔버스 <Configure> 디바운스(80ms)까지 기다린다
 check("grow tab drawn on click", len(D["cv_idx"].find_all()) > 0 and D["dirty"]["grow"] is False)
 c1 = D["counters"]["refresh_tab"]
-D["tabbtns"]["grow"].event_generate("<Button-1>"); pump(100)
+D["tabbtns"]["grow"].event_generate("<Button-1>"); pump(400)
 check("second click does not redraw", D["counters"]["refresh_tab"] == c1)
 # 리사이즈 폭풍
 for i in range(20):
@@ -120,7 +121,64 @@ check("auto OFF: no key", len(fired) == 4)
 btn(top, "자동 진행").cmd(); check("auto ON (key) presses nothing", len(fired) == 4)
 btn(top, "딥링크 방식").cmd(); csv("VT Pasu Novice S5", "10.06.00", 700); scan(); pump(1300); scan()
 check("link mode → deeplink for EddieTS", len(fired) == 5 and fired[-1] == ad.scenario_uri("VT EddieTS Novice S5"), str(fired[-1:]))
-top.geometry("+120+90"); pump(100)
+top.geometry("+1180+60"); pump(100)          # 스크린샷에서 본창을 가리지 않게 오른쪽으로
+
+# ── v3: 정보·코치·기록 탭·단축키 ──
+SHOTS = os.environ.get("AIMDESK_SHOTS")
+def shot(name):
+    if not SHOTS: return
+    import subprocess; Path(SHOTS).mkdir(parents=True, exist_ok=True)
+    pump(120); subprocess.run(["import", "-window", "root", f"{SHOTS}/{name}.png"], timeout=20)
+D["show"]("today"); root.geometry("1100x780"); pump(300)
+check("streak label", "연속" in D["hdr_streak"].cget("text"), D["hdr_streak"].cget("text"))
+check("week strip drawn (7 cells)", len([i for i in D["wk_cv"].find_all() if D["wk_cv"].type(i) == "polygon"]) == 7)
+sec0 = D["section_labels"][0][0].cget("text"); check("warmup section shows progress 3/4", sec0.endswith("3/4"), sec0)
+hi = [r for r in D["routine_rows"] if r[9].cget("bg") == ad.C["card2"]]
+check("exactly one routine row highlighted as next", len(hi) == 1, str(len(hi)))
+sess = D["day_state"]["sess_lbl"].cget("text"); check("session line shows 5판 and PB", sess.startswith("오늘 5판") and "PB 1" in sess, sess)
+coach = [l.cget("text") for l in D["day_state"]["coach"]]; check("coach card has lines", any(coach) and ("지수" in coach[0] or "프로브" in coach[0]), str(coach)[:160])
+plus = btn(D["steppers"][0], "＋"); plus.cmd(); pump(50)
+check("deaths trend after +1", "1회" in D["dth_lbl"].cget("text"), D["dth_lbl"].cget("text"))
+shot("1_today")
+D["show"]("bench"); pump(200)
+check("bench advice names the weakest link", D["advice_lbl"].cget("text").startswith("약한 고리"), D["advice_lbl"].cget("text")[:120])
+wk = [k for k, (_, _, cardf) in D["ben_rows"].items() if cardf.cget("highlightbackground") == ad.C["gold"]]
+check("weakest card highlighted (one)", len(wk) == 1, str(wk))
+gaps = [c[3].cget("text") for c in D["ben_rows"]["react"][1]]; check("gap label for today's Ground", any(g.startswith("Gold +") for g in gaps), str(gaps))
+shot("2_bench")
+D["show"]("grow"); pump(200); shot("3_grow")
+D["show"]("log"); pump(200)
+c00 = D["hist_cells"][0][0].cget("text"); check("log first row is today", c00.startswith(date.today().strftime("%m-%d")), c00)
+D["select_day"](0); pump(50)
+check("detail shows today's Pasu", D["det_lines"][0].cget("text").startswith("Pasu") and "700" in D["det_lines"][0].cget("text"), D["det_lines"][0].cget("text"))
+check("growth card title", "총 에너지" in D["grow_title"].cget("text"), D["grow_title"].cget("text"))
+shot("4_log")
+class KE: pass
+ke = KE(); ke.widget = root; ke.keysym = "2"; ke.state = 0
+D["on_key"](ke); pump(50); check("shortcut 2 → grow tab", D["cur_tab"][0] == "grow")
+ent = next(w for w in walk(root) if isinstance(w, tk.Entry))
+ke2 = KE(); ke2.widget = ent; ke2.keysym = "1"; ke2.state = 0
+D["on_key"](ke2); pump(50); check("'1' typed in entry does not switch tab", D["cur_tab"][0] == "grow")
+D["show_toast"]("x"); pump(30); ke3 = KE(); ke3.widget = root; ke3.keysym = "Escape"; ke3.state = 0
+D["on_key"](ke3); pump(50); check("Escape dismisses toasts", not D["toast"].winfo_ismapped())
+D["show"]("today"); pump(100); shot("5_seq")
+# ── 순서창 간단히 · 현재 줄 강조 · 상세 팝업 · 배율 ──
+rows_ = D["seq_win"]["rows"]; nxt_ = ad_status = None
+done_, nxt_, _ = None, None, None
+mapped_before = sum(1 for r in rows_ if r[1].master.winfo_ismapped())
+D["set_compact"](True); pump(150)
+mapped_after = sum(1 for r in rows_ if r[1].master.winfo_ismapped())
+check("compact mode hides rows", mapped_before == 27 and 4 <= mapped_after <= 8, f"{mapped_before}->{mapped_after}")
+cur = D["seq_win"]["cur_row"]; check("current row emphasized (bold, card2)", cur is not None and rows_[cur][2].cget("font") != rows_[0][2].cget("font") and rows_[cur][2].cget("bg") == ad.C["card2"])
+check("skip/resend buttons enabled while rows remain", D["seq_win"]["skip_btn"].enabled)
+shot("6_seq_compact")
+D["set_compact"](False); pump(100)
+D["routine_rows"][0][8].event_generate("<Button-1>"); pump(150)
+dw = D["detail"]; check("detail popup opened for ground", dw["win"] is not None and dw["win"].winfo_exists() and dw["key"] == "ground")
+check("detail summary has PB and today count", "PB 3300" in dw["sum"].cget("text") and "오늘 2판" in dw["sum"].cget("text"), dw["sum"].cget("text"))
+dw["win"].geometry("+1180+560"); pump(120); shot("7_detail")
+check("UI scale applied to daych", D["daych"].winfo_reqwidth() == ad.px(70), f"{D['daych'].winfo_reqwidth()} vs {ad.px(70)}")
+check("window fits screen", root.winfo_width() <= root.winfo_screenwidth())
 # ── 닫기: 창 정보 저장 ──
 D["on_close"]()
 saved = json.loads((TMP / "aim_desk_data.json").read_text(encoding="utf-8"))

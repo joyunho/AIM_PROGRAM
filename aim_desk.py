@@ -886,6 +886,265 @@ def session_brief(data: dict, dkey: str, dt: str, plays, extra=None, alt=None):
     elif COACH_STATE.get("validity") and dt != "b": lines.append((validity_msg(COACH_STATE["validity"], plays), "hint"))
     return lines[:3]
 
+# ── 기록 탭: 최근 14일 표 · 날짜 상세 · 시작 대비 성장 ──
+HIST_COLS = ["날짜", "유형", "판", "분", "프로브", "지수 발/옵", "PB", "죽음", "수면", "체감", "에너지", "✓"]
+HIST_W = (9, 4, 4, 4, 5, 11, 3, 8, 5, 3, 5, 3)
+DTYPE_SHORT = {"v": "발로", "w": "약점", "b": "벤치", "r": "휴식", "seed": "기준"}
+
+def history_rows(data: dict, upto: str, series, pbd: dict, n: int = 14):
+    """upto 부터 거꾸로 n 일 (없는 날도 한 줄, trained=False)"""
+    end = date.fromisoformat(upto); ser = {p_["date"]: p_ for p_ in series}
+    out = []
+    for i in range(n):
+        d = end - timedelta(days=i); ds = d.isoformat(); e = data["days"].get(ds)
+        seed = ds == SEED_DATE
+        dtype = "seed" if seed else ["v", "v", "v", "v", "w", "b", "r"][d.weekday()]
+        trained = bool(e) and not seed and bool(e.get("first") or e.get("count"))
+        row = {"date": ds, "dow": DOWK[d.weekday()], "dtype": dtype, "trained": trained,
+               "plays": sum(e["count"].values()) if e else 0, "minutes": None, "probe": 0, "vi": None, "oi": None,
+               "pbs": [] if seed else [k for k, dd in pbd.items() if dd == ds], "deaths": 0, "dom": None, "sleep": None, "feel": None,
+               "energy": None, "miyagi": False, "ranked": False}
+        if e:
+            ss = e.get("sess", {})
+            if ss.get("start") and ss.get("end"): row["minutes"] = t_min(ss["end"]) - t_min(ss["start"])
+            row["probe"] = sum(1 for k in PROBE if e["first"].get(k) is not None)
+            sp = ser.get(ds)
+            if sp: row["vi"], row["oi"] = sp["vi"], sp["oi"]
+            dd_ = e.get("deaths", {}); tot = sum(int(dd_.get(c, 0) or 0) for c in DEATH_NAMES)
+            row["deaths"] = tot
+            if tot: row["dom"] = DEATH_NAMES[max(DEATH_NAMES, key=lambda c: int(dd_.get(c, 0) or 0))]
+            row["sleep"] = e.get("cond", {}).get("sleep"); row["feel"] = e.get("cond", {}).get("feel") if trained else None
+            en, cnt = totalE(e.get("best", {}))
+            if cnt == 9: row["energy"] = en
+            row["miyagi"] = bool(e.get("checks", {}).get("miyagi")); row["ranked"] = bool(e.get("checks", {}).get("ranked"))
+        out.append(row)
+    return out
+
+def fmt_history_row(r: dict):
+    idx = "—"
+    if r["vi"] is not None or r["oi"] is not None:
+        idx = (f"{r['vi']:+.1f}" if r["vi"] is not None else "—") + "/" + (f"{r['oi']:+.1f}" if r["oi"] is not None else "—")
+    tr = r["trained"] or r["dtype"] == "seed"
+    return [f"{r['date'][5:7]}-{r['date'][8:10]} {r['dow']}", DTYPE_SHORT[r["dtype"]],
+            str(r["plays"]) if r["trained"] else "·", str(r["minutes"]) if (r["trained"] and r["minutes"] is not None) else ("—" if r["trained"] else "·"),
+            f"{r['probe']}/{len(PROBE)}" if r["trained"] else "", idx if r["trained"] else "",
+            str(len(r["pbs"])) if r["pbs"] else "", (f"{r['deaths']} {r['dom']}" if r["deaths"] else ""),
+            f"{r['sleep']:g}" if r["sleep"] is not None else "—", str(r["feel"]) if r["feel"] is not None else "—",
+            str(r["energy"]) if r["energy"] is not None else "", ("M" if r["miyagi"] else "") + ("R" if r["ranked"] else "")]
+
+def day_detail(data: dict, dkey: str):
+    e = data["days"].get(dkey, {}); out = []
+    for sub in SUBS:
+        for k, _ in sub[3]:
+            b = e.get("best", {}).get(k)
+            out.append((k, e.get("first", {}).get(k), b, e.get("count", {}).get(k, 0), b is not None and b == data["pb"].get(k)))
+    return out
+
+def growth_since_seed(data: dict):
+    out = []
+    for si, sub in enumerate(SUBS):
+        for k, th in sub[3]:
+            sd_ = SEED[k]; pb = data["pb"].get(k, sd_); gain = pb - sd_
+            out.append({"key": k, "seed": sd_, "pb": pb, "gain": gain, "pct": gain / sd_ * 100,
+                        "band_seed": rank_of(scenE(sd_, th))[0], "band_pb": rank_of(scenE(pb, th))[0],
+                        "stalled": gain <= 0, "idx": si})
+    return sorted(out, key=lambda r: (r["stalled"], -r["pct"], r["idx"]))
+
+def energy_delta(data: dict):
+    return (totalE(SEED)[0], totalE(data["pb"])[0])
+
+def fmt_growth_row(r: dict):
+    return (sname(r["key"]), f"{r['seed']} → {r['pb']}", "정체" if r["stalled"] else f"+{r['pct']:.1f}%",
+            f"{r['band_seed']}→{r['band_pb']}" if r["band_seed"] != r["band_pb"] else "")
+
+# ── 단축키 ──
+def shortcut_action(keysym: str, state: int, in_entry: bool):
+    ctrl = bool(state & 0x4)
+    if keysym == "F5": return "rescan"
+    if keysym == "Escape": return "dismiss"
+    if in_entry and not ctrl: return None
+    if ctrl and keysym.lower() == "o": return "folder"
+    if ctrl and keysym.lower() == "r": return "run"
+    if in_entry: return None
+    return {"1": "tab:today", "2": "tab:grow", "3": "tab:bench", "4": "tab:log"}.get(keysym)
+
+def seq_shortcut_action(keysym: str, state: int, in_entry: bool):
+    ctrl = bool(state & 0x4)
+    if keysym == "Escape": return "close"
+    if ctrl and keysym.lower() == "n": return "skip"
+    if ctrl and keysym.lower() == "r": return "resend"
+    if in_entry or ctrl: return None
+    return "auto" if keysym == "space" else None
+
+# ── 정체 감지 (성장 탭 스파크 태그) ──
+def trend_pct(vals):
+    return _slope_pct(list(enumerate(vals))) if len(vals) >= 4 else None
+
+def plateau(vals, n: int = 10, flat_pct: float = 0.3, range_pct: float = 6.0) -> bool:
+    v = list(vals)[-n:]
+    if len(v) < n: return False
+    tp = trend_pct(v); m = sum(v) / len(v)
+    return tp is not None and abs(tp) < flat_pct and m > 0 and (max(v) - min(v)) / m * 100 < range_pct
+
+def spark_tag(vals) -> str:
+    if plateau(vals): return "최근 10판 제자리"
+    tp = trend_pct(vals)
+    if tp is None: return ""
+    return "↗" if tp >= 0.5 else "↘" if tp <= -0.5 else ""
+
+# ── 세션 마무리: 다음 한 걸음 ──
+def routine_complete(day: dict, dt: str) -> bool:
+    if dt == "b": return all(day.get("best", {}).get(k) is not None for k in SCEN)
+    if dt not in ("v", "w"): return False
+    main = MAIN if dt == "v" else FRIDAY
+    return (all(day.get("count", {}).get(k, 0) >= n for k, n in WARMUP + main)
+            and all(day.get("first", {}).get(k) is not None for k in PROBE))
+
+def next_step(data: dict, dkey: str, plays, avg: dict) -> str:
+    day = data["days"].get(dkey, {})
+    worst = None
+    for k in PROBE:
+        x = day.get("first", {}).get(k)
+        a = avg.get(k)
+        if x is None or not a: continue
+        r = x / a - 1
+        if r <= -0.03 and (worst is None or r < worst[0]): worst = (r, k, x, a)
+    if worst: return f"내일: {sname(worst[1])} 첫판 {worst[3]:.0f} 넘기기 (오늘 {worst[2]})"
+    seq = [p[0] for p in plays]
+    for k, s_, e_ in blocks_of(seq):
+        if e_ - s_ >= 4 and k not in WARM_KEYS:
+            bt = block_trend([(i, plays[i][2]) for i in range(s_, e_)])
+            if bt and bt[0] == "↘": return f"내일: {sname(k)} {e_ - s_}→{e_ - s_ - 2}판, 4판째 '다음 판 ▶'"
+    nr = nearest_rankup(data["pb"])
+    if nr: return f"다음: {nr[0]} — {sname(nr[1])} {nr[2]}점이면 {nr[3]}"
+    return "내일도 프로브부터"
+
+# ── 벤치마크 준비도 (금요일 예고 · 토요일 라이브) ──
+def week_of(dkey: str):
+    d = date.fromisoformat(dkey); mon = d - timedelta(days=d.weekday())
+    return [(mon + timedelta(days=i)).isoformat() for i in range((d - mon).days + 1)]
+
+def week_pbs(data: dict, dkey: str):
+    wk = week_of(dkey); out = []
+    for k in SCEN:
+        vals = [data["days"].get(d, {}).get("best", {}).get(k) for d in wk]
+        vals = [v for v in vals if v is not None]
+        if not vals: continue
+        _, pmax = recent_stats(data, k, wk[0])
+        if pmax is None or max(vals) > pmax: out.append(k)
+    return out
+
+def projected_energy(pb: dict, today_best: dict):
+    return totalE({**pb, **today_best})
+
+def bench_readiness(data: dict, dkey: str) -> dict:
+    e_pb, _ = totalE(data["pb"]); bd = bench_days(data)
+    tb = data["days"].get(dkey, {}).get("best", {})
+    return {"e_pb": e_pb, "rank": rank_of(e_pb)[0], "last_run": bd[-1] if bd else None,
+            "week_pbs": week_pbs(data, dkey), "closest": nearest_rankup(data["pb"]),
+            "projected": projected_energy(data["pb"], tb)[0], "n_today": sum(1 for k in SCEN if tb.get(k) is not None)}
+
+def bench_lines(r: dict, dt: str):
+    out = []
+    if dt == "w":
+        lr = f"지난 풀런 {r['last_run'][1]} ({r['last_run'][0][5:7]}-{r['last_run'][0][8:10]})" if r["last_run"] else "지난 풀런 없음"
+        names = ", ".join(sname(k) for k in r["week_pbs"][:4]) + ("…" if len(r["week_pbs"]) > 4 else "")
+        out.append((f"내일 벤치: {lr} · 이번 주 PB {len(r['week_pbs'])}개" + (f": {names}" if names else ""), "sub"))
+        if r["closest"]: out.append((f"가까운 랭크업: {r['closest'][0]} — {sname(r['closest'][1])} {r['closest'][2]}점이면 {r['closest'][3]} 칸", "gold"))
+    elif dt == "b":
+        t = f"{r['n_today']}/18 · 예상 {r['projected']} (빈 칸은 PB)"
+        nxt = next((n for th_, n, _ in sorted(RANKS) if r["projected"] is not None and r["projected"] < th_), None)
+        if nxt:
+            need = next(th_ for th_, n, _ in sorted(RANKS) if n == nxt) - r["projected"]
+            t += f" · {nxt}까지 {need}"
+        out.append((t, "gold" if r["n_today"] else "sub"))
+    return out
+
+# ── 주간 리캡 (일요일) ──
+def sleep_effect(data: dict, min_n: int = 5):
+    hi, lo = [], []
+    for p_ in probe_series(data):
+        e = data["days"].get(p_["date"], {}); sl_ = e.get("cond", {}).get("sleep")
+        vals = [v for v in (p_["vi"], p_["oi"]) if v is not None]
+        if sl_ is None or not vals: continue
+        (hi if sl_ >= 7 else lo).append(sum(vals) / len(vals))
+    a = sum(hi) / len(hi) if hi else None; b = sum(lo) / len(lo) if lo else None
+    return (a, b, len(hi), len(lo)) if (len(hi) >= min_n and len(lo) >= min_n) else (None, None, len(hi), len(lo))
+
+def weekly_recap(data: dict, dkey: str):
+    wk = [d for d in week_of(dkey) if d < dkey]
+    days = [data["days"][d] for d in wk if d in data["days"] and (data["days"][d].get("first") or data["days"][d].get("count"))]
+    if not days: return [("이번 주 기록 없음", "sub")]
+    plays = sum(sum(e["count"].values()) for e in days)
+    out = [(f"이번 주 {len(days)}일 · {plays}판 · PB {len(week_pbs(data, dkey))}개", "sub")]
+    ser = probe_series(data)
+    if len(ser) >= 2:
+        last = ser[-1]; prev = next((p_ for p_ in reversed(ser) if p_["date"] <= (date.fromisoformat(last["date"]) - timedelta(days=7)).isoformat()), None)
+        f = lambda v: "—" if v is None else f"{v:+.1f}"
+        if prev: out.append((f"지수 7일선 발로 {f(prev['maV'])}→{f(last['maV'])} · 옵치 {f(prev['maO'])}→{f(last['maO'])}", "sub"))
+    a, b, n1, n2 = sleep_effect(data)
+    if a is not None: out.append((f"수면 7h 이상 {n1}일 지수 {a:+.1f} · 미만 {n2}일 {b:+.1f}", "gold" if a > b else "sub"))
+    else: out.append((f"수면 입력 {n1 + n2}일 — 10일부터 관계가 보입니다", "hint"))
+    return out[:3]
+
+# ── 순서창: 높이 · 자동 스크롤 · 간단히 보기 ──
+def seq_window_height(req_h: int, avail_h: int) -> int:
+    return max(px(120), min(req_h, int(avail_h * 0.75)))
+
+def scroll_to_show(row_y: int, row_h: int, content_h: int, view_h: int, cur_frac: float, context_rows: int = 2) -> float:
+    """현재 줄이 보이는 띠 안이면 그대로, 아니면 위에 두 줄 여유를 두고 보이게 하는 yview 비율"""
+    if content_h <= view_h or content_h <= 0: return 0.0
+    top = cur_frac * content_h
+    if top <= row_y and row_y + row_h <= top + view_h: return cur_frac
+    want = max(0, row_y - context_rows * row_h)
+    return min(want / content_h, (content_h - view_h) / content_h)
+
+def visible_rows(done, nxt, skipped, compact: bool, keep_done: int = 2, ahead: int = 4):
+    """간단히 모드: 끝난 줄은 마지막 keep_done 개만, 앞으로 칠 줄은 ahead 개만 보인다 → (보이는 인덱스, 숨긴 완료 수, 숨긴 남은 수)"""
+    n = len(done)
+    if not compact: return list(range(n)), 0, 0
+    cur = nxt if nxt is not None else n
+    done_idx = [i for i in range(cur) if done[i]]
+    show = set(done_idx[-keep_done:]) if keep_done else set()
+    hidden_done = len(done_idx) - len(show)
+    upcoming = [i for i in range(cur, n) if not done[i]]
+    show.update(upcoming[:ahead + 1]); hidden_ahead = max(0, len(upcoming) - ahead - 1)     # 현재 판 + 다음 ahead 판
+    return sorted(show), hidden_done, hidden_ahead
+
+# ── 시나리오 상세 ──
+def scen_history(data: dict, key: str, end_day: str, n: int = 30):
+    out = []
+    for d in sorted(data["days"]):
+        if d > end_day: continue
+        e = data["days"][d]
+        b, f, c = e.get("best", {}).get(key), e.get("first", {}).get(key), e.get("count", {}).get(key, 0)
+        if b is None and f is None: continue
+        out.append({"date": d, "first": f, "best": b, "count": c})
+    return out[-n:]
+
+def scen_summary(data: dict, key: str, dkey: str) -> dict:
+    hist = scen_history(data, key, dkey)
+    e = data["days"].get(dkey, {})
+    avg7b, _ = recent_stats(data, key, dkey); avg7f, _ = recent_stats(data, key, dkey, "first")
+    th = th_of(key); pb = data["pb"].get(key)
+    bests = [h["best"] for h in hist if h["best"] is not None and h["date"] != dkey]
+    trend = None
+    if len(bests) >= 6:
+        a, b = bests[-7:], bests[-14:-7]
+        if len(a) >= 3 and len(b) >= 3: trend = sum(a) / len(a) - sum(b) / len(b)
+    return {"pb": pb, "pb_date": pb_days(data).get(key), "avg7_best": avg7b, "avg7_first": avg7f,
+            "today_first": e.get("first", {}).get(key), "today_best": e.get("best", {}).get(key), "today_count": e.get("count", {}).get(key, 0),
+            "gap": next_rank_gap(pb, th) if (pb is not None and th) else None, "trend": trend, "hist": hist}
+
+def fmt_scen_summary(sm: dict) -> str:
+    parts = []
+    if sm["pb"] is not None: parts.append(f"PB {sm['pb']}" + (f" ({sm['pb_date'][5:].replace('-', '/')})" if sm["pb_date"] else ""))
+    if sm["avg7_best"] is not None: parts.append(f"7일 평균 {sm['avg7_best']:.0f}")
+    if sm["today_count"]: parts.append(f"오늘 {sm['today_count']}판 · 베스트 {sm['today_best']}")
+    if sm["gap"]: parts.append(f"{sm['gap'][0]}까지 +{sm['gap'][2]}" if sm["gap"][0] else "Gold 칸 ✓")
+    if sm["trend"] is not None: parts.append(f"최근 7일 {'▲' if sm['trend'] >= 0 else '▼'}{abs(sm['trend']):.0f}")
+    return " · ".join(parts)
+
 # ══════════════════ 플레이리스트 자동 설치 / 실행 ══════════════════
 def _pl(name, items):
     return {"playlistName": name, "playlistId": 0, "authorSteamId": "",
@@ -1090,14 +1349,27 @@ def main():
         r0.destroy(); return
 
     data = load_data(); bump_ver()
+    if sys.platform == "win32":                      # 125~150% 배율 모니터에서 흐릿하지 않게 (시스템 DPI 인식)
+        try:
+            import ctypes
+            try: ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            except Exception: ctypes.windll.user32.SetProcessDPIAware()
+        except Exception: pass
     root = tk.Tk(); root.withdraw()
     root._aimdesk_lock = lock
     root.report_callback_exception = lambda t, v, tb: _hook(t, v, tb)
     root.title("에임 데스크"); root.configure(bg=C["bg"])
-    UI_SCALE[0] = float(os.environ.get("AIMDESK_SCALE") or 1.0)
+    env_scale = float(os.environ.get("AIMDESK_SCALE") or 0)
+    if env_scale:
+        UI_SCALE[0] = env_scale; root.tk.call("tk", "scaling", env_scale * 96 / 72)
+    else:
+        try: UI_SCALE[0] = max(1.0, round(root.winfo_fpixels("1i") / 96, 2))
+        except Exception: UI_SCALE[0] = 1.0
     vroot = (root.winfo_vrootx(), root.winfo_vrooty(), root.winfo_vrootwidth(), root.winfo_vrootheight())
-    root.minsize(960, 660)
-    root.geometry(clamp_geometry(data["win"].get("geo"), *vroot, 960, 660) or "1060x760")
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    MINW, MINH = min(px(960), sw - 80), min(px(660), sh - 120)
+    root.minsize(MINW, MINH)
+    root.geometry(clamp_geometry(data["win"].get("geo"), *vroot, MINW, MINH) or f"{min(px(1060), sw - 80)}x{min(px(760), sh - 120)}")
     try: root.iconphoto(True, tk.PhotoImage(data=ICON_B64))
     except Exception: pass
 
@@ -1124,56 +1396,75 @@ def main():
         return cv.create_polygon(pts, smooth=True, **kw)
 
     class RBtn(tk.Canvas):
-        """둥근 플랫 버튼 (호버 지원)"""
+        """둥근 플랫 버튼 (호버·눌림·비활성 지원)"""
         def __init__(self, parent, text, command=None, bg=C["card2"], fg=C["txt"],
                      hover=None, font=FB, padx=14, pady=7, r=9, w=None):
             self.f = tkfont.Font(font=font)
+            padx, pady, r = px(padx), px(pady), px(r)
             tw = w if w else self.f.measure(text) + padx*2
             th = self.f.metrics("linespace") + pady*2
             super().__init__(parent, width=tw, height=th, bg=parent["bg"],
                              highlightthickness=0, cursor="hand2")
-            self.bgc, self.fgc = bg, fg
+            self.bgc, self.fgc, self.r = bg, fg, r
             self.hv = hover or self._lift(bg)
             self.shape = rrect(self, 1, 1, tw-1, th-1, r, fill=bg, outline="")
             self.lbl = self.create_text(tw//2, th//2, text=text, fill=fg, font=font)
-            self.cmd = command
-            self.bind("<Button-1>", lambda e: self.cmd and self.cmd())
-            self.bind("<Enter>", lambda e: self.itemconfig(self.shape, fill=self.hv))
-            self.bind("<Leave>", lambda e: self.itemconfig(self.shape, fill=self.bgc))
+            self.cmd = command; self.enabled = True
+            self.bind("<Button-1>", self._press)
+            self.bind("<ButtonRelease-1>", lambda e: self.enabled and self.itemconfig(self.shape, fill=self.hv))
+            self.bind("<Enter>", lambda e: self.enabled and self.itemconfig(self.shape, fill=self.hv))
+            self.bind("<Leave>", lambda e: self.enabled and self.itemconfig(self.shape, fill=self.bgc))
+            self.bind("<Return>", lambda e: self._press(e)); self.bind("<space>", lambda e: self._press(e))
+            self.bind("<FocusIn>", lambda e: self.itemconfig(self.shape, outline=C["sub"], width=1))
+            self.bind("<FocusOut>", lambda e: self.itemconfig(self.shape, outline=""))
+        def _press(self, e=None):
+            if not self.enabled: return
+            self.itemconfig(self.shape, fill=shade(self.bgc, -10))
+            if self.cmd: self.cmd()
         @staticmethod
         def _lift(hexc): return shade(hexc, 16)
         def restyle(self, bg=None, fg=None, text=None):
             if bg: self.bgc = bg; self.hv = self._lift(bg); self.itemconfig(self.shape, fill=bg)
             if fg: self.fgc = fg; self.itemconfig(self.lbl, fill=fg)
             if text is not None: self.itemconfig(self.lbl, text=text)
+        def set_enabled(self, b: bool):
+            if self.enabled == bool(b): return
+            self.enabled = bool(b)
+            self.itemconfig(self.shape, fill=self.bgc if b else C["card"])
+            self.itemconfig(self.lbl, fill=self.fgc if b else C["dim"])
+            self.configure(cursor="hand2" if b else "arrow")
 
     class Toggle(RBtn):
+        """● 켜짐 / ○ 꺼짐 — 글리프까지 포함한 폭으로 만들어 상태가 바뀌어도 크기가 안 변한다"""
         def __init__(self, parent, text, getter, setter):
-            self.getter, self.setter = getter, setter
-            super().__init__(parent, text, command=self.flip)
+            self.getter, self.setter, self.base = getter, setter, text
+            f = tkfont.Font(font=FB)
+            super().__init__(parent, "● " + text, command=self.flip, w=max(f.measure("● " + text), f.measure("○ " + text)) + px(14) * 2)
             self.sync()
         def flip(self):
             self.setter(not self.getter()); self.sync()
         def sync(self):
             on = self.getter()
-            self.restyle(bg="#173226" if on else C["card2"],
-                         fg=C["ok"] if on else C["sub"])
+            self.restyle(bg="#173226" if on else C["card2"], fg=C["ok"] if on else C["sub"],
+                         text=("● " if on else "○ ") + self.base)
 
     class Stepper(tk.Frame):
         def __init__(self, parent, get, set_):
             super().__init__(parent, bg=parent["bg"])
             self.get, self.set_ = get, set_
-            RBtn(self, "−", lambda: self.mod(-1), padx=11, pady=4).pack(side="left")
+            self.minus = RBtn(self, "−", lambda: self.mod(-1), padx=11, pady=4); self.minus.pack(side="left")
             self.v = tk.Label(self, text="0", font=FN, width=3, bg=parent["bg"], fg=C["txt"])
             self.v.pack(side="left", padx=2)
-            RBtn(self, "＋", lambda: self.mod(+1), padx=10, pady=4).pack(side="left")
+            self.plus = RBtn(self, "＋", lambda: self.mod(+1), padx=10, pady=4); self.plus.pack(side="left")
             self.sync()
         def mod(self, d): self.set_(max(0, self.get()+d)); self.sync()
-        def sync(self): self.v.configure(text=str(self.get()))
+        def sync(self):
+            self.v.configure(text=str(self.get())); self.minus.set_enabled(self.get() > 0)
 
     class Segmented(tk.Canvas):
         """체감 1~10 선택"""
         def __init__(self, parent, get, set_, n=10, cw=17, h=20):
+            cw, h = px(cw), px(h)
             super().__init__(parent, width=n*(cw+3), height=h, bg=parent["bg"],
                              highlightthickness=0, cursor="hand2")
             self.n, self.cw, self.h, self.get, self.set_ = n, cw, h, get, set_
@@ -1333,7 +1624,7 @@ def main():
             underls[n].configure(bg=C["val"] if n == tab else C["bg"])
         cur_tab[0] = tab
         refresh_tab(tab)
-    for name, label in (("today","오늘"),("grow","성장"),("bench","벤치")):
+    for name, label in (("today","오늘"),("grow","성장"),("bench","벤치"),("log","기록")):
         holder = tk.Frame(tabbar, bg=C["bg"]); holder.pack(side="left", padx=(0, 22))
         b = tk.Label(holder, text=label, font=(FAM, 11, "bold"), bg=C["bg"],
                      fg=C["dim"], cursor="hand2")
@@ -1414,19 +1705,24 @@ def main():
         tk.Label(hd, text=title, font=FB, bg=C["bg"], fg=C["txt"]).pack(side="left")
         seq_win["prog"] = tk.Label(hd, text="", font=FNS, bg=C["bg"], fg=C["sub"])
         seq_win["prog"].pack(side="right")
-        seq_win["auto_lbl"] = tk.Label(w, text="", font=FS, bg=C["bg"], fg=C["dim"],
-                                       wraplength=300, justify="left")
+        seq_win["auto_lbl"] = tk.Label(w, text="", font=FS, bg=C["bg"], fg=C["hint"],
+                                       wraplength=px(340), justify="left")
         seq_win["auto_lbl"].pack(anchor="w", padx=12)
         box = tk.Frame(w, bg=C["card"], padx=10, pady=8,
                        highlightbackground=C["line"], highlightthickness=1)
         box.pack(fill="both", expand=True, padx=12, pady=(6, 8))
+        vs = VScroll(box, bg=C["card"]); vs.pack(fill="both", expand=True); seq_win["vs"] = vs
+        seq_win["top_lbl"] = tk.Label(vs.body, text="", font=FNS, bg=C["card"], fg=C["dim"], anchor="w")
+        seq_win["bot_lbl"] = tk.Label(vs.body, text="", font=FNS, bg=C["card"], fg=C["dim"], anchor="w")
+        seq_win.update(cur_row=None, last_nxt=None, vis=None, btn_enabled=None)
+        nmw = max(16, math.ceil(tkfont.Font(font=FB).measure("Floating Heads") / max(1, tkfont.Font(font=F).measure("0"))) + 1)
         for i, k in enumerate(seq, 1):
-            row = tk.Frame(box, bg=C["card"]); row.pack(fill="x", pady=1)
+            row = tk.Frame(vs.body, bg=C["card"]); row.pack(fill="x", pady=1)
             num = tk.Label(row, text=f"{i:02d}", font=FNS, width=3, anchor="e", bg=C["card"], fg=C["dim"])
             num.pack(side="left")
-            tk.Frame(row, bg=C["val"] if SCEN[k][1] == "v" else C["ow"], width=3, height=14).pack(side="left", padx=(6, 8))
-            nm = tk.Label(row, text=sname(k), font=F, width=16, anchor="w", bg=C["card"], fg=C["sub"])
-            nm.pack(side="left")
+            tk.Frame(row, bg=C["val"] if SCEN[k][1] == "v" else C["ow"], width=px(3), height=px(14)).pack(side="left", padx=(6, 8))
+            nm = tk.Label(row, text=sname(k), font=F, width=nmw, anchor="w", bg=C["card"], fg=C["sub"], cursor="hand2")
+            nm.pack(side="left"); nm.bind("<Button-1>", lambda e, k=k: open_detail(k))
             st = tk.Label(row, text="", font=FN, width=2, bg=C["card"], fg=C["dim"])
             st.pack(side="right")
             sc = tk.Label(row, text="", font=FN, width=6, anchor="e", bg=C["card"], fg=C["txt"])
@@ -1434,16 +1730,16 @@ def main():
             dl = tk.Label(row, text="", font=FNS, width=8, anchor="e", bg=C["card"], fg=C["dim"])
             dl.pack(side="right")
             seq_win["rows"].append((k, num, nm, st, sc, dl))
-        seq_win["sum"] = tk.Label(w, text="", font=FS, bg=C["bg"], fg=C["sub"], wraplength=340, justify="left")
+        seq_win["sum"] = tk.Label(w, text="", font=FS, bg=C["bg"], fg=C["sub"], wraplength=px(340), justify="left")
         seq_win["sum"].pack(anchor="w", padx=12, pady=(0, 6))
         # 조작 줄: 자동 진행 토글 · 다음 판(건너뛰기) · 다시 보내기 · 처음부터 · 판 사이 대기
         ctl = tk.Frame(w, bg=C["bg"]); ctl.pack(fill="x", padx=12, pady=(0, 6))
         seq_win["auto_btn"] = Toggle(ctl, "자동 진행", lambda: auto["on"], set_auto)
         seq_win["auto_btn"].pack(side="left")
-        RBtn(ctl, "다음 판 ▶", skip_current, padx=10, pady=5).pack(side="left", padx=(6, 0))
-        RBtn(ctl, "다시 보내기", resend_current, padx=10, pady=5).pack(side="left", padx=(6, 0))
+        seq_win["skip_btn"] = RBtn(ctl, "다음 판 ▶", skip_current, padx=10, pady=5); seq_win["skip_btn"].pack(side="left", padx=(6, 0))
+        seq_win["resend_btn"] = RBtn(ctl, "다시 보내기", resend_current, padx=10, pady=5); seq_win["resend_btn"].pack(side="left", padx=(6, 0))
         RBtn(ctl, "처음부터", restart_sequence, padx=10, pady=5).pack(side="left", padx=(6, 0))
-        seq_win["hint"] = tk.Label(w, text="", font=FS, bg=C["bg"], fg=C["dim"], wraplength=340, justify="left")
+        seq_win["hint"] = tk.Label(w, text="", font=FS, bg=C["bg"], fg=C["hint"], wraplength=px(340), justify="left")
         seq_win["hint"].pack(anchor="w", padx=12, pady=(0, 4))
         dl = tk.Frame(w, bg=C["bg"]); dl.pack(fill="x", padx=12, pady=(0, 4))
         tk.Label(dl, text="판 끝난 뒤 대기(초)", font=FS, bg=C["bg"], fg=C["sub"]).pack(side="left")
@@ -1459,11 +1755,26 @@ def main():
             v = key_var.get().strip()
             data["next_key"] = v or None; save_data(data); update_sequence()
         key_ent.bind("<Return>", commit_key); key_ent.bind("<FocusOut>", commit_key)
-        opt = tk.Frame(w, bg=C["bg"]); opt.pack(fill="x", padx=12, pady=(0, 10))
+        opt = tk.Frame(w, bg=C["bg"]); opt.pack(fill="x", padx=12, pady=(0, 4))
         Toggle(opt, "항상 위", lambda: bool(data.get("seq_topmost", True)), set_topmost).pack(side="left")
         Toggle(opt, "딥링크 방식", lambda: auto["mode"] == "link", set_mode_link).pack(side="left", padx=(6, 0))
-        # 지난번 위치가 화면 안이면 거기, 아니면 본창 오른쪽(화면 밖이면 본창 위에 겹쳐서)
+        Toggle(opt, "간단히", lambda: bool(data.get("seq_compact", False)), set_compact).pack(side="left", padx=(6, 0))
+        tk.Label(w, text="Space 자동  Ctrl+N 다음  Ctrl+R 다시  Esc 닫기  ·  이름 클릭 = 시나리오 상세", font=FS, bg=C["bg"], fg=C["dim"]).pack(anchor="w", padx=12, pady=(0, 10))
+        def on_seq_key(e):
+            act = seq_shortcut_action(e.keysym, e.state, isinstance(e.widget, tk.Entry))
+            if not act: return
+            if act == "auto": seq_win["auto_btn"].flip()
+            elif act == "skip": skip_current()
+            elif act == "resend": resend_current()
+            elif act == "close": stop_auto(); remember_seq_pos(); w.destroy()
+            return "break"
+        w.bind("<Key>", on_seq_key)
+        # 목록 높이: 화면의 3/4 를 넘지 않게 (넘치면 스크롤)
         root.update_idletasks(); w.update_idletasks()
+        other_h = sum(c.winfo_reqheight() for c in w.winfo_children() if c is not box) + px(90)
+        vs.cv.configure(height=seq_window_height(vs.body.winfo_reqheight(), w.winfo_screenheight() - other_h))
+        w.resizable(False, True); w.update_idletasks()
+        # 지난번 위치가 화면 안이면 거기, 아니면 본창 오른쪽(화면 밖이면 본창 위에 겹쳐서)
         pos = clamp_pos(data["win"].get("seq"), w.winfo_reqwidth(), w.winfo_reqheight(), *vroot)
         if pos is None:
             x = root.winfo_x() + root.winfo_width() + 8
@@ -1492,6 +1803,37 @@ def main():
         for (k, num, nm, st, sc, dl), r in zip(seq_win["rows"], rows):
             cfg(num, fg=C[r[0]]); cfg(nm, fg=C[r[1]]); cfg(st, text=r[2], fg=C[r[3]])
             cfg(sc, text=r[4], fg=C[r[5]]); cfg(dl, text=r[6], fg=C[r[7]])
+        # 현재 줄 강조 (바뀔 때만)
+        if seq_win.get("cur_row") != nxt:
+            for idx_ in (seq_win.get("cur_row"), nxt):
+                if idx_ is None or idx_ >= len(seq_win["rows"]): continue
+                on = idx_ == nxt; k_, num_, nm_, st_, sc_, dl_ = seq_win["rows"][idx_]
+                for w_ in (num_.master, num_, nm_, st_, sc_, dl_): w_.configure(bg=C["card2"] if on else C["card"])
+                nm_.configure(font=FB if on else F); num_.master.pack_configure(pady=3 if on else 1)
+            seq_win["cur_row"] = nxt
+        # 간단히 보기: 보이는 줄 집합이 바뀔 때만 다시 pack
+        vis, hd_, ha_ = visible_rows(done, nxt, seq_win["skipped"], bool(data.get("seq_compact", False)))
+        if tuple(vis) != seq_win.get("vis"):
+            vs = seq_win.get("vs")
+            for r_ in seq_win["rows"]: r_[1].master.pack_forget()
+            seq_win["top_lbl"].pack_forget(); seq_win["bot_lbl"].pack_forget()
+            if hd_: cfg(seq_win["top_lbl"], text=f"  ✓ {hd_}판 완료"); seq_win["top_lbl"].pack(fill="x", pady=(0, 2))
+            for i in vis:
+                seq_win["rows"][i][1].master.pack(fill="x", pady=3 if i == nxt else 1)
+            if ha_: cfg(seq_win["bot_lbl"], text=f"  … {ha_}판 남음"); seq_win["bot_lbl"].pack(fill="x", pady=(2, 0))
+            seq_win["vis"] = tuple(vis)
+        # 현재 줄이 보이도록 스크롤 (차례가 바뀔 때만)
+        if nxt != seq_win.get("last_nxt") and nxt is not None and seq_win.get("vs") is not None:
+            vs = seq_win["vs"]; row_ = seq_win["rows"][nxt][1].master
+            root.after_idle(lambda: (vs.cv.yview_moveto(scroll_to_show(row_.winfo_y(), max(1, row_.winfo_height()), vs.body.winfo_reqheight(),
+                                                                          max(1, vs.cv.winfo_height()), float(vs.cv.yview()[0])))
+                                     if row_.winfo_exists() else None))
+            seq_win["last_nxt"] = nxt
+        en = nxt is not None
+        if seq_win.get("btn_enabled") != en:
+            for b_ in (seq_win.get("skip_btn"), seq_win.get("resend_btn")):
+                if b_ is not None: b_.set_enabled(en)
+            seq_win["btn_enabled"] = en
         total, done_n = len(done), sum(done)
         cfg(seq_win["prog"], text=f"{done_n}/{total}" + ("  완료 ✓" if done_n >= total else ""),
             fg=C["ok"] if done_n >= total else C["sub"])
@@ -1501,8 +1843,12 @@ def main():
         else:
             remaining = sum(1 for i in range(total) if not done[i])
             est = remaining_estimate(TODAY_PLAYS, remaining) if (len(TODAY_PLAYS) >= 2 or remaining <= 15) else None
-            summ = fmt_seq_summary(done_n, total, n_pb, rel, probe_status(data["days"].get(dkey, blank_day())),
+            summ = fmt_seq_summary(played, total - (done_n - played), n_pb, rel, probe_status(data["days"].get(dkey, blank_day())),
                                    (HDR_STATE["vi"], HDR_STATE["oi"]), est, block_txt)
+            if done_n - played: summ += f" · 건너뜀 {done_n - played}"
+            if nxt is None:
+                avg_ = {k_: recent_stats(data, k_, dkey, "first")[0] for k_ in PROBE}
+                summ += "\n" + next_step(data, dkey, TODAY_PLAYS, avg_)
         cfg(seq_win["sum"], text=summ, fg=C["gold"] if n_pb else C["sub"])
         col = C["ok"] if (auto["on"] and nxt is not None) else C["dim"]
         mode_txt = "딥링크" if auto["mode"] == "link" else f"NEXT 키 {next_key() or '미지정'}"
@@ -1613,6 +1959,9 @@ def main():
         data["seq_topmost"] = bool(v); save_data(data)
         if seq_alive(): seq_win["win"].attributes("-topmost", bool(v))
 
+    def set_compact(v):
+        data["seq_compact"] = bool(v); save_data(data); update_sequence()
+
     def skip_current():
         """지금 차례를 건너뛰고 다음 판으로 바로 넘긴다"""
         _, nxt, _ = seq_status()
@@ -1666,6 +2015,69 @@ def main():
             show_toast("코박스 설정 → 키 설정 → PlaylistNext 에 F10 을 지정하고 순서창 'NEXT 키' 칸에 F10 을 적어 주세요")
         update_sequence()
 
+    # ── 시나리오 상세 팝업 (루틴 줄·순서창·스파크·벤치 이름 클릭) ──
+    detail = {"win": None, "key": None, "cv": None, "title": None, "sum": None}
+    def draw_scen_detail(cv, hist, th, pb, col):
+        cv.delete("all"); W = max(cv.winfo_width(), px(400)); H = px(220)
+        L, R, T, B = px(50), px(86), px(14), px(22)
+        pts_b = [(i, h["best"]) for i, h in enumerate(hist) if h["best"] is not None]
+        pts_f = [(i, h["first"]) for i, h in enumerate(hist) if h["first"] is not None]
+        vals = [v for _, v in pts_b + pts_f]
+        if not vals:
+            cv.create_text(W / 2, H / 2, text="아직 기록이 없습니다", fill=C["hint"], font=F); return
+        lo, hi = min(vals), max(vals)
+        if th:
+            below = [t for t in th if t <= lo]; above = [t for t in th if t > hi]
+            lo = min(lo, below[-1]) if below else lo * 0.9
+            hi = max(hi, above[0]) if above else hi
+        span = max(1, hi - lo); lo -= span * 0.06; hi += span * 0.06
+        n = len(hist)
+        X = lambda i: L + (W - L - R) * (0.5 if n < 2 else i / (n - 1))
+        Y = lambda v: T + (H - T - B) * (1 - (v - lo) / (hi - lo))
+        if th:
+            for i, t in enumerate(th):
+                if lo <= t <= hi:
+                    cv.create_line(L, Y(t), W - R, Y(t), fill=RANKC[i], dash=(3, 4))
+                    cv.create_text(W - R + px(6), Y(t), text=f"{RANK_NAMES[i]} {t}", anchor="w", fill=RANKC[i], font=FNS)
+        if len(pts_b) > 1:
+            cv.create_line(*[c for i, v in pts_b for c in (X(i), Y(v))], fill=col, width=2, smooth=True)
+        for i, v in pts_f: cv.create_oval(X(i) - 2, Y(v) - 2, X(i) + 2, Y(v) + 2, fill=C["dim"], outline="")
+        for i, v in pts_b:
+            r_ = 4 if v == pb else 3
+            cv.create_oval(X(i) - r_, Y(v) - r_, X(i) + r_, Y(v) + r_, fill=C["gold"] if v == pb else col, outline="")
+        cv.create_text(L, H - px(8), text=hist[0]["date"][5:], anchor="w", fill=C["dim"], font=FNS)
+        cv.create_text(W - R, H - px(8), text=hist[-1]["date"][5:], anchor="e", fill=C["dim"], font=FNS)
+        cv.create_text(L - px(6), Y(vals[-1]), text="", anchor="e")
+        cv.create_text(px(6), T + px(6), text="선 = 일별 베스트 · 점 = 첫 판 · 금색 = PB", anchor="nw", fill=C["dim"], font=FS)
+
+    def update_detail():
+        w = detail["win"]
+        if w is None or not w.winfo_exists() or not detail["key"]: return
+        k = detail["key"]; sub = sub_of(k)
+        sm = scen_summary(data, k, today_key[0])
+        cfg(detail["title"], text=f"{sname(k)} · {sub[1]} {sub[2]}" if sub else sname(k))
+        cfg(detail["sum"], text=fmt_scen_summary(sm) or "아직 기록이 없습니다")
+        draw_scen_detail(detail["cv"], sm["hist"], th_of(k), sm["pb"], C["val"] if SCEN[k][1] == "v" else C["ow"])
+
+    def open_detail(key):
+        detail["key"] = key
+        w = detail["win"]
+        if w is None or not w.winfo_exists():
+            w = tk.Toplevel(root); detail["win"] = w
+            w.title("시나리오 상세"); w.configure(bg=C["bg"]); w.resizable(False, False)
+            w.geometry(f"{px(560)}x{px(300)}+{root.winfo_x() + px(120)}+{root.winfo_y() + px(120)}")
+            hd = tk.Frame(w, bg=C["bg"]); hd.pack(fill="x", padx=12, pady=(10, 2))
+            detail["title"] = tk.Label(hd, text="", font=FH, bg=C["bg"], fg=C["txt"]); detail["title"].pack(side="left")
+            detail["sum"] = tk.Label(w, text="", font=FNS, bg=C["bg"], fg=C["sub"], wraplength=px(540), justify="left")
+            detail["sum"].pack(anchor="w", padx=12)
+            detail["cv"] = tk.Canvas(w, width=px(540), height=px(220), bg=C["card"], highlightthickness=0)
+            detail["cv"].pack(padx=12, pady=(8, 12))
+            detail["cv"].bind("<Configure>", lambda e: update_detail())
+            w.bind("<Escape>", lambda e: w.destroy())
+        else:
+            w.lift()
+        update_detail()
+
     def add_section(title, extra=None):
         f = tk.Frame(left_scroll.body, bg=C["card"]); f.pack(fill="x", pady=(10, 3))
         lb = tk.Label(f, text=title, font=FCAP, bg=C["card"], fg=C["gold"]); lb.pack(side="left")
@@ -1677,8 +2089,9 @@ def main():
         grp = SCEN[key][1]
         gc = C["val"] if grp == "v" else C["ow"]
         mark = tk.Label(row, text="", font=FNS, width=2, bg=C["card"], fg=C["gold"]); mark.pack(side="left")
-        tk.Frame(row, bg=gc, width=3, height=16).pack(side="left", padx=(0, 9))
-        nml = tk.Label(row, text=sname(key), font=F, width=13, anchor="w", bg=C["card"], fg=C["txt"]); nml.pack(side="left")
+        tk.Frame(row, bg=gc, width=px(3), height=px(16)).pack(side="left", padx=(0, 9))
+        nml = tk.Label(row, text=sname(key), font=F, width=13, anchor="w", bg=C["card"], fg=C["txt"], cursor="hand2"); nml.pack(side="left")
+        nml.bind("<Button-1>", lambda e, k=key: open_detail(k))
         bar = tk.Canvas(row, height=px(8), bg=C["card"], highlightthickness=0)
         bar.pack(side="left", fill="x", expand=True, padx=(4, 10))
         cl = tk.Label(row, text="", font=FNS, width=7, anchor="e", bg=C["card"], fg=C["sub"])
@@ -1846,8 +2259,9 @@ def main():
         cell.grid(row=i//3, column=i % 3, sticky="nsew", padx=(0, 12), pady=(0, 12))
         spark.grid_columnconfigure(i % 3, weight=1)
         top = tk.Frame(cell, bg=C["card"]); top.pack(fill="x")
-        tk.Label(top, text=sname(k), font=FB,
-                 bg=C["card"], fg=C["val"] if SCEN[k][1] == "v" else C["ow"]).pack(side="left")
+        nl_ = tk.Label(top, text=sname(k), font=FB, cursor="hand2",
+                       bg=C["card"], fg=C["val"] if SCEN[k][1] == "v" else C["ow"]); nl_.pack(side="left")
+        nl_.bind("<Button-1>", lambda e, k=k: open_detail(k))
         pbl = tk.Label(top, text="", font=FNS, bg=C["card"], fg=C["sub"]); pbl.pack(side="right")
         cv = tk.Canvas(cell, height=px(48), bg=C["card"], highlightthickness=0); cv.pack(fill="x")
         spark_cvs[k] = (cv, pbl)
@@ -1867,7 +2281,7 @@ def main():
     RBtn(ben_head, "내 볼테익 프로필", lambda: open_uri("https://app.voltaic.gg/j0y0nho"),
          padx=12, pady=5).pack(side="right", padx=(0, 12))
 
-    advice_lbl = tk.Label(bbody, text="", font=FS, bg=C["bg"], fg=C["hint"], wraplength=px(900), justify="left")
+    advice_lbl = tk.Label(bbody, text="", font=FS, bg=C["bg"], fg=C["hint"], wraplength=px(900), justify="left", anchor="w")
     advice_lbl.pack(fill="x", pady=(0, 10))
     ben_body = tk.Frame(bbody, bg=C["bg"]); ben_body.pack(fill="both", expand=True)
     ben_rows = {}
@@ -1880,14 +2294,14 @@ def main():
         holder = colf[si // 3]
         sc = card(holder, pad=(12, 9)); sc.pack(fill="x", pady=(0, 10))
         hd = tk.Frame(sc, bg=C["card"]); hd.pack(fill="x")
-        tk.Frame(hd, bg=CATC[sub_[1]], width=8, height=8).pack(side="left", pady=3)
+        tk.Frame(hd, bg=CATC[sub_[1]], width=px(8), height=px(8)).pack(side="left", pady=3)
         tk.Label(hd, text=f" {sub_[1]} · {sub_[2]}", font=FB, bg=C["card"], fg=C["txt"]).pack(side="left")
         se_lbl = tk.Label(hd, text="—", font=FN, bg=C["card"], fg=C["dim"]); se_lbl.pack(side="right")
         cells = []
         for k, th in sub_[3]:
             r1 = tk.Frame(sc, bg=C["card"]); r1.pack(fill="x", pady=(7, 1))
-            tk.Label(r1, text=sname(k), font=FS,
-                     bg=C["card"], fg=C["sub"]).pack(side="left")
+            bl_ = tk.Label(r1, text=sname(k), font=FS, bg=C["card"], fg=C["sub"], cursor="hand2"); bl_.pack(side="left")
+            bl_.bind("<Button-1>", lambda e, k=k: open_detail(k))
             sc_lbl = tk.Label(r1, text="—", font=FN, bg=C["card"], fg=C["txt"]); sc_lbl.pack(side="right")
             gap_lbl = tk.Label(r1, text="", font=FNS, bg=C["card"], fg=C["dim"]); gap_lbl.pack(side="right", padx=(0, 8))
             cvth = tk.Canvas(sc, height=px(22), bg=C["card"], highlightthickness=0)
@@ -1895,9 +2309,98 @@ def main():
             cells.append((k, th, sc_lbl, gap_lbl, cvth))
         ben_rows[sub_[0]] = (se_lbl, cells, sc)
 
+    # ══ 기록 탭 ══
+    fl_ = tk.Frame(body, bg=C["bg"]); frames["log"] = fl_
+    log_scroll = VScroll(fl_); log_scroll.pack(fill="both", expand=True); lbody = log_scroll.body
+    log_left = tk.Frame(lbody, bg=C["bg"]); log_left.pack(side="left", fill="both", expand=True)
+    log_right = tk.Frame(lbody, bg=C["bg"], width=px(300)); log_right.pack(side="left", fill="y", padx=(14, 0)); log_right.pack_propagate(False)
+    hist_card = card(log_left, pad=(12, 10)); hist_card.pack(fill="x", pady=(0, 12))
+    hh = tk.Frame(hist_card, bg=C["card"]); hh.pack(fill="x")
+    tk.Label(hh, text="최근 14일", font=FH, bg=C["card"], fg=C["txt"]).pack(side="left")
+    tk.Label(hh, text="줄을 누르면 그날 시나리오별 기록 · ✓ M=미야기 R=랭크", font=FS, bg=C["card"], fg=C["hint"]).pack(side="right")
+    hist_empty = tk.Label(hist_card, text="첫 훈련일이 지나면 여기에 하루씩 쌓입니다", font=F, bg=C["card"], fg=C["hint"])
+    hist_grid = tk.Frame(hist_card, bg=C["card"]); hist_grid.pack(fill="x", pady=(8, 0))
+    for ci, (cn, cw) in enumerate(zip(HIST_COLS, HIST_W)):
+        tk.Label(hist_grid, text=cn, font=FCAP, width=cw, anchor="w", bg=C["card"], fg=C["dim"]).grid(row=0, column=ci, sticky="w", padx=(0, 6))
+    hist_cells = []; hist_rows_f = []; hist_sel = [None]; hist_dates = []
+    for ri in range(14):
+        cells_r = []
+        for ci, cw in enumerate(HIST_W):
+            lb = tk.Label(hist_grid, text="", font=FNS, width=cw, anchor="w", bg=C["card"], fg=C["sub"], cursor="hand2")
+            lb.grid(row=ri + 1, column=ci, sticky="w", padx=(0, 6), pady=1)
+            lb.bind("<Button-1>", lambda e, i=ri: select_day(i))
+            cells_r.append(lb)
+        hist_cells.append(cells_r)
+    grow_card = card(log_left, pad=(12, 10)); grow_card.pack(fill="x")
+    grow_title = tk.Label(grow_card, text="", font=FB, bg=C["card"], fg=C["txt"]); grow_title.pack(anchor="w")
+    grow_grid = tk.Frame(grow_card, bg=C["card"]); grow_grid.pack(fill="x", pady=(6, 0))
+    grow_cells = []
+    for ri in range(len(SCEN)):
+        r_ = []
+        for ci, cw in enumerate((14, 12, 8, 14)):
+            lb = tk.Label(grow_grid, text="", font=FNS, width=cw, anchor="w", bg=C["card"], fg=C["sub"])
+            lb.grid(row=ri, column=ci, sticky="w", padx=(0, 8)); r_.append(lb)
+        grow_cells.append(r_)
+    det_card = card(log_right, pad=(12, 10)); det_card.pack(fill="x")
+    det_title = tk.Label(det_card, text="날짜를 고르세요", font=FB, bg=C["card"], fg=C["txt"]); det_title.pack(anchor="w", pady=(0, 6))
+    det_lines = []
+    for _i in range(len(SCEN)):
+        lb = tk.Label(det_card, text="", font=FNS, bg=C["card"], fg=C["sub"], anchor="w"); lb.pack(anchor="w"); det_lines.append(lb)
+
+    def select_day(i):
+        if i < len(hist_dates): hist_sel[0] = hist_dates[i]; fill_detail()
+    def fill_detail():
+        dk = hist_sel[0]
+        for ri, rf_ in enumerate(hist_cells):
+            on = ri < len(hist_dates) and hist_dates[ri] == dk
+            for lb in rf_: cfg(lb, bg=C["card2"] if on else C["card"])
+        if not dk:
+            cfg(det_title, text="날짜를 고르세요")
+            for lb in det_lines: cfg(lb, text="")
+            return
+        e = data["days"].get(dk, {})
+        cfg(det_title, text=f"{dk[5:7]}-{dk[8:10]} {DOWK[date.fromisoformat(dk).weekday()]} · {sum(e.get('count', {}).values())}판")
+        for lb, (k, first, best, cnt, is_pb) in zip(det_lines, day_detail(data, dk)):
+            if best is None: cfg(lb, text=f"{sname(k)}  —", fg=C["dim"]); continue
+            t = f"{sname(k)}  {best}" + (f" · 첫 {first}" if first is not None else "") + (f" · {cnt}판" if cnt else "") + (" · PB" if is_pb else "")
+            cfg(lb, text=t, fg=C["gold"] if is_pb else C["sub"])
+
+    def refresh_log():
+        dkey = today_key[0]
+        tdays = memo(("tdays",), lambda: training_days(data))
+        if not tdays:
+            hist_grid.pack_forget(); hist_empty.pack(anchor="w", pady=8)
+        else:
+            hist_empty.pack_forget()
+            if not hist_grid.winfo_ismapped(): hist_grid.pack(fill="x", pady=(8, 0))
+        rows = memo(("hist", dkey), lambda: history_rows(data, dkey, probe_series(data), memo(("pbd",), lambda: pb_days(data))))
+        hist_dates[:] = [r["date"] for r in rows]
+        for ri, r in enumerate(rows):
+            vals = fmt_history_row(r)
+            base = C["txt"] if r["date"] == dkey else (C["sub"] if (r["trained"] or r["dtype"] == "seed") else C["dim"])
+            if r["dtype"] == "r" and not r["trained"]: base = C["dim"]
+            for ci, (lb, v) in enumerate(zip(hist_cells[ri], vals)):
+                col = base
+                if ci == 1: col = DAY_TYPE.get(r["dtype"], ("", C["dim"]))[1] if r["dtype"] != "seed" else C["gold"]
+                elif ci == 6 and r["pbs"]: col = C["gold"]
+                elif ci == 5 and r["vi"] is not None: col = C["ok"] if r["vi"] >= 0 else C["val"]
+                cfg(lb, text=v, fg=col)
+        if hist_sel[0] not in hist_dates:
+            hist_sel[0] = next((r["date"] for r in rows if r["trained"]), None)
+        fill_detail()
+        e0, e1 = energy_delta(data)
+        cfg(grow_title, text=f"시작 대비 · 총 에너지 {e0} → {e1} ({e1 - e0:+d})", fg=C["gold"] if e1 > e0 else C["dim"])
+        for r_, g in zip(grow_cells, memo(("growth",), lambda: growth_since_seed(data))):
+            vals = fmt_growth_row(g)
+            col = C["dim"] if g["stalled"] else C["sub"]
+            cfg(r_[0], text=vals[0], fg=C["val"] if SCEN[g["key"]][1] == "v" else C["ow"])
+            cfg(r_[1], text=vals[1], fg=col); cfg(r_[2], text=vals[2], fg=C["ok"] if not g["stalled"] else C["dim"])
+            cfg(r_[3], text=vals[3], fg=C["gold"] if vals[3] else col)
+    tab_fn["log"] = refresh_log
+
     def draw_thcells(cv, th, score):
         cv.delete("all")
-        W = max(cv.winfo_width(), 200); h = 22; skew = 7; gap = 5
+        W = max(cv.winfo_width(), px(200)); h = px(22); skew = px(7); gap = px(5)
         cw = (W - gap*3 - skew) / 4
         p = -1
         if score is not None:
@@ -1912,33 +2415,33 @@ def main():
             cv.create_text(x + (cw+skew)/2, h/2, text=str(t), font=FNS,
                            fill="#10141A" if hit else C["dim"])
 
-    def rank_pill(cv, name, color, w=76):
-        cv.delete("all")
+    def rank_pill(cv, name, color, w=None):
+        cv.delete("all"); w = w or px(76)
         if not name or name == "—": return
-        rrect(cv, 0, 2, w, 24, 10, fill=color, outline="")
-        cv.create_text(w/2, 13, text=name, font=(FAM, 9, "bold"), fill="#0B0E11")
+        rrect(cv, 0, px(2), w, px(24), px(10), fill=color, outline="")
+        cv.create_text(w/2, px(13), text=name, font=(FAM, 9, "bold"), fill="#0B0E11")
 
     # ── 차트 ──
     def draw_idx(cv, series):
-        cv.delete("all"); W = max(cv.winfo_width(), 400); H = 236
-        cv.create_text(16, 16, text="프로브 지수", anchor="w", fill=C["txt"], font=FB)
-        cv.create_text(W-16, 16, text="점 = 일별 · 선 = 7일 평균", anchor="e", fill=C["dim"], font=FS)
-        cv.create_rectangle(96, 11, 108, 14, fill=C["val"], outline="")
-        cv.create_text(112, 13, text="발로", anchor="w", fill=C["sub"], font=FS)
-        cv.create_rectangle(146, 11, 158, 14, fill=C["ow"], outline="")
-        cv.create_text(162, 13, text="옵치", anchor="w", fill=C["sub"], font=FS)
+        cv.delete("all"); W = max(cv.winfo_width(), px(400)); H = px(236)
+        cv.create_text(px(16), px(16), text="프로브 지수", anchor="w", fill=C["txt"], font=FB)
+        cv.create_text(W-px(16), px(16), text="점 = 일별 · 선 = 7일 평균", anchor="e", fill=C["hint"], font=FS)
+        cv.create_rectangle(px(96), px(11), px(108), px(14), fill=C["val"], outline="")
+        cv.create_text(px(112), px(13), text="발로", anchor="w", fill=C["sub"], font=FS)
+        cv.create_rectangle(px(146), px(11), px(158), px(14), fill=C["ow"], outline="")
+        cv.create_text(px(162), px(13), text="옵치", anchor="w", fill=C["sub"], font=FS)
         pts = [p for p in series if p["vi"] is not None or p["oi"] is not None][-30:]
-        L, R, T, B = 46, 18, 38, 24
+        L, R, T, B = px(46), px(18), px(38), px(24)
         def X(i): return L + (W-L-R) * (0.5 if len(pts) < 2 else i/(len(pts)-1))
         def Y(v): return T + (H-T-B) * (1 - (v+3)/6)
         for v in (-2, 0, 2):
             cv.create_line(L, Y(v), W-R, Y(v), fill="#222A32" if v else "#39434E")
-            cv.create_text(L-9, Y(v), text=f"{v:+d}" if v else "0", anchor="e",
+            cv.create_text(L-px(9), Y(v), text=f"{v:+d}" if v else "0", anchor="e",
                            fill=C["dim"], font=FNS)
         if not pts:
             cv.create_text((L+W-R)/2, (T+H-B)/2,
                            text="프로브를 시작하면 여기서 성장 곡선이 자랍니다  ·  지수는 4일차부터",
-                           fill=C["dim"], font=F)
+                           fill=C["hint"], font=F)
             return
         for a, col in (("vi", C["val"]), ("oi", C["ow"])):
             for i, p in enumerate(pts):
@@ -1949,22 +2452,22 @@ def main():
             seq = [(X(i), Y(p[a])) for i, p in enumerate(pts) if p[a] is not None]
             if len(seq) > 1:
                 cv.create_line(*[c for xy in seq for c in xy], fill=col, width=3, smooth=True)
-        cv.create_text(L, H-10, text=pts[0]["date"][5:], anchor="w", fill=C["dim"], font=FNS)
-        cv.create_text(W-R, H-10, text=pts[-1]["date"][5:], anchor="e", fill=C["dim"], font=FNS)
+        cv.create_text(L, H-px(10), text=pts[0]["date"][5:], anchor="w", fill=C["dim"], font=FNS)
+        cv.create_text(W-R, H-px(10), text=pts[-1]["date"][5:], anchor="e", fill=C["dim"], font=FNS)
 
     def draw_bench_chart(cv, bd):
-        cv.delete("all"); W = max(cv.winfo_width(), 400); H = 196
-        cv.create_text(16, 16, text="벤치마크 총 에너지", anchor="w", fill=C["txt"], font=FB)
-        cv.create_text(W-16, 16, text="랭크 선을 넘는 순간이 보입니다", anchor="e", fill=C["dim"], font=FS)
-        L, R, T, B = 70, 18, 38, 22
+        cv.delete("all"); W = max(cv.winfo_width(), px(400)); H = px(196)
+        cv.create_text(px(16), px(16), text="벤치마크 총 에너지", anchor="w", fill=C["txt"], font=FB)
+        cv.create_text(W-px(16), px(16), text="랭크 선을 넘는 순간이 보입니다", anchor="e", fill=C["hint"], font=FS)
+        L, R, T, B = px(70), px(18), px(38), px(22)
         top = max([520] + [e_ + 60 for _, e_ in bd])   # 골드 위로 외삽돼도 점이 차트 밖으로 나가지 않게
         def Y(v): return T + (H-T-B) * (1 - v/top)
         for (t, n, c) in RANKS:
             cv.create_line(L, Y(t), W-R, Y(t), fill="#2A333D", dash=(3, 4))
-            cv.create_text(L-10, Y(t), text=n, anchor="e", fill=c, font=FNS)
+            cv.create_text(L-px(10), Y(t), text=n, anchor="e", fill=c, font=FNS)
         if not bd:
             cv.create_text((L+W-R)/2, (T+H-B)/2, text="토요일 풀런이 쌓이면 계단이 생깁니다",
-                           fill=C["dim"], font=F)
+                           fill=C["hint"], font=F)
             return
         def X(i): return L + (W-L-R) * (0.5 if len(bd) < 2 else i/(len(bd)-1))
         seq = [(X(i), Y(e)) for i, (k, e) in enumerate(bd)]
@@ -1972,26 +2475,28 @@ def main():
             cv.create_line(*[c for xy in seq for c in xy], fill=C["gold"], width=3)
         for i, (k, e) in enumerate(bd):
             x, y = X(i), Y(e)
-            cv.create_oval(x-4, y-4, x+4, y+4, fill=C["gold"], outline="")
-            cv.create_text(x, y-14, text=str(e), fill=C["txt"], font=FNS)
-            cv.create_text(x, H-10, text=k[5:], fill=C["dim"], font=FNS)
+            cv.create_oval(x-px(4), y-px(4), x+px(4), y+px(4), fill=C["gold"], outline="")
+            cv.create_text(x, y-px(14), text=str(e), fill=C["txt"], font=FNS)
+            cv.create_text(x, H-px(10), text=k[5:], fill=C["dim"], font=FNS)
 
     def draw_spark(k, cv, pbl):
-        cv.delete("all"); W = max(cv.winfo_width(), 200); H = 48
+        cv.delete("all"); W = max(cv.winfo_width(), px(200)); H = px(48)
         days = sorted(d_ for d_ in data["days"] if data["days"][d_]["first"].get(k) is not None)[-14:]
         vals = [data["days"][d_]["first"][k] for d_ in days]
         pb = data["pb"].get(k); delta = ""
         if len(vals) >= 2:
             base = sum(vals[:-1]) / len(vals[:-1]); df = vals[-1] - base
             delta = f"  {'▲' if df >= 0 else '▼'}{abs(df):.0f}"
-        pbl.configure(text=f"PB {pb}{delta}" if pb else "")
+        tag = spark_tag(vals)
+        pbl.configure(text=(f"PB {pb}{delta}" if pb else "") + (f" · {tag}" if tag else ""))
         if len(vals) < 2:
-            cv.create_text(W/2, H/2, text="첫 판 2개부터 선이 생깁니다", fill=C["dim"], font=FS)
+            cv.create_text(W/2, H/2, text="첫 판 2개부터 선이 생깁니다", fill=C["hint"], font=FS)
             return
         lo, hi = min(vals), max(vals)
         if hi == lo: hi += 1
         col = C["val"] if SCEN[k][1] == "v" else C["ow"]
-        seq = [(6 + (W-12)*i/(len(vals)-1), H-7 - (H-16)*(v-lo)/(hi-lo)) for i, v in enumerate(vals)]
+        m6, m12, m7, m16 = px(6), px(12), px(7), px(16)
+        seq = [(m6 + (W-m12)*i/(len(vals)-1), H-m7 - (H-m16)*(v-lo)/(hi-lo)) for i, v in enumerate(vals)]
         cv.create_line(*[c for xy in seq for c in xy], fill=col, width=2, smooth=True)
         x, y = seq[-1]
         cv.create_oval(x-3, y-3, x+3, y+3, fill=col, outline="")
@@ -2059,8 +2564,17 @@ def main():
         # 코치 카드
         if day_state["coach"]:
             dt_ = day_state["dt"]
-            lines = memo(("brief", dkey, dt_, COACH_STATE.get("validity")),
-                         lambda: session_brief(data, dkey, dt_, TODAY_PLAYS))
+            def _brief():
+                alt = None
+                if dt_ == "r": alt = weekly_recap(data, dkey)
+                elif dt_ in ("w", "b"): alt = bench_lines(bench_readiness(data, dkey), dt_)
+                extra = None
+                if routine_complete(day, dt_):
+                    avg_ = {k_: recent_stats(data, k_, dkey, "first")[0] for k_ in PROBE}
+                    extra = "마무리 · " + next_step(data, dkey, TODAY_PLAYS, avg_)
+                elif dt_ == "b" and alt: alt = alt + [("18개 다 치면 벤치 탭·성장 차트에 오늘 점이 찍힙니다", "hint")]
+                return session_brief(data, dkey, dt_, TODAY_PLAYS, extra=extra, alt=alt)
+            lines = memo(("brief", dkey, dt_, COACH_STATE.get("validity")), _brief)
             COACH_STATE["brief"] = lines
             for i, lb_ in enumerate(day_state["coach"]):
                 if i < len(lines): cfg(lb_, text=lines[i][0], fg=C[lines[i][1]])
@@ -2128,6 +2642,7 @@ def main():
         refresh_header()
         refresh_tab(cur_tab[0])
         update_sequence()
+        update_detail()
 
     # 창 크기 변경: 캔버스마다 오는 <Configure> 폭풍을 80ms 로 묶어 한 번만, 보이는 탭만 다시 그린다
     tab_of = {}; last_w = {}; resize_job = [None]
@@ -2153,6 +2668,7 @@ def main():
         _SCORE_CACHE.clear(); TODAY_PLAYS.clear()
         auto.update(on=False, fired=None, due=None)
         HDR_STATE.update(vi=None, oi=None)
+        if detail["win"] is not None and detail["win"].winfo_exists(): detail["win"].destroy()
         if seq_alive(): remember_seq_pos(); seq_win["win"].destroy()
         build_day_ui()
         sync_sleep_entry()
@@ -2211,6 +2727,20 @@ def main():
         w.cv.yview_scroll(wheel_units(getattr(e, "delta", 0), getattr(e, "num", 0)), "units")
     root.bind_all("<MouseWheel>", on_wheel); root.bind_all("<Button-4>", on_wheel); root.bind_all("<Button-5>", on_wheel)
 
+    def on_key(e):
+        if e.widget.winfo_toplevel() is not root: return
+        act = shortcut_action(e.keysym, e.state, isinstance(e.widget, tk.Entry))
+        if not act: return
+        if act.startswith("tab:"): show(act[4:])
+        elif act == "rescan":
+            _SCAN_STATE["sig"] = None; _SCORE_CACHE.clear(); scan_once()
+        elif act == "dismiss": tq.clear(); render_toasts()
+        elif act == "folder": pick_stats()
+        elif act == "run" and day_state["pl"]: run_playlist(day_state["pl"])
+        return "break"
+    root.bind("<Key>", on_key)
+    legend_lbl.configure(text="1·2·3·4 탭  F5 재스캔  Ctrl+R 실행")
+
     root.deiconify(); root.update_idletasks(); win_dark()
     if data["win"].get("zoomed") and sys.platform == "win32":
         try: root.state("zoomed")
@@ -2238,7 +2768,11 @@ def main():
                 toast=toast, toast_tick=toast_tick, on_close=on_close, left_scroll=left_scroll, right_scroll=right_scroll,
                 grow_scroll=grow_scroll, bench_scroll=bench_scroll, on_wheel=on_wheel, frames=frames, tabbtns=tabbtns,
                 open_sequence=open_sequence, update_sequence=update_sequence, run_playlist=run_playlist,
-                VScroll=VScroll, cv_idx=cv_idx, cv_ben=cv_ben, hdr_e=hdr_e, hdr_idx=hdr_idx, set_status=set_status)
+                VScroll=VScroll, cv_idx=cv_idx, cv_ben=cv_ben, hdr_e=hdr_e, hdr_idx=hdr_idx, set_status=set_status,
+                hist_cells=hist_cells, det_lines=det_lines, det_title=det_title, grow_title=grow_title, select_day=select_day,
+                hdr_streak=hdr_streak, wk_cv=wk_cv, section_labels=section_labels, advice_lbl=advice_lbl, ben_rows=ben_rows,
+                dth_lbl=dth_lbl, steppers=steppers, on_key=on_key, pick_stats=pick_stats,
+                detail=detail, open_detail=open_detail, spark_cvs=spark_cvs, daych=daych, set_compact=set_compact)
     _DBG.setdefault("counters", {}).setdefault("refresh_tab", 0)
     if os.environ.get("AIMDESK_NO_MAINLOOP"): return
     root.mainloop()
@@ -2386,6 +2920,59 @@ if __name__ == "__main__":
         nr = nearest_rankup(SEED); assert nr and nr[1] in SEED and nr[3] in RANK_NAMES
         sb = session_brief(fx, "2026-09-05", "v", []); assert 1 <= len(sb) <= 3 and "지수" in sb[0][0]
         assert session_brief(fx, "2026-09-05", "r", [], alt=[("x", "sub")]) == [("x", "sub")]
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK")
+        # v3 기록 탭 · 단축키
+        hx = {"pb": dict(SEED), "days": {SEED_DATE: dict(blank_day(), best=dict(SEED)),
+              "2026-09-01": dict(blank_day(), first={"pasu": 800}, best={"pasu": 850}, count={"pasu": 2}, sess={"start": "10.00.00", "end": "10.41.00"},
+                                 deaths={"aim": 2, "pos": 1, "dec": 0, "trade": 0}, cond={"sleep": 7, "caf": 0, "feel": 6}, checks={"miyagi": True, "ranked": False}),
+              "2026-09-03": dict(blank_day(), first={"dot": 1}, best={"dot": 1}, count={"dot": 1})}}
+        hx["pb"]["pasu"] = 850
+        hr = history_rows(hx, "2026-09-03", probe_series(hx), pb_days(hx), n=6)
+        assert len(hr) == 6 and hr[0]["date"] == "2026-09-03" and hr[1]["trained"] is False and hr[2]["trained"] is True
+        assert hr[5]["dtype"] == "seed" and hr[5]["trained"] is False and hr[5]["energy"] == 339 and hr[2]["energy"] is None and hr[5]["pbs"] == []
+        assert hr[2]["pbs"] == ["pasu"] and hr[2]["minutes"] == 41 and hr[2]["dom"] == "에임" and hr[2]["miyagi"]
+        fr = fmt_history_row(hr[2]); assert fr[0] == "09-01 화" and fr[2] == "2" and fr[3] == "41" and fr[6] == "1" and fr[7] == "3 에임" and fr[11] == "M", fr
+        assert fmt_history_row(hr[1])[2] == "·" and fmt_history_row(hr[5])[1] == "기준"
+        dd_ = day_detail(hx, "2026-09-01"); assert [x[0] for x in dd_] == [k for sub in SUBS for k, _ in sub[3]] and dd_[0] == ("pasu", 800, 850, 2, True)
+        g0 = growth_since_seed({"pb": dict(SEED), "days": {}}); assert all(r["stalled"] for r in g0) and energy_delta({"pb": dict(SEED)}) == (339, 339)
+        g1 = growth_since_seed(hx); assert g1[0]["key"] == "pasu" and abs(g1[0]["pct"] - 5.46) < 0.01 and fmt_growth_row(g1[0])[3] == "" and g1[0]["band_pb"] == "Gold"
+        assert fmt_growth_row(g1[-1])[2] == "정체"
+        assert shortcut_action("2", 0, False) == "tab:grow" and shortcut_action("2", 0, True) is None and shortcut_action("F5", 0, True) == "rescan"
+        assert shortcut_action("r", 0x4, False) == "run" and shortcut_action("r", 0, False) is None and shortcut_action("o", 0x4, True) == "folder"
+        assert seq_shortcut_action("space", 0, False) == "auto" and seq_shortcut_action("space", 0, True) is None and seq_shortcut_action("n", 0x4, False) == "skip"
+        assert seq_shortcut_action("Escape", 0, True) == "close" and seq_shortcut_action("r", 0, False) is None
+        # v3 권장: 정체·다음 한 걸음·벤치 준비도·주간 리캡
+        assert plateau([800,802,799,801,800,803,798,800,801,799]) and not plateau([800,810,820,830,840,850,860,870,880,890]) and not plateau([800]*5)
+        assert spark_tag([800,810,820,830,840,850,860,870,880,890]) == "↗" and spark_tag([]) == "" and spark_tag([900,880,860,840]) == "↘"
+        nx = {"pb": dict(SEED), "days": {"2026-09-03": dict(blank_day(), first={"eddie": 720}, best={"eddie": 720}, count={"eddie": 1})}}
+        assert "Eddie" in next_step(nx, "2026-09-03", [("eddie","10.00.00",720)], {"eddie": 745.0}) and "745" in next_step(nx, "2026-09-03", [], {"eddie": 745.0})
+        dotp = [("dot", f"10.0{i}.00", v) for i, v in enumerate((1000, 990, 970, 950, 940, 930))]
+        ns2 = next_step({"pb": dict(SEED), "days": {"2026-09-03": blank_day()}}, "2026-09-03", dotp, {}); assert "6→4판" in ns2, ns2
+        ns3 = next_step({"pb": dict(SEED), "days": {"2026-09-03": blank_day()}}, "2026-09-03", [], {}); assert "다음:" in ns3 or "프로브부터" in ns3
+        full = dict(blank_day(), count={k: n for k, n in WARMUP + MAIN}, first={k: 1 for k in PROBE})
+        assert routine_complete(full, "v") and not routine_complete(dict(full, first={k: 1 for k in PROBE[1:]}), "v") and not routine_complete(full, "r")
+        bx = {"pb": dict(SEED), "days": {SEED_DATE: dict(blank_day(), best=dict(SEED))}}
+        br = bench_readiness(bx, "2026-09-04"); assert br["e_pb"] == 339 and br["week_pbs"] == [] and br["last_run"] == (SEED_DATE, 339), br
+        bx["days"]["2026-09-01"] = dict(blank_day(), best={"pasu": 820}, count={"pasu": 1}); bump_ver()
+        assert week_pbs(bx, "2026-09-04") == ["pasu"] and projected_energy(SEED, {"pasu": 500})[0] < 339
+        assert bench_lines(bench_readiness(bx, "2026-09-04"), "w")[0][0].startswith("내일 벤치") and bench_lines(bench_readiness(bx, "2026-09-05"), "b")[0][0].startswith("0/18 · 예상")
+        assert week_of("2026-09-03") == ["2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03"]
+        assert weekly_recap({"pb": {}, "days": {}}, "2026-09-06") == [("이번 주 기록 없음", "sub")]
+        wr = weekly_recap(bx, "2026-09-06"); assert "판" in wr[0][0] and wr[-1][0].startswith("수면 입력")
+        sx = {"pb": {}, "days": {}}
+        for i in range(14):
+            d_i = (date(2026, 8, 1) + timedelta(days=i)).isoformat()
+            hi_ = i % 2 == 0
+            sx["days"][d_i] = dict(blank_day(), first={k: (900 + (60 if hi_ else -60) + i) for k in PROBE}, cond={"sleep": 8 if hi_ else 5, "caf": 0, "feel": 5})
+        bump_ver(); a_, b_, n1_, n2_ = sleep_effect(sx); assert n1_ >= 5 and n2_ >= 5 and a_ is not None and a_ > b_, (a_, b_, n1_, n2_)
+        # v3 UI 순수 함수: 순서창 높이·스크롤·간단히·시나리오 상세
+        assert seq_window_height(900, 700) == 525 and seq_window_height(300, 700) == 300
+        assert scroll_to_show(100, 20, 1000, 300, 0.0) == 0.0 and scroll_to_show(500, 20, 1000, 300, 0.0) == 0.46 and scroll_to_show(990, 20, 1000, 300, 0.0) == 0.7
+        assert scroll_to_show(100, 20, 200, 300, 0.3) == 0.0
+        vr = visible_rows([True]*10 + [False]*17, 10, set(), True); assert vr[0] == list(range(8, 15)) and vr[1] == 8 and vr[2] == 12, vr
+        assert visible_rows([True]*3 + [False]*2, 3, set(), False) == ([0, 1, 2, 3, 4], 0, 0)
+        assert visible_rows([True]*5, None, set(), True) == ([3, 4], 3, 0)
+        sh = scen_history(hx, "pasu", "2026-09-03"); assert [h["date"] for h in sh] == [SEED_DATE, "2026-09-01"] and sh[1]["first"] == 800
+        ssm = scen_summary(hx, "pasu", "2026-09-03"); assert ssm["pb"] == 850 and ssm["pb_date"] == "2026-09-01" and ssm["trend"] is None and "PB 850" in fmt_scen_summary(ssm)
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK")
         sys.exit(0)
     main()
