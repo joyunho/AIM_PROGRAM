@@ -6,7 +6,7 @@ name: Build AimDesk.exe
 #     https://github.com/joyunho/AIM_PROGRAM/releases/latest/download/AimDesk.exe
 on:
   push:
-    branches: [main]
+    branches: ["**"]                   # 모든 브랜치에서 테스트·빌드 (릴리스 갱신은 main 만)
   workflow_dispatch:
 
 permissions:
@@ -23,11 +23,12 @@ jobs:
         run: python3 aim_desk.py --selftest
       - name: GUI smoke test (Xvfb)
         run: |
-          AIMDESK_DATA_DIR=/tmp/aimdesk_smoke xvfb-run -a -s "-screen 0 1700x1000x24" python3 smoke_test.py
-          AIMDESK_DATA_DIR=/tmp/aimdesk_smoke15 AIMDESK_SCALE=1.5 xvfb-run -a -s "-screen 0 2400x1400x24" python3 smoke_test.py
+          AIMDESK_DATA_DIR=/tmp/aimdesk_smoke xvfb-run -a -s "-screen 0 1700x1000x24" python3 -u smoke_test.py
+          AIMDESK_DATA_DIR=/tmp/aimdesk_smoke15 AIMDESK_SCALE=1.5 xvfb-run -a -s "-screen 0 2400x1400x24" python3 -u smoke_test.py
 
   build:
     runs-on: windows-latest
+    needs: smoke                       # GUI 스모크가 빨간데 exe 를 올리지 않게
     steps:
       - uses: actions/checkout@v4
 

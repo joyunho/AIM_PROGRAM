@@ -57,6 +57,12 @@ def btn(top, label):
 def texts(top): return [w.cget("text") for w in walk(top) if isinstance(w, tk.Label)]
 def scan():
     ad._SCAN_STATE["sig"] = None; D["scan_once"](); pump(150)
+def wait_fired(n, ms=6000):
+    """fired 가 n개가 될 때까지 (자동 전송 타이머 1초 + 여유)"""
+    end = time.time() + ms / 1000
+    while time.time() < end and len(fired) < n:
+        root.update(); time.sleep(0.03)
+    scan()
 
 ad.main()
 D = ad._DBG; root = D["root"]; data = D["data"]
@@ -96,20 +102,20 @@ root.geometry("1000x760"); pump(200)
 b.cmd(); pump(150)
 check("key mode: no deeplink at start", fired == [], str(fired))
 top = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)][0]
-check("start instruction names local playlist + key", any("로컬 재생 목록" in t and "AIMDESK Day" in t and "F10" in t for t in texts(top)), str([t for t in texts(top) if "재생 목록" in t])[:200])
-check("key line: read from KovaaK's ini", any(t.startswith("코박스 설정에서 읽음") and "F10" in t for t in texts(top)))
+al_ = D["seq_win"]["auto_lbl"]; check("start instruction (auto_lbl, gold) names local playlist + key", "로컬 재생 목록" in al_.cget("text") and "AIMDESK Day" in al_.cget("text") and "F10" in al_.cget("text") and al_.cget("fg") == ad.C["gold"], al_.cget("text")[:160])
+check("key line: read from KovaaK's ini", D["seq_win"]["key_lbl"].cget("text").startswith("코박스 설정에서 읽음") and "F10" in D["seq_win"]["key_lbl"].cget("text"))
 kent = next(w for w in walk(top) if isinstance(w, tk.Entry))
 kent.insert(0, "f5"); D["seq_win"]["commit_key"](); pump(80)
 check("typed 'f5' normalised to F5 and saved", kent.get() == "F5" and data.get("next_key") == "F5", f"{kent.get()} {data.get('next_key')}")
 kl = D["seq_win"]["key_lbl"].cget("text"); check("mismatch warning F5 vs ini F10", kl.startswith("⚠") and "F10" in kl and "F5" in kl, kl)
 kent.delete(0, "end"); D["seq_win"]["commit_key"](); pump(80)
 check("cleared entry → back to ini key", data.get("next_key") is None and D["seq_win"]["key_lbl"].cget("text").startswith("코박스 설정에서 읽음"))
-csv("VT Ground Novice S5", "10.00.00", 3000); scan(); pump(1300); scan()
+csv("VT Ground Novice S5", "10.00.00", 3000); scan(); wait_fired(1)
 check("after CSV#1: NEXT pressed once", fired == ["KEY:F10"], str(fired))
-check("start instruction gone after first play", not any("코박스에서 시작하세요" in t for t in texts(top)))
+check("start instruction gone after first play", "코박스에서 시작하세요" not in D["seq_win"]["auto_lbl"].cget("text"))
 check("status bar counts 1판 ok", "1판" in D["status_lbl"].cget("text") and D["status_dot"].itemcget(1, "fill") == ad.C["ok"], D["status_lbl"].cget("text"))
 tx = texts(top); check("row shows 3000 ▼181", "3000" in tx and "▼181" in tx)
-csv("VT Ground Novice S5", "10.01.00", 3300); scan(); pump(1300); scan()
+csv("VT Ground Novice S5", "10.01.00", 3300); scan(); wait_fired(2)
 check("after CSV#2: NEXT pressed again", fired == ["KEY:F10"] * 2, str(fired))
 check("PB! shown", "PB!" in texts(top))
 check("PB toast rendered with bench context", D["toast"].winfo_ismapped() and any("Reactive" in t or "Gold" in t for t in texts(D["toast"])), str(texts(D["toast"]))[:160])
@@ -125,7 +131,7 @@ check("skip → NEXT pressed immediately", len(fired) == 3)
 check("skipped row labelled 건너뜀", any(r[5].cget("text") == "건너뜀" for r in D["seq_win"]["rows"]))
 pump(6500)
 check("stall → 프리 플레이 warning", any("⚠" in t and "도전 과제" in t for t in texts(top)))
-csv("VT Floating Heads Novice S5", "10.03.00", 600); scan(); pump(1300); scan()
+csv("VT Floating Heads Novice S5", "10.03.00", 600); scan(); wait_fired(4)
 check("CSV → NEXT (4), warning cleared", len(fired) == 4 and not any("⚠" in t for t in texts(top)))
 # 게임 창이 앞에 없을 때: 건너뛰기 → 전송 실패 → 안내, 창을 되찾으면(focus 성공) 다시 시도해서 보냄. 그 사이 토글을 껐다 켜도 재시도가 살아 있어야 한다
 ad.kovaaks_foreground = lambda: False; ad.focus_kovaaks = lambda: False
@@ -134,7 +140,7 @@ check("foreground lost: key not sent, hint asks to click game, pending set", len
 btn(top, "자동 진행").cmd(); btn(top, "자동 진행").cmd(); pump(50)
 check("auto toggle keeps the pending retry", D["auto"]["on"] and D["auto"]["fired"] is None and D["auto"]["pending"] is not None)
 ad.focus_kovaaks = lambda: True
-scan(); pump(1500); scan(); pump(300)
+scan(); wait_fired(5); pump(200)
 check("retry after focus regained → key sent, pending cleared", len(fired) == 5 and fired[-1] == "KEY:F10" and D["auto"]["pending"] is None, str(fired[-2:]))
 ad.kovaaks_foreground = lambda: True
 btn(top, "자동 진행").cmd(); csv("VT 1w4ts Novice S5", "10.05.00", 900); scan(); pump(1300); scan()
@@ -144,7 +150,7 @@ D["seq_win"]["rows"][2][3].event_generate("<Button-1>"); pump(50)
 check("click on '–' un-skips the row", D["seq_win"]["skipped"] == set() and "건너뜀" not in D["seq_win"]["prog"].cget("text"), D["seq_win"]["prog"].cget("text"))
 D["seq_win"]["skipped"].add(2); D["update_sequence"]()          # 아래 검사들은 Frogtagon 이 건너뛴 상태를 전제로 한다
 btn(top, "자동 진행").cmd(); check("auto ON (key) presses nothing", len(fired) == 5)
-btn(top, "딥링크 방식").cmd(); csv("VT Pasu Novice S5", "10.06.00", 700); scan(); pump(1300); scan()
+btn(top, "딥링크 방식").cmd(); csv("VT Pasu Novice S5", "10.06.00", 700); scan(); wait_fired(6)
 check("link mode → deeplink for EddieTS", len(fired) == 6 and fired[-1] == ad.scenario_uri("VT EddieTS Novice S5"), str(fired[-1:]))
 top.geometry("+1180+60"); pump(100)          # 스크린샷에서 본창을 가리지 않게 오른쪽으로
 
@@ -208,17 +214,27 @@ check("window fits screen", root.winfo_width() <= root.winfo_screenwidth())
 btn(top, "딥링크 방식").cmd(); pump(50)
 os.environ["AIMDESK_TODAY"] = "2026-09-05"; scan(); pump(700)
 check("day change → bench day with AIMDESK Bench", D["day_state"]["dt"] == "b" and D["day_state"]["pl"] == "AIMDESK Bench", str(D["day_state"]["dt"]))
+check("day change resets auto engine", D["auto"]["on"] is False and D["auto"]["pending"] is None and D["auto"]["fired_at"] is None)
 bb = btn(root, "▶ 벤치 18개 실행"); check("bench run button exists", bb is not None)
 check("bench rows: 18 in Voltaic order", [r[1] for r in D["routine_rows"]] == [k for s_ in ad.SUBS for k, _ in s_[3]], str([r[1] for r in D["routine_rows"]])[:120])
 check("bench sections 9", len(D["section_labels"]) == 9 and D["section_labels"][0][1].startswith("① 클리킹"), str([s_[1] for s_ in D["section_labels"]])[:120])
 bb.cmd(); pump(250)
 tops = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel) and "AIMDESK Bench" in w.title()]
 check("bench sequence window 18 rows", len(tops) == 1 and len(D["seq_win"]["rows"]) == 18, f"{len(tops)} {len(D['seq_win']['rows'])}")
-check("bench start instruction", bool(tops) and any("로컬 재생 목록" in t and "AIMDESK Bench" in t and "Pasu" in t for t in texts(tops[0])))
+check("bench start instruction", bool(tops) and "로컬 재생 목록" in D["seq_win"]["auto_lbl"].cget("text") and "AIMDESK Bench" in D["seq_win"]["auto_lbl"].cget("text") and "Pasu" in D["seq_win"]["auto_lbl"].cget("text"))
+check("seq rows follow BENCH order", [r[0] for r in D["seq_win"]["rows"]] == [k for k, _ in ad.BENCH])
+pl_json = json.loads((TMP / "FPSAimTrainer" / "Saved" / "SaveGames" / "Playlists" / "AIMDESK Bench.json").read_bytes().decode("utf-16"))
+check("installed AIMDESK Bench.json lists the 18 scenarios in order", [x["scenario_Name"] for x in pl_json["scenarioList"]] == [ad.SCEN[k][0] for k, _ in ad.BENCH])
+# 시작 전에 건너뛰기를 눌러도(스크린샷 상황) 시작 안내는 남고, 그 판의 기록이 들어오면 줄이 되살아난다
+btn(tops[0], "건너뛰기 ▶").cmd(); pump(100)
+check("skip before first play keeps the start instruction", "코박스에서 시작하세요" in D["seq_win"]["auto_lbl"].cget("text") and 0 in D["seq_win"]["skipped"])
 check("bench playlist file installed", (TMP / "FPSAimTrainer" / "Saved" / "SaveGames" / "Playlists" / "AIMDESK Bench.json").exists())
-today = "2026.09.05"; csv("VT Pasu Novice S5", "11.00.00", 700); scan(); pump(1300); scan()
-check("bench: Pasu CSV → NEXT key pressed", fired[-1] == "KEY:F10", str(fired[-2:]))
-prow = next(r for r in D["routine_rows"] if r[1] == "pasu"); check("bench row shows score + next rank gap", "700" in prow[5].cget("text") and "까지" in prow[5].cget("text"), prow[5].cget("text"))
+n0 = len(fired); today = "2026.09.05"; csv("VT Pasu Novice S5", "11.00.00", 700); scan(); wait_fired(n0 + 1)
+check("bench: Pasu CSV → exactly one NEXT press, skipped Pasu row revived", fired[n0:] == ["KEY:F10"] and 0 not in D["seq_win"]["skipped"], f"{fired[n0:]} {D['seq_win']['skipped']}")
+# 두 번째 세션 감지: 자리 없는 판(오늘 Pasu 를 두 번째로 침, 줄은 하나) → 1번부터 다시 세고 그 판을 1번에 배정 + NEXT
+n1 = len(fired); csv("VT Pasu Novice S5", "11.30.00", 720); scan(); wait_fired(n1 + 1)
+check("restart detected: new run starts at row 1 with the new Pasu, NEXT pressed", fired[n1:] == ["KEY:F10"] and D["seq_win"]["base"].get("pasu") == 1 and D["seq_win"]["rows"][0][4].cget("text") == "720", f"{fired[n1:]} base={D['seq_win']['base']} row0={D['seq_win']['rows'][0][4].cget('text')}")
+prow = next(r for r in D["routine_rows"] if r[1] == "pasu"); check("bench row shows today's best + next rank gap", prow[5].cget("text").startswith("720") and "까지" in prow[5].cget("text"), prow[5].cget("text"))
 shot("8_bench_day")
 # ── 닫기: 창 정보 저장 ──
 D["on_close"]()

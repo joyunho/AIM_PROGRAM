@@ -813,11 +813,12 @@ def fmt_seq_summary(played, total, n_pb, rel, probe, idx, est_min, block_txt=Non
     if n_pb: parts.append(f"PB {n_pb} 🏆")
     if rel:
         m = sum(rel) / len(rel) * 100; parts.append(f"{'▲' if m >= 0 else '▼'}{abs(m):.1f}%")
-    pr = f"프로브 {probe[0]}/{probe[1]}"
-    vi, oi = idx
-    if vi is not None: pr += f" 발로 {vi:+.1f}"
-    if oi is not None: pr += f" 옵치 {oi:+.1f}"
-    parts.append(pr)
+    if probe:
+        pr = f"프로브 {probe[0]}/{probe[1]}"
+        vi, oi = idx
+        if vi is not None: pr += f" 발로 {vi:+.1f}"
+        if oi is not None: pr += f" 옵치 {oi:+.1f}"
+        parts.append(pr)
     remaining = total - played
     if remaining > 0:
         parts.append(f"남은 {remaining}판" + (f" ≈ {est_min}분" if est_min is not None else ""))
@@ -1238,14 +1239,20 @@ def launch_scenario(key: str) -> bool:
 
 # ── 플레이리스트 NEXT 키 자동 입력 (렉 없는 진행 방식) ──
 KOVAAKS_INPUT_INI = Path(os.environ.get("LOCALAPPDATA", "")) / "FPSAimTrainer" / "Saved" / "Config" / "WindowsNoEditor" / "Input.ini"
-_NEXT_RE = re.compile(r'^\s*([+-]?)ActionMappings=\(ActionName="PlaylistNext"[^)]*?Key=(\w+)', re.M)
+_NEXT_RE = re.compile(r'^\s*([+-]?)ActionMappings=\(ActionName="PlaylistNext"([^)]*)\)', re.M)
+_KEY_RE = re.compile(r'Key=(\w+)'); _MOD_RE = re.compile(r'b(Shift|Ctrl|Alt|Cmd)=True')
 
 def parse_next_key(txt: str):
     """Input.ini 본문 → (PlaylistNext 키, 이유). 언리얼 Saved/Config 의 Input.ini 는 '-줄'로 기본값을 지우고 '+줄'로 새 키를 넣는다 —
     그래서 '-줄'은 무시하고 '+줄'(또는 부호 없는 줄) 중 마지막 것을 쓴다. 이유: None(찾음) · 'removed'(지워졌거나 None) · 'none'(항목 없음)"""
-    ents = [(m.group(1), m.group(2)) for m in _NEXT_RE.finditer(txt or "")]
-    adds = [k for sign, k in ents if sign != "-" and k != "None"]
-    if adds: return adds[-1], None
+    ents = []
+    for m in _NEXT_RE.finditer(txt or ""):
+        km = _KEY_RE.search(m.group(2))
+        ents.append((m.group(1), km.group(1) if km else "None", bool(_MOD_RE.search(m.group(2)))))
+    adds = [(k, mod) for sign, k, mod in ents if sign != "-" and k != "None"]
+    if adds:
+        k, mod = adds[-1]
+        return (None, "chord") if mod else (k, None)
     return None, ("removed" if ents else "none")
 
 _INI_CACHE = {"sig": None, "key": None, "why": "nofile"}
@@ -1309,7 +1316,8 @@ _KEY_ALIAS = {"space": "SpaceBar", "spacebar": "SpaceBar", "스페이스": "Spac
               "num.": "Decimal", "numpad.": "Decimal", "num/": "Divide", "numpad/": "Divide",
               "-": "Hyphen", "minus": "Hyphen", "=": "Equals", ",": "Comma", ".": "Period", "/": "Slash",
               "`": "Tilde", "~": "Tilde", ";": "Semicolon", "[": "LeftBracket", "]": "RightBracket", "\\": "Backslash", "'": "Apostrophe",
-              "numpadenter": "Enter", "numenter": "Enter", "kpenter": "Enter",
+              "numpadenter": "Enter", "numenter": "Enter", "kpenter": "Enter", "pagedn": "PageDown", "pgdown": "PageDown", "pageup": "PageUp",
+              "numpadadd": "Add", "kp+": "Add", "numpadsubtract": "Subtract", "kp-": "Subtract", "numpadmultiply": "Multiply", "numpaddivide": "Divide", "numpaddecimal": "Decimal",
               "lmb": "LeftMouseButton", "mouse1": "LeftMouseButton", "rmb": "RightMouseButton", "mouse2": "RightMouseButton",
               "mmb": "MiddleMouseButton", "mouse3": "MiddleMouseButton", "mouse4": "ThumbMouseButton", "mouse5": "ThumbMouseButton2",
               "마우스4": "ThumbMouseButton", "마우스5": "ThumbMouseButton2"}
@@ -1317,7 +1325,7 @@ _KEY_ALIAS = {"space": "SpaceBar", "spacebar": "SpaceBar", "스페이스": "Spac
 def norm_key(text):
     """사용자가 적은 키 이름 → 언리얼 키 이름 (f5→F5, num+→Add, numpad 5→NumPadFive, space→SpaceBar). 모르면 None"""
     if not text: return None
-    t = re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(text))); low = t.lower()    # 전각 'ｆ５' 도 F5
+    t = re.sub(r"[\s\u200b-\u200d\ufeff]+", "", unicodedata.normalize("NFKC", str(text))); low = t.lower()    # 전각 'ｆ５' 도 F5
     if not t: return None
     if low in _KEY_ALIAS: return _KEY_ALIAS[low]
     for n in list(_VK) + list(_MOUSE):
@@ -1325,7 +1333,7 @@ def norm_key(text):
     m = re.fullmatch(r"f([1-9]|1[0-2])", low)                                              # 언리얼은 F1~F12 까지
     if m: return "F" + m.group(1)
     if len(t) == 1 and t.isascii() and t.isalpha(): return t.upper()
-    if len(t) == 1 and t.isdigit(): return _DIGITS[int(t)]
+    if len(t) == 1 and t.isascii() and t.isdigit(): return _DIGITS[int(t)]
     for d in _DIGITS:
         if low == d.lower(): return d
     m = re.fullmatch(r"(?:numpad|num|np|kp|keypad|넘패드|숫자패드|키패드)_?([0-9]|zero|one|two|three|four|five|six|seven|eight|nine)", low)
@@ -1356,10 +1364,12 @@ def key_line(st: dict):
     """순서창 NEXT 키 안내 한 줄 → (문구, 팔레트 키)"""
     mouse_note = " · 마우스 버튼은 커서 아래 것을 누를 수 있어 키보드 키를 권장" if (st["key"] in _MOUSE) else ""
     if st["src"] == "override":
-        if st["unknown"]: return (f"'{st['unknown']}' 는 모르는 키 이름 — F5, Add(넘패드 +), NumPad5, Space 처럼 적어 주세요", "val")
+        if st["unknown"]:
+            return (f"'{st['unknown']}' 는 모르는 키 이름 — F5, Add(넘패드 +), NumPad5, Space 처럼 적어 주세요"
+                    + (f" (칸을 비우면 코박스 설정의 {key_label(st['ini'])} 를 씁니다)" if st["ini"] and can_send(st["ini"]) else ""), "val")
         if st["mismatch"]:
             return (f"⚠ 코박스 설정의 PlaylistNext 는 {key_label(st['mismatch'][1])} 인데 앱은 {key_label(st['key'])} 를 누릅니다 — "
-                    f"코박스 설정 → 키 설정에서 {st['key']} 로 바꾸거나 이 칸을 비우세요", "val")
+                    f"코박스 설정 → 키 설정에서 {st['key']} 로 바꾸" + ("거나 이 칸을 비우세요" if can_send(st["mismatch"][1]) else "세요"), "val")
         if st["ini"]: return (f"직접 지정 {key_label(st['key'])} ✓ 코박스 설정과 일치{mouse_note}", "ok")
         return (f"직접 지정 {key_label(st['key'])} ✓ — 코박스 설정 → 키 설정 → PlaylistNext 도 {st['key']} 여야 합니다{mouse_note}", "ok")
     if st["src"] == "ini":
@@ -1370,6 +1380,8 @@ def key_line(st: dict):
         return ("코박스 설정 파일(Input.ini)을 못 찾았습니다 — 코박스 설정 → 키 설정 → PlaylistNext 에 지정한 키를 위 칸에 적어 주세요 (예: F10)", "val")
     if why == "removed":
         return ("코박스 설정에서 PlaylistNext 키가 해제되어 있습니다 — 코박스 설정 → 키 설정 → PlaylistNext 에 F10 같은 키를 지정하세요 (앱이 자동으로 읽습니다)", "val")
+    if why == "chord":
+        return ("코박스 설정의 PlaylistNext 가 조합키(Ctrl/Shift/Alt + 키)입니다 — 앱은 조합키를 못 보내니 F10 같은 단일 키로 바꿔 주세요", "val")
     return ("코박스 설정 파일에 PlaylistNext 가 없습니다 (한 번도 안 바꿨을 수 있음) — 코박스 설정 → 키 설정 → PlaylistNext 에 F10 을 지정하면 앱이 자동으로 읽습니다. "
             "이미 지정돼 있다면 그 키를 위 칸에 적어 주세요", "val")
 
@@ -1845,7 +1857,8 @@ def main():
     seq_win = {"win": None, "rows": [], "prog": None, "auto_lbl": None, "auto_btn": None, "sum": None,
                "seq": [], "base": {}, "skipped": set()}      # skipped: 건너뛴 줄 번호
     auto = {"on": False, "fired": None, "due": None,      # fired/due: 넘겼거나 넘기기로 예약된 순서창 인덱스
-            "fired_at": None, "fired_running": True, "warned": False, "pending": None,   # pending: 전송에 실패해 다시 시도할 순서창 인덱스
+            "fired_at": None, "fired_running": True, "warned": False, "pending": None,   # pending: 전송 실패 → 다시 시도 (key 방식 True, link 방식 인덱스)
+            "seen": None, "start_played": 0,               # key 방식: seen = NEXT 를 눌러 준 판 수, start_played = 자동 진행을 시작할 때 이미 있던 판 수
             "mode": data.get("auto_mode", "key")}         # "key" = 코박스 플레이리스트 + NEXT 키 자동 입력, "link" = 딥링크
     def key_st(): return key_status(data.get("next_key"), playlist_next_key(), ini_why())
     if data.get("next_key") and playlist_next_key() and norm_key(data["next_key"]) == norm_key(playlist_next_key()):
@@ -1887,7 +1900,12 @@ def main():
             else:
                 done.append(False); scores.append(None)
                 if nxt is None: nxt = i
+        seq_win["used"] = used
         return done, nxt, scores
+
+    def played_count():
+        done, _, scores = seq_status()
+        return sum(1 for i in range(len(done)) if done[i] and scores[i] is not None)
 
     def seq_alive():
         w = seq_win["win"]
@@ -1898,17 +1916,22 @@ def main():
         if not seq: return
         if seq_alive(): remember_seq_pos(); seq_win["win"].destroy()
         w = tk.Toplevel(root)
-        seq_win.update(win=w, rows=[], seq=seq, base={}, skipped=set())
+        seq_win.update(win=w, rows=[], seq=seq, base={}, skipped=set(), used={})
+        auto.update(pending=None, fired_at=None, due=None)
+        auto.update(seen=played_count(), start_played=auto["seen"])
         title = plname or "AIMDESK Bench"; seq_win["title"] = title
         w.title("오늘 순서 — " + title); w.configure(bg=C["bg"])
         w.attributes("-topmost", bool(data.get("seq_topmost", True))); w.resizable(False, False)
-        w.protocol("WM_DELETE_WINDOW", lambda: (stop_auto(), remember_seq_pos(), w.destroy()))
+        def close_seq():
+            if seq_win.get("commit_key"): seq_win["commit_key"]()     # 칸에 적다 만 키도 저장
+            stop_auto(); remember_seq_pos(); w.destroy()
+        w.protocol("WM_DELETE_WINDOW", close_seq)
         hd = tk.Frame(w, bg=C["bg"]); hd.pack(fill="x", padx=12, pady=(10, 2))
         tk.Label(hd, text=title, font=FB, bg=C["bg"], fg=C["txt"]).pack(side="left")
         seq_win["prog"] = tk.Label(hd, text="", font=FNS, bg=C["bg"], fg=C["sub"])
         seq_win["prog"].pack(side="right")
         seq_win["auto_lbl"] = tk.Label(w, text="", font=FS, bg=C["bg"], fg=C["hint"],
-                                       wraplength=px(340), justify="left")
+                                       wraplength=px(470), justify="left")
         seq_win["auto_lbl"].pack(anchor="w", padx=12)
         bottom = tk.Frame(w, bg=C["bg"]); bottom.pack(side="bottom", fill="x")       # 조작부: 창을 줄여도 안 잘리게 먼저 자리를 잡는다
         box = tk.Frame(w, bg=C["card"], padx=10, pady=8,
@@ -1933,7 +1956,7 @@ def main():
             dl = tk.Label(row, text="", font=FNS, width=8, anchor="e", bg=C["card"], fg=C["dim"])
             dl.pack(side="right")
             seq_win["rows"].append((k, num, nm, st, sc, dl))
-        seq_win["sum"] = tk.Label(bottom, text="", font=FS, bg=C["bg"], fg=C["sub"], wraplength=px(340), justify="left")
+        seq_win["sum"] = tk.Label(bottom, text="", font=FS, bg=C["bg"], fg=C["sub"], wraplength=px(470), justify="left")
         seq_win["sum"].pack(anchor="w", padx=12, pady=(0, 6))
         # 조작 줄: 자동 진행 토글 · 건너뛰기 · 다시 보내기 · 처음부터 · 판 사이 대기
         ctl = tk.Frame(bottom, bg=C["bg"]); ctl.pack(fill="x", padx=12, pady=(0, 6))
@@ -1942,7 +1965,7 @@ def main():
         seq_win["skip_btn"] = RBtn(ctl, "건너뛰기 ▶", skip_current, padx=10, pady=5); seq_win["skip_btn"].pack(side="left", padx=(6, 0))
         seq_win["resend_btn"] = RBtn(ctl, "다시 보내기", resend_current, padx=10, pady=5); seq_win["resend_btn"].pack(side="left", padx=(6, 0))
         RBtn(ctl, "처음부터", restart_sequence, padx=10, pady=5).pack(side="left", padx=(6, 0))
-        seq_win["hint"] = tk.Label(bottom, text="", font=FS, bg=C["bg"], fg=C["hint"], wraplength=px(340), justify="left")
+        seq_win["hint"] = tk.Label(bottom, text="", font=FS, bg=C["bg"], fg=C["hint"], wraplength=px(470), justify="left")
         seq_win["hint"].pack(anchor="w", padx=12, pady=(0, 4))
         dl = tk.Frame(bottom, bg=C["bg"]); dl.pack(fill="x", padx=12, pady=(0, 4))
         tk.Label(dl, text="판 끝난 뒤 대기(초)", font=FS, bg=C["bg"], fg=C["sub"]).pack(side="left")
@@ -1962,7 +1985,7 @@ def main():
             data["next_key"] = new; save_data(data)
             set_hint(""); update_sequence()
         key_ent.bind("<Return>", commit_key); key_ent.bind("<FocusOut>", commit_key); seq_win["commit_key"] = commit_key
-        seq_win["key_lbl"] = tk.Label(bottom, text="", font=FS, bg=C["bg"], fg=C["hint"], wraplength=px(340), justify="left")
+        seq_win["key_lbl"] = tk.Label(bottom, text="", font=FS, bg=C["bg"], fg=C["hint"], wraplength=px(470), justify="left")
         seq_win["key_lbl"].pack(anchor="w", padx=12, pady=(0, 4))
         opt = tk.Frame(bottom, bg=C["bg"]); opt.pack(fill="x", padx=12, pady=(0, 4))
         Toggle(opt, "항상 위", lambda: bool(data.get("seq_topmost", True)), set_topmost).pack(side="left")
@@ -1976,7 +1999,7 @@ def main():
             if act == "auto": seq_win["auto_btn"].flip()
             elif act == "skip": skip_current()
             elif act == "resend": resend_current()
-            elif act == "close": stop_auto(); remember_seq_pos(); w.destroy()
+            elif act == "close": close_seq()
             elif act == "blur": w.focus_set()                      # 칸에서 Esc = 칸 나가기(저장). 창은 그대로
             return "break"
         w.bind("<Key>", on_seq_key)
@@ -2060,7 +2083,7 @@ def main():
         else:
             remaining = sum(1 for i in range(total) if not done[i]); cp = cur_plays()
             est = remaining_estimate(cp, remaining) if (len(cp) >= 2 or remaining <= 15) else None
-            summ = fmt_seq_summary(played, total - (done_n - played), n_pb, rel, probe_status(data["days"].get(dkey, blank_day())),
+            summ = fmt_seq_summary(played, total - (done_n - played), n_pb, rel, probe_status(data["days"].get(dkey, blank_day())) if day_state["dt"] in ("v", "w") else None,
                                    (HDR_STATE["vi"], HDR_STATE["oi"]), est, block_txt)
             if done_n - played: summ += f" · 건너뜀 {done_n - played}"
             if nxt is None:
@@ -2070,31 +2093,35 @@ def main():
         col = C["ok"] if (auto["on"] and nxt is not None) else C["dim"]
         kst = key_st()
         mode_txt = "딥링크" if auto["mode"] == "link" else f"NEXT 키 {kst['key'] or '미지정'}" + (" ⚠" if (kst["mismatch"] or kst["unknown"]) else "")
-        fresh = auto["mode"] == "key" and played == 0                     # 이 순서에서 아직 한 판도 안 들어옴
+        fresh = auto["mode"] == "key" and played == auto["start_played"]   # 자동 진행을 켠 뒤 아직 한 판도 안 들어옴 (건너뛰기·다시 보내기를 눌렀어도 마찬가지)
         if nxt is None:
             msg = "오늘 순서 전부 완료 🎉  ·  한 번 더 돌리려면 '처음부터'"
         elif auto["on"] and fresh:
             # 코박스에서 플레이리스트를 아직 안 켰을 가능성이 크다 → 할 일을 크게. 첫 판이 들어오면 자동 진행 상태로 바뀐다
+            key_ok = bool(kst["key"]) and can_send(kst["key"])
             msg = (f"코박스에서 시작하세요: ESC → 샌드박스 브라우저 → '로컬 재생 목록' 탭 → {seq_win['title']} ▶ 플레이 (상단 토글 '도전 과제'). "
-                   f"첫 판 {sname(seq_win['seq'][0])} 이 끝나면 앱이 {kst['key'] or 'NEXT'} 키로 이어갑니다")
-            col = C["gold"]
+                   + (f"첫 판({sname(seq_win['seq'][0])})이 끝나면 앱이 {kst['key']} 키로 이어갑니다" if key_ok
+                      else "⚠ 아래 NEXT 키를 먼저 설정하세요 — 없으면 판이 끝나도 앱이 다음 판으로 넘기지 못합니다"))
+            if played > 0 and nxt > 0:
+                msg += f" · 오늘 이미 {played}판: 이어서 치는 중이면 다음은 {sname(seq_win['seq'][nxt])}, 플레이리스트를 새로 시작하면 자동으로 1번부터 다시 셉니다"
+            col = C["gold"] if key_ok else C["val"]
         elif auto["on"] and auto["fired"] == nxt and auto["fired_at"] is not None:
             nm_ = sname(seq_win["seq"][nxt]); el = int(time.monotonic() - auto["fired_at"])
             if el > (STALL_SEC if auto["fired_running"] else STALL_SEC_LAUNCH):
-                # 60초 시나리오가 끝났어야 할 시간인데 CSV가 없다 = 프리플레이(타이머 없음)로 열렸을 가능성
+                # 60초 시나리오가 끝났어야 할 시간인데 CSV가 없다 = 무료 플레이(FREEPLAY, 타이머 없음)로 열렸을 가능성
                 msg = (f"⚠ {nm_} 시작 후 {el}초 — 기록이 없습니다. "
                        + (f"① 코박스에 새 판이 안 떴으면: NEXT 키 {kst['key'] or '미지정'} 가 코박스 설정의 PlaylistNext({kst['ini'] or '없음'})와 같은지, 플레이리스트가 돌고 있는지 확인 · "
                           if auto["mode"] == "key" else "")
-                       + "② 타이머가 안 보이면 프리 플레이: ESC → 상단 '플레이' 왼쪽 토글을 '도전 과제'(CHALLENGE)로 바꾸고 플레이리스트를 다시 시작 · ③ 쉬는 중이면 무시")
+                       + "② 타이머가 안 보이면 무료 플레이(FREEPLAY) 상태: ESC → 상단 '플레이' 왼쪽 토글을 '도전 과제'(CHALLENGE)로 바꾸고 플레이리스트를 다시 시작 · ③ 쉬는 중이면 무시")
                 col = C["val"]
                 if not auto["warned"]:
                     auto["warned"] = True
-                    show_toast("⚠ 기록이 안 들어옵니다 — 코박스 ESC → 상단 '플레이' 왼쪽 토글을 '도전 과제'(CHALLENGE)로", "warn")
+                    show_toast("⚠ 기록이 안 들어옵니다 — NEXT 키가 코박스 설정과 같은지, 상단 토글이 '도전 과제'인지 확인하세요", "warn")
             else:
                 msg = f"자동 진행 중 ({mode_txt}) · {nm_} 시작 후 {el}초 · 끝나면 {auto_delay()}초 뒤 다음 판"
         elif auto["on"] and auto["fired"] == nxt:
             msg = f"자동 진행 중 ({mode_txt}) · {sname(seq_win['seq'][nxt])} 차례 · 판이 끝나면 {auto_delay()}초 뒤 다음 판"
-        elif auto["on"] and auto["pending"] == nxt:
+        elif auto["on"] and auto["pending"]:
             msg = f"{sname(seq_win['seq'][nxt])} 넘기는 중… (키 전송 실패 — 코박스 창을 앞으로 두면 잠시 뒤 다시 보냅니다)"; col = C["gold"]
         elif auto["on"]:
             msg = f"{sname(seq_win['seq'][nxt])} 넘기는 중…"
@@ -2144,8 +2171,10 @@ def main():
         else:
             auto["fired_running"] = True
             ok = press_next()
-        if ok: auto.update(fired=idx, due=None, fired_at=time.monotonic(), warned=False, pending=None)
-        else: auto.update(due=None, fired=None, pending=idx)        # 다음 틱에 auto_step 이 다시 예약한다
+        if ok:
+            auto.update(fired=idx, due=None, fired_at=time.monotonic(), warned=False, pending=None)
+            if auto["mode"] == "key": auto["seen"] = played_count()   # 지금까지 들어온 판은 처리한 것으로 (예약된 자동 전송과 겹치지 않게)
+        else: auto.update(due=None, fired=None, pending=(True if auto["mode"] == "key" else idx))   # 다음 틱에 auto_step 이 다시 예약한다
         update_sequence()
         return ok
 
@@ -2158,16 +2187,45 @@ def main():
             stop_auto("코박스가 꺼져 있어 자동 진행을 멈췄습니다"); return
         advance(idx)
 
+    def detect_restart():
+        """key 방식: 순서에 자리가 없는 판이 들어오면(같은 시나리오를 남은 줄 수보다 많이 침) 코박스 플레이리스트를 새로 시작한 것으로 보고 1번부터 다시 센다"""
+        by = today_plays_by_key(); seq = seq_win["seq"]; base = seq_win["base"]
+        if not any(len(by.get(k, [])) - base.get(k, 0) > seq.count(k) for k in set(seq)): return False
+        restart_sequence(detected=True)
+        show_toast("코박스 플레이리스트를 새로 시작한 것으로 보여 순서를 1번부터 다시 셉니다 (친 판은 그대로 기록)")
+        return True
+
     def auto_step():
-        """스캔 후 호출: 다음 칠 판으로 아직 안 넘겼으면 대기 시간 뒤 넘기기를 예약 (실패했으면 다음 틱에 다시 예약)"""
+        """스캔 후 호출. key 방식: 새 판(CSV)이 들어왔으면 대기 시간 뒤 NEXT 키 — 포인터가 아니라 '판이 끝났다'는 사실이 기준 (실패했으면 다시 시도).
+        link 방식: 다음 차례로 아직 안 넘겼으면 딥링크 예약"""
         if not auto["on"]: return
         if not seq_alive(): auto["on"] = False; return
-        _, nxt, _ = seq_status()
+        if auto["mode"] == "key": detect_restart()
+        done, nxt, scores = seq_status()
         if nxt is None:
             stop_auto("오늘 순서 전부 완료 🎉 수고했어요"); return
-        if auto["fired"] == nxt or auto["due"] == nxt: return
-        auto["due"] = nxt
-        root.after(auto_delay() * 1000, lambda: fire_due(nxt))
+        if auto["mode"] == "link":
+            if auto["fired"] == nxt or auto["due"] == nxt: return
+            auto["due"] = nxt
+            root.after(auto_delay() * 1000, lambda: fire_due(nxt)); return
+        played = sum(1 for i in range(len(done)) if done[i] and scores[i] is not None)
+        if auto["seen"] is None: auto["seen"] = played
+        if auto["due"] is not None: return
+        if played > auto["seen"] or auto["pending"]:
+            auto["due"] = played
+            root.after(auto_delay() * 1000, lambda: fire_key(played))
+
+    def fire_key(p):
+        """key 방식: 판이 끝났으니(CSV) 결과창에서 NEXT 키. 그 사이 수동으로 넘겼으면(seen 이 이미 p) 안 누른다"""
+        auto["due"] = None
+        if not auto["on"] or not seq_alive(): return
+        if not kovaaks_running(): stop_auto("코박스가 꺼져 있어 자동 진행을 멈췄습니다"); return
+        if p <= (auto["seen"] or 0) and not auto["pending"]: return
+        _, nxt, _ = seq_status()
+        if nxt is None: stop_auto("오늘 순서 전부 완료 🎉 수고했어요"); return
+        if press_next(): auto.update(seen=max(p, auto["seen"] or 0), fired=nxt, fired_at=time.monotonic(), warned=False, pending=None)
+        else: auto.update(fired=None, pending=True)
+        update_sequence()
 
     def stop_auto(msg=None):
         auto["on"] = False; auto["due"] = None
@@ -2180,15 +2238,17 @@ def main():
             _, nxt, _ = seq_status()
             if auto["mode"] == "link":
                 if nxt is not None and auto["fired"] != nxt: advance(nxt)     # 켜는 즉시 현재 차례를 보낸다
-            else:                                                             # 지금 치고 있는 판이 현재 차례라고 본다 — 단, 전송에 실패해 기다리는 판이면 다시 시도하게 둔다
-                auto.update(fired=(None if auto["pending"] == nxt else nxt), due=None, fired_at=None)
+            elif auto["pending"]: auto.update(fired=None, due=None)          # 전송에 실패해 기다리는 판이면 다시 시도하게 둔다
+            else: auto.update(fired=nxt, due=None, fired_at=None, seen=played_count())   # 지금 치고 있는 판이 현재 차례라고 본다
         update_sequence()
 
     def set_mode_link(v):
         auto["mode"] = "link" if v else "key"
         data["auto_mode"] = auto["mode"]; save_data(data)
         if auto["on"] and auto["mode"] == "key":
-            _, nxt, _ = seq_status(); auto.update(fired=(None if auto["pending"] == nxt else nxt), due=None, fired_at=None)
+            _, nxt, _ = seq_status()
+            if auto["pending"]: auto.update(fired=None, due=None, pending=True)
+            else: auto.update(fired=nxt, due=None, fired_at=None, seen=played_count())
         update_sequence()
 
     def set_topmost(v):
@@ -2217,12 +2277,18 @@ def main():
         _, nxt, _ = seq_status()
         if nxt is not None: advance(nxt)
 
-    def restart_sequence():
-        """지금까지 친 판은 그대로 두고 순서를 1번부터 다시 (오늘 두 번째 세션용)"""
-        seq_win["base"] = {k: len(v) for k, v in today_plays_by_key().items()}; seq_win["skipped"] = set()
-        auto.update(fired=None, due=None, fired_at=None, pending=None)
+    def restart_sequence(detected=False):
+        """지금까지 친 판은 그대로 두고 순서를 1번부터 다시 (오늘 두 번째 세션용).
+        detected=True 는 자동 감지(자리 없는 판이 들어옴): 이전 순서가 쓴 판까지만 제외하고, 방금 들어온 판은 새 순서의 1번부터 배정"""
+        if detected:
+            seq_status(); used = seq_win.get("used", {}); base = seq_win["base"]
+            seq_win["base"] = {k: base.get(k, 0) + used.get(k, 0) for k in set(base) | set(used)}
+        else:
+            seq_win["base"] = {k: len(v) for k, v in today_plays_by_key().items()}
+        seq_win["skipped"] = set()
+        auto.update(fired=None, due=None, fired_at=None, pending=None, seen=0, start_played=0, warned=False)
         if auto["on"] and auto["mode"] == "link": advance(0)
-        elif auto["on"]:
+        elif auto["on"] and not detected:
             auto["fired"] = 0
             set_hint("코박스에서 플레이리스트를 처음부터 다시 시작하세요 — 판이 끝나면 앱이 NEXT 키로 넘깁니다", C["gold"])
         update_sequence()
@@ -2244,7 +2310,8 @@ def main():
         if not kovaaks_running():
             launch_kovaaks()                            # 게임만 켠다 (딥링크 없음)
         if nxt is None: restart_sequence()
-        auto.update(on=True, fired=(0 if nxt is None else nxt), due=None, fired_at=None, warned=False, pending=None)
+        auto.update(on=True, fired=(0 if nxt is None else nxt), due=None, fired_at=None, warned=False, pending=None,
+                    seen=played_count(), start_played=played_count())
         st = key_st(); key = st["key"]
         target = plname or "AIMDESK Bench"
         if key and not st["mismatch"]:
@@ -2379,9 +2446,6 @@ def main():
                 RBtn(lh, "프로브만", lambda: run_playlist("AIMDESK Probe"),
                      padx=12, pady=8).pack(side="right", padx=(8, 0))
             RBtn(lh, "순서 보기", lambda: open_sequence(pl), padx=12, pady=8).pack(side="right")
-            if dt == "b":
-                RBtn(lh, "볼테익 페이지", lambda: open_uri("https://app.voltaic.gg/benchmarks"),
-                     padx=12, pady=8).pack(side="right", padx=(0, 8))
 
         if dt in ("v", "w"):
             add_section("① 워밍업 · 트래킹 → 정확 → 속도 (점수 무시)")
@@ -2526,6 +2590,8 @@ def main():
     ben_src.pack(side="right")
     RBtn(ben_head, "내 볼테익 프로필", lambda: open_uri("https://app.voltaic.gg/j0y0nho"),
          padx=12, pady=5).pack(side="right", padx=(0, 12))
+    RBtn(ben_head, "볼테익 벤치 페이지", lambda: open_uri("https://app.voltaic.gg/benchmarks"),
+         padx=12, pady=5).pack(side="right", padx=(0, 8))
 
     advice_lbl = tk.Label(bbody, text="", font=FS, bg=C["bg"], fg=C["hint"], wraplength=px(900), justify="left", anchor="w")
     advice_lbl.pack(fill="x", pady=(0, 10))
@@ -2795,7 +2861,8 @@ def main():
                     txt, col = f"{val} {'▲' if d_ >= 0 else '▼'}{abs(d_):.0f}", (C["ok"] if d_ >= 0 else C["val"])
                 else: txt, col = f"{val}", C["txt"]
                 if kind == "bench" and th_of(key):                                       # 벤치 데이: ▲▼ 대신 다음 등급까지 (순서창이 ▲▼를 보여 준다)
-                    g_, gcol = fmt_gap(val, th_of(key)); txt, col = f"{val} · {g_}", (C["gold"] if "PB!" in txt else gcol)
+                    g_, gcol = fmt_gap(val, th_of(key)); is_pb = pmax is not None and val > pmax
+                    txt, col = f"{val}{' PB!' if is_pb else ''} · {g_}", (C["gold"] if is_pb else gcol)
                 cfg(sl, text=txt, fg=col)
         if unmapped and not day_state.get("redraw_pending"):
             day_state["redraw_pending"] = True
@@ -2923,7 +2990,7 @@ def main():
         """자정 통과: 데이터 키·스캔 캐시·날짜 UI·입력칸을 모두 오늘로 (켜 둔 채 밤을 넘겨도 어제 루틴이 남지 않게)"""
         today_key[0] = nk
         _SCORE_CACHE.clear(); _MISS_SEEN.clear(); TODAY_PLAYS.clear()
-        auto.update(on=False, fired=None, due=None)
+        auto.update(on=False, fired=None, due=None, fired_at=None, pending=None, warned=False, seen=None, start_played=0)
         HDR_STATE.update(vi=None, oi=None)
         COACH_STATE.update(brief=[], validity=None, fat_sig=None, fat_len=0)
         routine_next[0] = None
@@ -3082,6 +3149,12 @@ if __name__ == "__main__":
         assert parse_next_key('+ActionMappings=(ActionName="PlaylistNext",Key=None)') == (None, "removed")
         assert parse_next_key('+ActionMappings=(ActionName="Restart",Key=R)') == (None, "none") and parse_next_key("") == (None, "none")
         assert parse_next_key('+ActionMappings=(ActionName="PlaylistNext",Key=ThumbMouseButton)') == ("ThumbMouseButton", None)
+        assert parse_next_key('+ActionMappings=(ActionName="PlaylistNext",bShift=False,bCtrl=True,bAlt=False,bCmd=False,Key=F5)') == (None, "chord")
+        assert "조합키" in key_line(key_status(None, None, "chord"))[0]
+        assert norm_key("\u0663") is None and norm_key("²") == "Two" and norm_key("pagedn") == "PageDown" and norm_key("numpad add") == "Add" and norm_key("F\u200b5") == "F5"
+        assert "칸을 비우면" in key_line(key_status("xyz", "F10"))[0] and "칸을 비우면" not in key_line(key_status("xyz", "Gamepad_X"))[0]
+        assert key_line(key_status("F5", "Gamepad_X"))[0].endswith("바꾸세요") and key_line(key_status("F5", "Add"))[0].endswith("비우세요")
+        assert "프로브" not in fmt_seq_summary(3, 18, 0, [], None, (None, None), None) and "프로브 2/6" in fmt_seq_summary(3, 27, 0, [], (2, 6), (None, None), None)
         # v3 기반: 판별 기록 병합·세션 시각·memo·색 대비·창 위치·토스트·상태줄
         assert merge_plays([["pasu","10.00.00",500]], [("pasu","10.00.00",505),("dot","12.00.00",-5)]) == [["pasu","10.00.00",505],["dot","12.00.00",-5]]
         t3 = {"pb": {}, "days": {}}
