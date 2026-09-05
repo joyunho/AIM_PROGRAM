@@ -9,6 +9,7 @@ from datetime import date
 
 TMP = Path(os.environ.get("AIMDESK_DATA_DIR") or tempfile.mkdtemp(prefix="aimdesk_smoke_"))
 os.environ["AIMDESK_DATA_DIR"] = str(TMP); os.environ["AIMDESK_NO_MAINLOOP"] = "1"
+os.environ.setdefault("AIMDESK_TODAY", "2026-09-03")          # 목요일(발로 데이)로 고정 — 주말에 돌려도 같은 화면
 STATS = TMP / "FPSAimTrainer" / "stats"; STATS.mkdir(parents=True, exist_ok=True)
 for f in STATS.iterdir(): f.unlink()
 for f in TMP.glob("*.json"): f.unlink()
@@ -32,7 +33,7 @@ from tkinter import messagebox
 messagebox.showwarning = lambda *a, **k: None
 messagebox.askyesno = lambda *a, **k: True
 
-today = date.today().strftime("%Y.%m.%d")
+TODAY = ad.today_date(); today = TODAY.strftime("%Y.%m.%d")
 results = []
 def check(name, cond, extra=""):
     results.append((name, bool(cond))); print(("PASS " if cond else "FAIL ") + name, extra)
@@ -94,16 +95,24 @@ root.geometry("1000x760"); pump(200)
 b.cmd(); pump(150)
 check("key mode: no deeplink at start", fired == [], str(fired))
 top = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)][0]
-check("status shows NEXT key", any("NEXT 키 F10" in t for t in texts(top)))
+check("start instruction names local playlist + key", any("로컬 재생 목록" in t and "AIMDESK Day" in t and "F10" in t for t in texts(top)), str([t for t in texts(top) if "재생 목록" in t])[:200])
+check("key line: read from KovaaK's ini", any(t.startswith("코박스 설정에서 읽음") and "F10" in t for t in texts(top)))
+kent = next(w for w in walk(top) if isinstance(w, tk.Entry))
+kent.insert(0, "f5"); D["seq_win"]["commit_key"](); pump(80)
+check("typed 'f5' normalised to F5 and saved", kent.get() == "F5" and data.get("next_key") == "F5", f"{kent.get()} {data.get('next_key')}")
+kl = D["seq_win"]["key_lbl"].cget("text"); check("mismatch warning F5 vs ini F10", kl.startswith("⚠") and "F10" in kl and "F5" in kl, kl)
+kent.delete(0, "end"); D["seq_win"]["commit_key"](); pump(80)
+check("cleared entry → back to ini key", data.get("next_key") is None and D["seq_win"]["key_lbl"].cget("text").startswith("코박스 설정에서 읽음"))
 csv("VT Ground Novice S5", "10.00.00", 3000); scan(); pump(1300); scan()
 check("after CSV#1: NEXT pressed once", fired == ["KEY:F10"], str(fired))
+check("start instruction gone after first play", not any("코박스에서 시작하세요" in t for t in texts(top)))
 check("status bar counts 1판 ok", "1판" in D["status_lbl"].cget("text") and D["status_dot"].itemcget(1, "fill") == ad.C["ok"], D["status_lbl"].cget("text"))
 tx = texts(top); check("row shows 3000 ▼181", "3000" in tx and "▼181" in tx)
 csv("VT Ground Novice S5", "10.01.00", 3300); scan(); pump(1300); scan()
 check("after CSV#2: NEXT pressed again", fired == ["KEY:F10"] * 2, str(fired))
 check("PB! shown", "PB!" in texts(top))
 check("PB toast rendered with bench context", D["toast"].winfo_ismapped() and any("Reactive" in t or "Gold" in t for t in texts(D["toast"])), str(texts(D["toast"]))[:160])
-check("plays persisted in day", len(data["days"][date.today().isoformat()]["plays"]) == 2 and data["days"][date.today().isoformat()]["sess"]["start"] == "10.00.00")
+check("plays persisted in day", len(data["days"][TODAY.isoformat()]["plays"]) == 2 and data["days"][TODAY.isoformat()]["sess"]["start"] == "10.00.00")
 D["show_toast"]("a"); D["show_toast"]("b"); D["show_toast"]("c"); pump(50)
 check("toast queue caps at 3", len(D["toast"].winfo_children()) == 3)
 D["toast"].winfo_children()[0].event_generate("<Button-1>"); pump(50)
@@ -112,6 +121,7 @@ _mono = ad.time.monotonic; ad.time.monotonic = lambda: _mono() + 11; D["toast_ti
 check("toasts expire", not D["toast"].winfo_ismapped())
 btn(top, "다음 판 ▶").cmd(); pump(50)
 check("skip → NEXT pressed immediately", len(fired) == 3)
+check("skipped row labelled 건너뜀", any(r[5].cget("text") == "건너뜀" for r in D["seq_win"]["rows"]))
 pump(6500)
 check("stall → 프리 플레이 warning", any("⚠" in t and "도전 과제" in t for t in texts(top)))
 csv("VT Floating Heads Novice S5", "10.03.00", 600); scan(); pump(1300); scan()
@@ -148,7 +158,7 @@ gaps = [c[3].cget("text") for c in D["ben_rows"]["react"][1]]; check("gap label 
 shot("2_bench")
 D["show"]("grow"); pump(200); shot("3_grow")
 D["show"]("log"); pump(200)
-c00 = D["hist_cells"][0][0].cget("text"); check("log first row is today", c00.startswith(date.today().strftime("%m-%d")), c00)
+c00 = D["hist_cells"][0][0].cget("text"); check("log first row is today", c00.startswith(TODAY.strftime("%m-%d")), c00)
 D["select_day"](0); pump(50)
 check("detail shows today's Pasu", D["det_lines"][0].cget("text").startswith("Pasu") and "700" in D["det_lines"][0].cget("text"), D["det_lines"][0].cget("text"))
 check("growth card title", "총 에너지" in D["grow_title"].cget("text"), D["grow_title"].cget("text"))
@@ -179,11 +189,27 @@ check("detail summary has PB and today count", "PB 3300" in dw["sum"].cget("text
 dw["win"].geometry("+1180+560"); pump(120); shot("7_detail")
 check("UI scale applied to daych", D["daych"].winfo_reqwidth() == ad.px(70), f"{D['daych'].winfo_reqwidth()} vs {ad.px(70)}")
 check("window fits screen", root.winfo_width() <= root.winfo_screenwidth())
+# ── 토요일(벤치 데이)로 날짜가 넘어감 → AIMDESK Bench 플레이리스트 · 줄 18개 ──
+btn(top, "딥링크 방식").cmd(); pump(50)
+os.environ["AIMDESK_TODAY"] = "2026-09-05"; scan(); pump(700)
+check("day change → bench day with AIMDESK Bench", D["day_state"]["dt"] == "b" and D["day_state"]["pl"] == "AIMDESK Bench", str(D["day_state"]["dt"]))
+bb = btn(root, "▶ 벤치 18개 실행"); check("bench run button exists", bb is not None)
+check("bench rows: 18 in Voltaic order", [r[1] for r in D["routine_rows"]] == [k for s_ in ad.SUBS for k, _ in s_[3]], str([r[1] for r in D["routine_rows"]])[:120])
+check("bench sections 9", len(D["section_labels"]) == 9 and D["section_labels"][0][1].startswith("① 클리킹"), str([s_[1] for s_ in D["section_labels"]])[:120])
+bb.cmd(); pump(250)
+tops = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel) and "AIMDESK Bench" in w.title()]
+check("bench sequence window 18 rows", len(tops) == 1 and len(D["seq_win"]["rows"]) == 18, f"{len(tops)} {len(D['seq_win']['rows'])}")
+check("bench start instruction", bool(tops) and any("로컬 재생 목록" in t and "AIMDESK Bench" in t and "Pasu" in t for t in texts(tops[0])))
+check("bench playlist file installed", (TMP / "FPSAimTrainer" / "Saved" / "SaveGames" / "Playlists" / "AIMDESK Bench.json").exists())
+today = "2026.09.05"; csv("VT Pasu Novice S5", "11.00.00", 700); scan(); pump(1300); scan()
+check("bench: Pasu CSV → NEXT key pressed", fired[-1] == "KEY:F10", str(fired[-2:]))
+prow = next(r for r in D["routine_rows"] if r[1] == "pasu"); check("bench row shows score + next rank gap", "700" in prow[5].cget("text") and "까지" in prow[5].cget("text"), prow[5].cget("text"))
+shot("8_bench_day")
 # ── 닫기: 창 정보 저장 ──
 D["on_close"]()
 saved = json.loads((TMP / "aim_desk_data.json").read_text(encoding="utf-8"))
 check("on_close saved win.geo/tab/seq", saved["win"].get("tab") == "today" and "geo" in saved["win"] and saved["win"].get("seq", "").startswith("+"), str(saved["win"]))
-check("auto_mode persisted", saved.get("auto_mode") == "link")
+check("auto_mode persisted", saved.get("auto_mode") == "key")
 log = (TMP / "aim_desk.log").read_text() if (TMP / "aim_desk.log").exists() else ""
 check("no exceptions logged", log.strip() == "", log[-600:])
 n_ok = sum(1 for _, ok in results if ok)

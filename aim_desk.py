@@ -70,6 +70,14 @@ def _base_dir():
         return Path(sys.executable).parent
     return Path(__file__).parent
 
+def today_date() -> date:
+    """오늘. 환경변수 AIMDESK_TODAY=YYYY-MM-DD 가 있으면 그 날 (테스트가 요일·날짜에 좌우되지 않게)"""
+    t = os.environ.get("AIMDESK_TODAY")
+    if t:
+        try: return date.fromisoformat(t)
+        except ValueError: pass
+    return date.today()
+
 def _data_dir():
     """기본은 exe 옆. 쓰기 불가(Program Files 등)이거나 임시폴더 실행(zip 안에서 더블클릭)이면
     %LOCALAPPDATA%\\AimDesk 로 — 이때 exe 옆에 기존 기록이 있으면 1회 복사해 온다.
@@ -482,7 +490,7 @@ def seq_rows_apply(seq, done, nxt, scores, rs):
         s_ = scores[i]
         if done[i]:
             if s_ is None:
-                rows.append(("dim", "dim", "–", "dim", "", "txt", "", "dim")); continue
+                rows.append(("dim", "dim", "–", "dim", "", "txt", "건너뜀", "dim")); continue
             avg, pmax = rs(k)
             if avg: rel.append(s_ / avg - 1)
             new_pb = pmax is not None and s_ > pmax
@@ -1163,10 +1171,12 @@ def _pl(name, items):
             "description": "", "hasOfflineScenarios": False,
             "hasEdited": True, "shareCode": ""}
 
+BENCH = [(k, 1) for s in SUBS for k, _ in s[3]]          # 토요일 벤치 18개 — 볼테익 표 순서 그대로
 PLAYLISTS = [
     ("AIMDESK Day",     WARMUP + [(k, 1) for k in PROBE] + MAIN),
     ("AIMDESK Friday",  WARMUP + [(k, 1) for k in PROBE] + FRIDAY),
     ("AIMDESK Probe",   [(k, 1) for k in PROBE]),
+    ("AIMDESK Bench",   BENCH),
 ]
 
 def playlists_dir(stats_dir):
@@ -1253,8 +1263,69 @@ _VK = {"SpaceBar":0x20,"Enter":0x0D,"Tab":0x09,"Escape":0x1B,"BackSpace":0x08,"I
 _DIGITS = ["Zero","One","Two","Three","Four","Five","Six","Seven","Eight","Nine"]
 _EXTENDED = {"Insert","Delete","Home","End","PageUp","PageDown","Left","Up","Right","Down","Divide","NumLock"}
 
+_KEY_ALIAS = {"space": "SpaceBar", "spacebar": "SpaceBar", "스페이스": "SpaceBar", "enter": "Enter", "return": "Enter", "엔터": "Enter",
+              "tab": "Tab", "탭": "Tab", "esc": "Escape", "escape": "Escape", "backspace": "BackSpace", "bs": "BackSpace",
+              "ins": "Insert", "insert": "Insert", "del": "Delete", "delete": "Delete", "home": "Home", "end": "End",
+              "pgup": "PageUp", "pageup": "PageUp", "pgdn": "PageDown", "pagedown": "PageDown",
+              "left": "Left", "up": "Up", "right": "Right", "down": "Down", "←": "Left", "↑": "Up", "→": "Right", "↓": "Down",
+              "capslock": "CapsLock", "caps": "CapsLock", "pause": "Pause", "scrolllock": "ScrollLock", "numlock": "NumLock",
+              "+": "Add", "plus": "Add", "num+": "Add", "numpad+": "Add", "numpadplus": "Add", "넘패드+": "Add",
+              "*": "Multiply", "num*": "Multiply", "numpad*": "Multiply", "num-": "Subtract", "numpad-": "Subtract", "넘패드-": "Subtract",
+              "num.": "Decimal", "numpad.": "Decimal", "num/": "Divide", "numpad/": "Divide",
+              "-": "Hyphen", "minus": "Hyphen", "=": "Equals", ",": "Comma", ".": "Period", "/": "Slash",
+              "`": "Tilde", "~": "Tilde", ";": "Semicolon", "[": "LeftBracket", "]": "RightBracket", "\\": "Backslash", "'": "Apostrophe"}
+
+def norm_key(text):
+    """사용자가 적은 키 이름 → 언리얼 키 이름 (f5→F5, num+→Add, numpad 5→NumPadFive, space→SpaceBar). 모르면 None"""
+    if not text: return None
+    t = re.sub(r"\s+", "", str(text)); low = t.lower()
+    if not t: return None
+    if low in _KEY_ALIAS: return _KEY_ALIAS[low]
+    for n in _VK:
+        if n.lower() == low: return n
+    m = re.fullmatch(r"f([1-9]|1\d|2[0-4])", low)
+    if m: return "F" + m.group(1)
+    if len(t) == 1 and t.isascii() and t.isalpha(): return t.upper()
+    if len(t) == 1 and t.isdigit(): return _DIGITS[int(t)]
+    for d in _DIGITS:
+        if low == d.lower(): return d
+    m = re.fullmatch(r"(?:numpad|num|np|넘패드|키패드)_?([0-9]|zero|one|two|three|four|five|six|seven|eight|nine)", low)
+    if m:
+        g = m.group(1); return "NumPad" + (_DIGITS[int(g)] if g.isdigit() else next(d for d in _DIGITS if d.lower() == g))
+    return None
+
+def key_status(override, ini) -> dict:
+    """앱이 누를 NEXT 키 정리. override = 순서창 'NEXT 키' 칸, ini = 코박스 Input.ini 의 PlaylistNext.
+    → key: 보낼 키(정규화, 못 보내면 None) · src: 'override'|'ini'|None · unknown: 모르는 이름이면 그 문자열 ·
+      mismatch: 칸의 키와 코박스 설정이 다르면 (앱 키, 코박스 키) · ini: 코박스 설정 키"""
+    ov = (override or "").strip(); ini = (ini or "").strip() or None
+    ini_n = norm_key(ini) if ini else None
+    if ov:
+        ov_n = norm_key(ov)
+        if ov_n is None: return {"key": None, "src": "override", "unknown": ov, "mismatch": None, "ini": ini_n or ini}
+        mm = (ov_n, ini_n or ini) if (ini and ini_n != ov_n) else None
+        return {"key": ov_n, "src": "override", "unknown": None, "mismatch": mm, "ini": ini_n or ini}
+    if ini:
+        return {"key": ini_n, "src": "ini", "unknown": None if ini_n else ini, "mismatch": None, "ini": ini_n or ini}
+    return {"key": None, "src": None, "unknown": None, "mismatch": None, "ini": None}
+
+def key_line(st: dict):
+    """순서창 NEXT 키 안내 한 줄 → (문구, 팔레트 키)"""
+    if st["src"] == "override":
+        if st["unknown"]: return (f"'{st['unknown']}' 는 모르는 키 이름 — F5, Add(넘패드 +), NumPad5, Space 처럼 적어 주세요", "val")
+        if st["mismatch"]:
+            return (f"⚠ 코박스 설정의 PlaylistNext 는 {st['mismatch'][1]} 인데 앱은 {st['key']} 를 누릅니다 — "
+                    f"코박스 설정 → 키 설정에서 {st['key']} 로 바꾸거나 이 칸을 비우세요", "val")
+        if st["ini"]: return (f"직접 지정 {st['key']} ✓ 코박스 설정과 일치", "ok")
+        return (f"직접 지정 {st['key']} ✓ — 코박스 설정 → 키 설정 → PlaylistNext 도 {st['key']} 여야 합니다", "ok")
+    if st["src"] == "ini":
+        if st["unknown"]: return (f"코박스 설정의 PlaylistNext 는 {st['unknown']} — 앱이 보낼 수 없는 키라 F5 같은 키로 바꿔 주세요", "val")
+        return (f"코박스 설정에서 읽음: PlaylistNext = {st['key']} ✓ (칸은 비워 두면 됩니다)", "ok")
+    return ("코박스 설정에 PlaylistNext 키가 없습니다 — 코박스 설정 → 키 설정 → PlaylistNext 에 F10 을 지정하세요 (앱이 자동으로 읽습니다)", "val")
+
 def vk_of(name: str):
-    """언리얼 키 이름 → Windows 가상 키 코드 (모르면 None)"""
+    """키 이름(사용자 표기 허용) → Windows 가상 키 코드 (모르면 None)"""
+    name = norm_key(name)
     if not name: return None
     if name in _VK: return _VK[name]
     if re.fullmatch(r"F([1-9]|1\d|2[0-4])", name): return 0x70 + int(name[1:]) - 1
@@ -1265,6 +1336,7 @@ def vk_of(name: str):
 
 def send_key(name: str) -> bool:
     """키 한 번 누르기 — SendInput + 스캔코드(게임이 받도록). Windows 전용"""
+    name = norm_key(name) or name
     vk = vk_of(name)
     if vk is None or sys.platform != "win32": return False
     try:
@@ -1546,7 +1618,7 @@ def main():
                         fg=fg or C["dim"])
 
     # ── 상태 ──
-    today_key = [date.today().isoformat()]
+    today_key = [today_date().isoformat()]
     def dget(): return data["days"].setdefault(today_key[0], blank_day())
 
     # ══ 헤더 ══  (날짜·요일 칩은 build_day_ui()가 채운다 — 자정을 넘기면 다시 그림)
@@ -1668,7 +1740,8 @@ def main():
     auto = {"on": False, "fired": None, "due": None,      # fired/due: 넘겼거나 넘기기로 예약된 순서창 인덱스
             "fired_at": None, "fired_running": True, "warned": False,
             "mode": data.get("auto_mode", "key")}         # "key" = 코박스 플레이리스트 + NEXT 키 자동 입력, "link" = 딥링크
-    def next_key(): return data.get("next_key") or playlist_next_key()
+    def key_st(): return key_status(data.get("next_key"), playlist_next_key())
+    def next_key(): return key_st()["key"]
     def auto_delay(): return int(data.get("auto_delay", 4))
     def cur_plays():
         """오늘 판 (key, 시각, 점수) — 보존된 기록(폴더를 정리해도 남음)이 스캔 목록을 포함하므로 그것을 쓴다"""
@@ -1716,7 +1789,7 @@ def main():
         if seq_alive(): remember_seq_pos(); seq_win["win"].destroy()
         w = tk.Toplevel(root)
         seq_win.update(win=w, rows=[], seq=seq, base={}, skipped=set())
-        title = plname or "볼테익 벤치마크 18"
+        title = plname or "AIMDESK Bench"; seq_win["title"] = title
         w.title("오늘 순서 — " + title); w.configure(bg=C["bg"])
         w.attributes("-topmost", bool(data.get("seq_topmost", True))); w.resizable(False, False)
         w.protocol("WM_DELETE_WINDOW", lambda: (stop_auto(), remember_seq_pos(), w.destroy()))
@@ -1767,14 +1840,20 @@ def main():
                 lambda v: (data.__setitem__("auto_delay", max(1, min(30, v))), save_data(data), update_sequence())
                 ).pack(side="left", padx=(8, 12))
         tk.Label(dl, text="NEXT 키", font=FS, bg=C["bg"], fg=C["sub"]).pack(side="left")
-        key_var = tk.StringVar(value=next_key() or "")
+        key_var = tk.StringVar(value=data.get("next_key") or "")        # 칸에는 '직접 지정'만 — 비워 두면 코박스 설정에서 읽은 키를 쓴다
         key_ent = tk.Entry(dl, textvariable=key_var, width=9, font=FNS, bg=C["card2"], fg=C["txt"],
                            insertbackground=C["txt"], bd=0, justify="center")
         key_ent.pack(side="left", padx=(6, 0), ipady=3)
         def commit_key(*_):
-            v = key_var.get().strip()
-            data["next_key"] = v or None; save_data(data); update_sequence()
-        key_ent.bind("<Return>", commit_key); key_ent.bind("<FocusOut>", commit_key)
+            v = key_var.get().strip(); n = norm_key(v)
+            if n and n != v: key_var.set(n)                                  # f5 → F5, num+ → Add
+            new = (n or v) or None
+            if (data.get("next_key") or None) == new: return
+            data["next_key"] = new; save_data(data)
+            set_hint(""); update_sequence()
+        key_ent.bind("<Return>", commit_key); key_ent.bind("<FocusOut>", commit_key); seq_win["commit_key"] = commit_key
+        seq_win["key_lbl"] = tk.Label(bottom, text="", font=FS, bg=C["bg"], fg=C["hint"], wraplength=px(340), justify="left")
+        seq_win["key_lbl"].pack(anchor="w", padx=12, pady=(0, 4))
         opt = tk.Frame(bottom, bg=C["bg"]); opt.pack(fill="x", padx=12, pady=(0, 4))
         Toggle(opt, "항상 위", lambda: bool(data.get("seq_topmost", True)), set_topmost).pack(side="left")
         Toggle(opt, "딥링크 방식", lambda: auto["mode"] == "link", set_mode_link).pack(side="left", padx=(6, 0))
@@ -1878,7 +1957,8 @@ def main():
                 summ += "\n" + next_step(data, dkey, cur_plays(), avg_)
         cfg(seq_win["sum"], text=summ, fg=C["gold"] if n_pb else C["sub"])
         col = C["ok"] if (auto["on"] and nxt is not None) else C["dim"]
-        mode_txt = "딥링크" if auto["mode"] == "link" else f"NEXT 키 {next_key() or '미지정'}"
+        kst = key_st()
+        mode_txt = "딥링크" if auto["mode"] == "link" else f"NEXT 키 {kst['key'] or '미지정'}"
         if nxt is None:
             msg = "오늘 순서 전부 완료 🎉  ·  한 번 더 돌리려면 '처음부터'"
         elif auto["on"] and auto["fired"] == nxt and auto["fired_at"] is not None:
@@ -1894,12 +1974,21 @@ def main():
             else:
                 msg = f"자동 진행 중 ({mode_txt}) · {nm_} 시작 후 {el}초 · 끝나면 {auto_delay()}초 뒤 다음 판"
         elif auto["on"] and auto["fired"] == nxt:
-            msg = f"자동 진행 중 ({mode_txt}) · {sname(seq_win['seq'][nxt])} 진행 중 · 끝나면 {auto_delay()}초 뒤 다음 판"
+            if auto["mode"] == "key" and played == 0 and not seq_win["skipped"]:
+                # 아직 한 판도 안 들어옴 = 코박스에서 플레이리스트를 아직 안 켰을 가능성이 크다 → 할 일을 크게 보여 준다
+                msg = (f"코박스에서 시작하세요: ESC → 샌드박스 브라우저 → '로컬 재생 목록' 탭 → {seq_win['title']} ▶ 플레이 (상단 토글 '도전 과제'). "
+                       f"첫 판 {sname(seq_win['seq'][nxt])} 이 끝나면 앱이 {kst['key'] or 'NEXT'} 키로 이어갑니다")
+                col = C["gold"]
+            else:
+                msg = f"자동 진행 중 ({mode_txt}) · {sname(seq_win['seq'][nxt])} 차례 · 판이 끝나면 {auto_delay()}초 뒤 다음 판"
         elif auto["on"]:
             msg = f"{sname(seq_win['seq'][nxt])} 넘기는 중…"
         else:
             msg = f"자동 진행 꺼짐 ({mode_txt}) — 코박스에서 직접 넘기거나 '다음 판 ▶'"
         cfg(seq_win["auto_lbl"], text=msg, fg=col)
+        if seq_win.get("key_lbl") is not None and seq_win["key_lbl"].winfo_exists():
+            kl = key_line(kst) if auto["mode"] == "key" else ("딥링크 방식 — 키를 누르지 않고 매 판 steam:// 링크를 보냅니다", "hint")
+            cfg(seq_win["key_lbl"], text=kl[0], fg=C[kl[1]])
         if seq_win["auto_btn"] is not None and seq_win["auto_btn"].winfo_exists():
             seq_win["auto_btn"].sync()
 
@@ -1912,16 +2001,21 @@ def main():
 
     def press_next():
         """코박스 결과창에서 PlaylistNext 키를 대신 누른다"""
-        key = next_key()
+        st = key_st(); key = st["key"]
+        if st["unknown"]:
+            set_hint(f"'{st['unknown']}' 키는 앱이 보낼 수 없습니다 — 코박스 PlaylistNext 를 F5 같은 키로 바꾸거나 'NEXT 키' 칸에 F5 처럼 적어 주세요", C["val"]); return False
         if not key:
-            set_hint("PlaylistNext 키가 없습니다 — 코박스 설정 → 키 설정 → PlaylistNext 에 F10 같은 키를 지정하고, 위 'NEXT 키' 칸에도 적어 주세요", C["val"]); return False
+            set_hint("PlaylistNext 키가 없습니다 — 코박스 설정 → 키 설정 → PlaylistNext 에 F10 같은 키를 지정하세요 (앱이 자동으로 읽습니다)", C["val"]); return False
         if vk_of(key) is None:
-            set_hint(f"'{key}' 는 앱이 모르는 키 이름입니다 — F1~F12 같은 키로 지정하세요", C["val"]); return False
+            set_hint(f"'{key}' 는 앱이 보낼 수 없는 키입니다 — F1~F12·문자·넘패드 키로 바꾸세요", C["val"]); return False
         if not kovaaks_foreground():
             set_hint(f"코박스 창이 앞에 있어야 {key} 키를 보낼 수 있습니다 — 게임 창을 클릭하세요 (잠시 뒤 다시 시도)", C["gold"]); return False
         if not send_key(key):
             set_hint(f"{key} 키 전송 실패 — aim_desk.log 확인", C["val"]); return False
-        set_hint(f"{key} 키 전송 ✓")
+        if st["mismatch"]:
+            set_hint(f"{key} 키 전송 — ⚠ 코박스 설정의 PlaylistNext 는 {st['mismatch'][1]} 라 게임이 반응하지 않을 수 있습니다. 둘을 같은 키로 맞추세요", C["val"])
+        else:
+            set_hint(f"{key} 키 전송 ✓")
         return True
 
     def advance(idx):
@@ -2030,16 +2124,18 @@ def main():
             launch_kovaaks()                            # 게임만 켠다 (딥링크 없음)
         if nxt is None: restart_sequence()
         auto.update(on=True, fired=(0 if nxt is None else nxt), due=None, fired_at=None, warned=False)
-        key = next_key()
-        target = plname or "볼테익 Novice 벤치마크 플레이리스트"
-        if key:
-            set_hint(f"코박스: ESC → 샌드박스 브라우저 '로컬 재생 목록' → {target} ▶ 플레이 (상단 토글 '도전 과제'). "
-                     f"판이 끝나면 앱이 {auto_delay()}초 뒤 {key} 키로 다음 판을 넘깁니다", C["ok"])
+        st = key_st(); key = st["key"]
+        target = plname or "AIMDESK Bench"
+        if key and not st["mismatch"]:
+            set_hint(f"판이 끝나면 앱이 {auto_delay()}초 뒤 {key} 키로 다음 판을 넘깁니다 — 결과창에선 아무것도 누르지 말고 기다리세요", C["ok"])
             show_toast(f"▶ 코박스에서 '로컬 재생 목록' → {target} 를 재생하세요 — 판이 끝날 때마다 앱이 {key} 키로 다음 판을 넘깁니다")
+        elif key:
+            set_hint(f"⚠ 코박스 설정의 PlaylistNext 는 {st['mismatch'][1]} 인데 앱은 {key} 를 누릅니다 — 둘을 같은 키로 맞추세요", C["val"])
+            show_toast(f"⚠ NEXT 키가 코박스 설정({st['mismatch'][1]})과 다릅니다 — 순서창 아래 안내를 보세요", "warn")
         else:
-            set_hint("NEXT 키가 아직 없습니다: 코박스 설정 → 키 설정 → PlaylistNext 에 F10 지정 → 위 'NEXT 키' 칸에 F10 입력. "
+            set_hint("NEXT 키가 아직 없습니다: 코박스 설정 → 키 설정 → PlaylistNext 에 F10 지정 (앱이 자동으로 읽음 · 못 읽으면 위 칸에 F10). "
                      f"그 다음 '로컬 재생 목록' → {target} ▶ 플레이", C["val"])
-            show_toast("코박스 설정 → 키 설정 → PlaylistNext 에 F10 을 지정하고 순서창 'NEXT 키' 칸에 F10 을 적어 주세요")
+            show_toast("코박스 설정 → 키 설정 → PlaylistNext 에 F10 을 지정하세요 — 앱이 자동으로 읽습니다", "warn")
         update_sequence()
 
     # ── 시나리오 상세 팝업 (루틴 줄·순서창·스파크·벤치 이름 클릭) ──
@@ -2120,20 +2216,20 @@ def main():
         tk.Frame(row, bg=gc, width=px(3), height=px(16)).pack(side="left", padx=(0, 9))
         nml = tk.Label(row, text=sname(key), font=F, width=13, anchor="w", bg=C["card"], fg=C["txt"], cursor="hand2"); nml.pack(side="left")
         nml.bind("<Button-1>", lambda e, k=key: open_detail(k))
-        bar = tk.Canvas(row, height=px(8), bg=C["card"], highlightthickness=0)
+        bar = tk.Canvas(row, width=px(60), height=px(8), bg=C["card"], highlightthickness=0)   # 기본 요청폭(378px)이면 오른쪽 점수 칸이 잘린다
         bar.pack(side="left", fill="x", expand=True, padx=(4, 10))
         cl = tk.Label(row, text="", font=FNS, width=7, anchor="e", bg=C["card"], fg=C["sub"])
         cl.pack(side="left")
-        sl = tk.Label(row, text="", font=FNS, width=12, anchor="e", bg=C["card"], fg=C["dim"])
+        sl = tk.Label(row, text="", font=FNS, width=24 if kind == "bench" else 12, anchor="e", bg=C["card"], fg=C["dim"])
         sl.pack(side="left")
         routine_rows.append((kind, key, target, bar, cl, sl, gc, mark, nml, row))
 
     def build_day_ui():
         """헤더의 날짜·요일 칩과 좌측 루틴 카드를 '오늘' 기준으로 (다시) 만든다"""
-        d = date.today()
+        d = today_date()
         dt = ["v","v","v","v","w","b","r"][d.weekday()]
         day_state["dt"] = dt
-        day_state["pl"] = {"v": "AIMDESK Day", "w": "AIMDESK Friday"}.get(dt)
+        day_state["pl"] = {"v": "AIMDESK Day", "w": "AIMDESK Friday", "b": "AIMDESK Bench"}.get(dt)
         dt_name, dt_col = DAY_TYPE[dt]
         date_lbl.configure(text=f"{d.month}월 {d.day}일 {DOWK[d.weekday()]}")
         daych.delete("all")
@@ -2145,7 +2241,9 @@ def main():
         lh = tk.Frame(left_scroll.body, bg=C["card"]); lh.pack(fill="x")
         lt = tk.Frame(lh, bg=C["card"]); lt.pack(side="left")
         tk.Label(lt, text="오늘 루틴", font=FH, bg=C["card"], fg=C["txt"]).pack(anchor="w")
-        tk.Label(lt, text="코박스 플레이리스트로 돌리고, 판이 끝나면 앱이 NEXT 키를 대신 눌러 다음 판으로 · 결과창에선 아무것도 누르지 말고 기다리기",
+        pl = day_state["pl"]
+        tk.Label(lt, text=(f"▶ 실행 → 코박스 ESC → 샌드박스 브라우저 '로컬 재생 목록' → {pl} ▶ 플레이 (상단 토글 '도전 과제'). "
+                           "판이 끝나면 앱이 NEXT 키를 대신 눌러 다음 판으로 — 결과창에선 기다리기") if pl else "오늘은 휴식 — 컨디션만 적어도 됩니다",
                  font=FS, bg=C["card"], fg=C["hint"], wraplength=px(300), justify="left").pack(anchor="w", pady=(0, 2))
         day_state["sess_lbl"] = tk.Label(lt, text="", font=FNS, bg=C["card"], fg=C["sub"], wraplength=px(300), justify="left")
         day_state["sess_lbl"].pack(anchor="w", pady=(0, 4))
@@ -2153,19 +2251,16 @@ def main():
         for _i in range(3):
             cl_ = tk.Label(lt, text="", font=FS, bg=C["card"], fg=C["sub"], wraplength=px(520), justify="left")
             cl_.pack(anchor="w"); day_state["coach"].append(cl_)
-        pl = day_state["pl"]
         if pl:
-            RBtn(lh, "▶ 오늘 루틴 실행", lambda: run_playlist(pl),
+            RBtn(lh, "▶ 벤치 18개 실행" if dt == "b" else "▶ 오늘 루틴 실행", lambda: run_playlist(pl),
                  bg="#2A1512", fg=C["val"], padx=14, pady=8).pack(side="right", padx=(8, 0))
-            RBtn(lh, "프로브만", lambda: run_playlist("AIMDESK Probe"),
-                 padx=12, pady=8).pack(side="right", padx=(8, 0))
+            if dt != "b":
+                RBtn(lh, "프로브만", lambda: run_playlist("AIMDESK Probe"),
+                     padx=12, pady=8).pack(side="right", padx=(8, 0))
             RBtn(lh, "순서 보기", lambda: open_sequence(pl), padx=12, pady=8).pack(side="right")
-        elif dt == "b":
-            RBtn(lh, "▶ 코박스 실행", lambda: run_playlist(None),
-                 bg="#2A1512", fg=C["val"], padx=14, pady=8).pack(side="right", padx=(8, 0))
-            RBtn(lh, "순서 보기", lambda: open_sequence(None), padx=12, pady=8).pack(side="right", padx=(8, 0))
-            RBtn(lh, "볼테익 페이지", lambda: open_uri("https://app.voltaic.gg/benchmarks"),
-                 padx=12, pady=8).pack(side="right")
+            if dt == "b":
+                RBtn(lh, "볼테익 페이지", lambda: open_uri("https://app.voltaic.gg/benchmarks"),
+                     padx=12, pady=8).pack(side="right", padx=(0, 8))
 
         if dt in ("v", "w"):
             add_section("① 워밍업 · 트래킹 → 정확 → 속도 (점수 무시)")
@@ -2182,9 +2277,11 @@ def main():
             tk.Label(left_scroll.body, text="미야기: DM에서 안 쏘고 머리만 따라가기 · 녹화 켜기",
                      font=FS, bg=C["card"], fg=C["hint"]).pack(anchor="w", padx=14)
         elif dt == "b":
-            add_section("벤치마크 18개 풀런")
-            tk.Label(left_scroll.body, text="▶ 코박스 실행 후 볼테익 벤치 플레이리스트를 재생하면 판이 끝날 때마다 앱이 NEXT 키로 넘깁니다 — 점수는 자동 수집, 벤치 탭에서 실시간으로 차오릅니다.",
-                     font=F, bg=C["card"], fg=C["sub"], wraplength=px(520), justify="left").pack(anchor="w", pady=6)
+            tk.Label(left_scroll.body, text="벤치마크 18개 풀런 · 오늘 베스트 기준 · 점수 옆은 다음 등급까지 남은 점수 · 벤치 탭에 실시간 반영",
+                     font=FS, bg=C["card"], fg=C["hint"], wraplength=px(520), justify="left").pack(anchor="w", pady=(6, 0))
+            for i, (sid, cat, sub, items) in enumerate(SUBS):
+                add_section(f"{'①②③④⑤⑥⑦⑧⑨'[i]} {cat} · {sub}")
+                for k, _th in items: add_row("bench", k, 1)
         else:
             add_section("휴식")
             tk.Label(left_scroll.body, text="손목도 데이터의 일부입니다. 오늘은 컨디션만 적어도 됩니다.",
@@ -2576,6 +2673,8 @@ def main():
                     d_ = val - avg
                     txt, col = f"{val} {'▲' if d_ >= 0 else '▼'}{abs(d_):.0f}", (C["ok"] if d_ >= 0 else C["val"])
                 else: txt, col = f"{val}", C["txt"]
+                if kind == "bench" and th_of(key):                                       # 벤치 데이: ▲▼ 대신 다음 등급까지 (순서창이 ▲▼를 보여 준다)
+                    g_, gcol = fmt_gap(val, th_of(key)); txt, col = f"{val} · {g_}", (C["gold"] if "PB!" in txt else gcol)
                 cfg(sl, text=txt, fg=col)
         if unmapped and not day_state.get("redraw_pending"):
             day_state["redraw_pending"] = True
@@ -2716,7 +2815,7 @@ def main():
 
     def scan_once():
         """stats 폴더 한 번 확인 → 기록 반영 → 화면·자동 진행·상태줄 갱신 (tick 이 2초마다, F5 가 즉시 부른다)"""
-        d_now = date.today(); nk = d_now.isoformat()   # 한 번만 읽는다 — 자정 경계에서 어제 키에 오늘 스캔이 섞이지 않게
+        d_now = today_date(); nk = d_now.isoformat()   # 한 번만 읽는다 — 자정 경계에서 어제 키에 오늘 스캔이 섞이지 않게
         if nk != today_key[0]: on_day_change(nk)
         sd = data.get("stats_dir"); scan_err = False
         if sd:
@@ -3017,6 +3116,24 @@ if __name__ == "__main__":
         r2, npb2, _ = seq_rows_apply(["pasu","pasu"], [True, True], None, [850, 860], lambda k: (800.0, 806)); assert npb2 == 1 and r2[1][6] == "PB!"
         sh = scen_history(hx, "pasu", "2026-09-03"); assert [h["date"] for h in sh] == [SEED_DATE, "2026-09-01"] and sh[1]["first"] == 800
         ssm = scen_summary(hx, "pasu", "2026-09-03"); assert ssm["pb"] == 850 and ssm["pb_date"] == "2026-09-01" and ssm["trend"] is None and "PB 850" in fmt_scen_summary(ssm)
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK")
+        # v3.1: 키 이름 정규화 · 키 상태 · 벤치 플레이리스트 · 날짜 재정의
+        assert norm_key("f5") == "F5" and norm_key(" F10 ") == "F10" and norm_key("num+") == "Add" and norm_key("+") == "Add" and norm_key("Add") == "Add"
+        assert norm_key("numpad 5") == "NumPadFive" and norm_key("num5") == "NumPadFive" and norm_key("NumPadFive") == "NumPadFive" and norm_key("5") == "Five"
+        assert norm_key("space") == "SpaceBar" and norm_key("pagedown") == "PageDown" and norm_key("n") == "N" and norm_key("Nine") == "Nine"
+        assert norm_key("Gamepad_X") is None and norm_key("") is None and norm_key(None) is None and norm_key("   ") is None and norm_key("xyz") is None
+        assert vk_of("f5") == 0x74 and vk_of("num+") == 0x6B and vk_of("numpad5") == 0x65 and vk_of("space") == 0x20 and vk_of("f25") is None
+        ks = key_status("f5", "Add"); assert ks["key"] == "F5" and ks["src"] == "override" and ks["mismatch"] == ("F5", "Add") and key_line(ks)[1] == "val" and "Add" in key_line(ks)[0]
+        ks = key_status("", "Add"); assert ks["key"] == "Add" and ks["src"] == "ini" and ks["mismatch"] is None and key_line(ks)[1] == "ok" and "Add" in key_line(ks)[0]
+        ks = key_status("F10", "F10"); assert ks["mismatch"] is None and key_line(ks)[1] == "ok" and "일치" in key_line(ks)[0]
+        ks = key_status("f10", "F10"); assert ks["key"] == "F10" and ks["mismatch"] is None
+        ks = key_status("xyz", None); assert ks["key"] is None and ks["unknown"] == "xyz" and key_line(ks)[1] == "val"
+        ks = key_status(None, None); assert ks["key"] is None and ks["src"] is None and "PlaylistNext" in key_line(ks)[0] and key_line(ks)[1] == "val"
+        ks = key_status(None, "Gamepad_X"); assert ks["key"] is None and ks["unknown"] == "Gamepad_X" and key_line(ks)[1] == "val"
+        ks = key_status("F5", None); assert ks["key"] == "F5" and ks["mismatch"] is None and "여야" in key_line(ks)[0]
+        assert dict(PLAYLISTS)["AIMDESK Bench"] == [(k, 1) for s in SUBS for k, _ in s[3]] and len(dict(PLAYLISTS)["AIMDESK Bench"]) == 18 and len(PLAYLISTS) == 4
+        assert seq_rows_apply(["pasu"], [True], None, [None], lambda k: (None, None))[0][0][6] == "건너뜀"
+        os.environ["AIMDESK_TODAY"] = "2026-09-05"; assert today_date().weekday() == 5
+        os.environ["AIMDESK_TODAY"] = "bad"; assert today_date() == date.today(); del os.environ["AIMDESK_TODAY"]
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK")
         sys.exit(0)
     main()
