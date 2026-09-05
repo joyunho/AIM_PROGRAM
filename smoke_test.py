@@ -15,7 +15,7 @@ for f in STATS.iterdir(): f.unlink()
 for f in TMP.glob("*.json"): f.unlink()
 for f in TMP.glob("*.log"): f.unlink()
 (TMP / "aim_desk_data.json").write_text(json.dumps({
-    "stats_dir": str(STATS), "auto_delay": 1, "seeded": False, "pb": {}, "days": {},
+    "stats_dir": str(STATS), "auto_delay": 1, "seeded": False, "pb": {}, "days": {}, "next_key": "f10",
     "win": {"geo": "1000x700+30+40"}}), encoding="utf-8")
 
 HERE = Path(__file__).resolve().parent
@@ -65,6 +65,7 @@ pump(700)                                       # tick(300ms)·refresh(450ms) �
 # ── 시작 상태 ──
 check("window geometry remembered (1000x700, clamped to minsize)", root.winfo_width() == max(1000, ad.px(960)) and abs(root.winfo_x() - 30) <= 2, f"{root.winfo_width()} {root.winfo_x()}")
 check("today tab visible", D["frames"]["today"].winfo_ismapped())
+check("stale override equal to ini key cleared at startup", data.get("next_key") is None, str(data.get("next_key")))
 check("status bar shows 0판 warn", "0판" in D["status_lbl"].cget("text"), D["status_lbl"].cget("text"))
 b = btn(root, "▶ 오늘 루틴 실행"); check("routine button exists (v-day)", b is not None)
 c0 = D["counters"]["refresh_tab"]
@@ -119,18 +120,32 @@ D["toast"].winfo_children()[0].event_generate("<Button-1>"); pump(50)
 check("click dismisses a toast", len(D["toast"].winfo_children()) == 2)
 _mono = ad.time.monotonic; ad.time.monotonic = lambda: _mono() + 11; D["toast_tick"](); ad.time.monotonic = _mono; pump(50)
 check("toasts expire", not D["toast"].winfo_ismapped())
-btn(top, "다음 판 ▶").cmd(); pump(50)
+btn(top, "건너뛰기 ▶").cmd(); pump(50)
 check("skip → NEXT pressed immediately", len(fired) == 3)
 check("skipped row labelled 건너뜀", any(r[5].cget("text") == "건너뜀" for r in D["seq_win"]["rows"]))
 pump(6500)
 check("stall → 프리 플레이 warning", any("⚠" in t and "도전 과제" in t for t in texts(top)))
 csv("VT Floating Heads Novice S5", "10.03.00", 600); scan(); pump(1300); scan()
 check("CSV → NEXT (4), warning cleared", len(fired) == 4 and not any("⚠" in t for t in texts(top)))
+# 게임 창이 앞에 없을 때: 건너뛰기 → 전송 실패 → 안내, 창을 되찾으면(focus 성공) 다시 시도해서 보냄. 그 사이 토글을 껐다 켜도 재시도가 살아 있어야 한다
+ad.kovaaks_foreground = lambda: False; ad.focus_kovaaks = lambda: False
+btn(top, "건너뛰기 ▶").cmd(); pump(100)
+check("foreground lost: key not sent, hint asks to click game, pending set", len(fired) == 4 and any("앞에 있어야" in t for t in texts(top)) and D["auto"]["pending"] is not None, f"{len(fired)} {D['auto']['pending']}")
+btn(top, "자동 진행").cmd(); btn(top, "자동 진행").cmd(); pump(50)
+check("auto toggle keeps the pending retry", D["auto"]["on"] and D["auto"]["fired"] is None and D["auto"]["pending"] is not None)
+ad.focus_kovaaks = lambda: True
+scan(); pump(1500); scan(); pump(300)
+check("retry after focus regained → key sent, pending cleared", len(fired) == 5 and fired[-1] == "KEY:F10" and D["auto"]["pending"] is None, str(fired[-2:]))
+ad.kovaaks_foreground = lambda: True
 btn(top, "자동 진행").cmd(); csv("VT 1w4ts Novice S5", "10.05.00", 900); scan(); pump(1300); scan()
-check("auto OFF: no key", len(fired) == 4)
-btn(top, "자동 진행").cmd(); check("auto ON (key) presses nothing", len(fired) == 4)
+check("auto OFF: no key", len(fired) == 5)
+check("skipped 1w4ts row revived by its own CSV (Frogtagon stays skipped)", D["seq_win"]["skipped"] == {2}, str(D["seq_win"]["skipped"]))
+D["seq_win"]["rows"][2][3].event_generate("<Button-1>"); pump(50)
+check("click on '–' un-skips the row", D["seq_win"]["skipped"] == set() and "건너뜀" not in D["seq_win"]["prog"].cget("text"), D["seq_win"]["prog"].cget("text"))
+D["seq_win"]["skipped"].add(2); D["update_sequence"]()          # 아래 검사들은 Frogtagon 이 건너뛴 상태를 전제로 한다
+btn(top, "자동 진행").cmd(); check("auto ON (key) presses nothing", len(fired) == 5)
 btn(top, "딥링크 방식").cmd(); csv("VT Pasu Novice S5", "10.06.00", 700); scan(); pump(1300); scan()
-check("link mode → deeplink for EddieTS", len(fired) == 5 and fired[-1] == ad.scenario_uri("VT EddieTS Novice S5"), str(fired[-1:]))
+check("link mode → deeplink for EddieTS", len(fired) == 6 and fired[-1] == ad.scenario_uri("VT EddieTS Novice S5"), str(fired[-1:]))
 top.geometry("+1180+60"); pump(100)          # 스크린샷에서 본창을 가리지 않게 오른쪽으로
 
 # ── v3: 정보·코치·기록 탭·단축키 ──
