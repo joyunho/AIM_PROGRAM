@@ -2478,8 +2478,8 @@ def main():
         pl = day_state["pl"]
         tk.Label(lt, text=(f"▶ 실행 → 코박스 ESC → 샌드박스 브라우저 → 네 번째 탭 '로컬 재생 목록' → {pl} ▶ 플레이 ('도전 과제' 토글). "
                            "판이 끝나면 앱이 NEXT 키를 대신 눌러 다음 판으로 — 결과창에선 기다리기") if pl else "오늘은 휴식 — 컨디션만 적어도 됩니다",
-                 font=FS, bg=C["card"], fg=C["hint"], wraplength=px(300), justify="left").pack(anchor="w", pady=(0, 2))
-        day_state["sess_lbl"] = tk.Label(lt, text="", font=FNS, bg=C["card"], fg=C["sub"], wraplength=px(300), justify="left")
+                 font=FS, bg=C["card"], fg=C["hint"], wraplength=px(250), justify="left").pack(anchor="w", pady=(0, 2))   # 250: 최소 폭에서도 오른쪽 버튼 3개가 잘리지 않게
+        day_state["sess_lbl"] = tk.Label(lt, text="", font=FNS, bg=C["card"], fg=C["sub"], wraplength=px(250), justify="left")
         day_state["sess_lbl"].pack(anchor="w", pady=(0, 4))
         day_state["coach"] = []
         for _i in range(3):
@@ -2586,8 +2586,9 @@ def main():
     RBtn(plrow, "폴더 선택", pick_stats, padx=12, pady=5).pack(side="left")
     RBtn(plrow, "플레이리스트 재설치", lambda: (install_playlists(), None),
          padx=12, pady=5).pack(side="left", padx=(8, 0))
-    RBtn(plrow, "폴더 열기", lambda: (PL_STATE["dir"] and open_uri(str(PL_STATE["dir"])), None),
-         padx=12, pady=5).pack(side="left", padx=(8, 0))
+    plrow2 = tk.Frame(stc, bg=C["card"]); plrow2.pack(fill="x", pady=(6, 0))
+    RBtn(plrow2, "플레이리스트 폴더 열기", lambda: (PL_STATE["dir"] and open_uri(str(PL_STATE["dir"])), None),
+         padx=12, pady=5).pack(side="left")
     pl_lbl = tk.Label(stc, text="", font=FS, bg=C["card"], fg=C["hint"], wraplength=px(268), justify="left"); pl_lbl.pack(anchor="w", pady=(5, 0))
     def install_playlists():
         sd = data.get("stats_dir")

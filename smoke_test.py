@@ -106,6 +106,11 @@ al_ = D["seq_win"]["auto_lbl"]; check("start instruction (auto_lbl, gold) names 
 check("key line: read from KovaaK's ini", D["seq_win"]["key_lbl"].cget("text").startswith("코박스 설정에서 읽음") and "F10" in D["seq_win"]["key_lbl"].cget("text"))
 check("tab guide drawn before first play", bool(D["seq_win"]["guide"].winfo_manager()) and len(D["seq_win"]["guide"].find_all()) >= 9)
 check("install label points at the 4th tab", D["pl_lbl"].cget("text").startswith("플레이리스트 4개 설치 ✓ → 코박스 샌드박스 브라우저 네 번째 탭"), D["pl_lbl"].cget("text")[:80])
+def shot0(name):
+    if os.environ.get("AIMDESK_SHOTS"):
+        import subprocess; Path(os.environ["AIMDESK_SHOTS"]).mkdir(parents=True, exist_ok=True)
+        pump(120); subprocess.run(["import", "-window", "root", f"{os.environ['AIMDESK_SHOTS']}/{name}.png"], timeout=20)
+top.geometry("+1180+60"); shot0("0_seq_fresh")
 kent = next(w for w in walk(top) if isinstance(w, tk.Entry))
 kent.insert(0, "f5"); D["seq_win"]["commit_key"](); pump(80)
 check("typed 'f5' normalised to F5 and saved", kent.get() == "F5" and data.get("next_key") == "F5", f"{kent.get()} {data.get('next_key')}")
