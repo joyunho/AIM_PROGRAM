@@ -1172,12 +1172,35 @@ def fmt_scen_summary(sm: dict) -> str:
     return " · ".join(parts)
 
 # ══════════════════ 플레이리스트 자동 설치 / 실행 ══════════════════
-def _pl(name, items):
-    return {"playlistName": name, "playlistId": 0, "authorSteamId": "",
-            "authorName": "aimdesk", "scenarioList":
-            [{"scenario_Name": SCEN[k][0], "play_Count": c} for k, c in items],
-            "description": "", "hasOfflineScenarios": False,
-            "hasEdited": True, "shareCode": ""}
+def _pl(name, items, tpl=None):
+    """플레이리스트 JSON 객체. tpl(코박스가 만든 다른 플레이리스트)이 있으면 그 키 구성을 그대로 두고 이름·목록만 바꾼다"""
+    obj = dict(tpl) if isinstance(tpl, dict) else {}
+    obj.update({"playlistName": name, "playlistId": 0, "authorSteamId": "",
+                "authorName": "aimdesk", "scenarioList":
+                [{"scenario_Name": SCEN[k][0], "play_Count": c} for k, c in items],
+                "description": "", "hasOfflineScenarios": False,
+                "hasEdited": True, "shareCode": ""})
+    return obj
+
+def _pl_template(d: Path):
+    """폴더에 코박스가 만든 다른 플레이리스트가 있으면 (그 객체, 인코딩, CRLF 여부) — 게임 버전별 파일 형식 차이를 그대로 따라가기 위해. 없으면 (None, 'utf-16', True)"""
+    for fp in sorted(d.glob("*.json")):
+        if fp.stem.startswith("AIMDESK"): continue
+        try:
+            raw = fp.read_bytes()
+            enc = "utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else ("utf-8-sig" if raw[:3] == b"\xef\xbb\xbf" else "utf-8")
+            txt = raw.decode(enc); obj = json.loads(txt)
+            if isinstance(obj, dict) and "scenarioList" in obj: return obj, enc, ("\r\n" in txt)
+        except Exception:
+            continue
+    return None, "utf-16", True
+
+def _pl_bytes(obj, enc="utf-16", crlf=True) -> bytes:
+    txt = json.dumps(obj, ensure_ascii=False, indent="\t")
+    if crlf: txt = txt.replace("\n", "\r\n")
+    return (txt + ("\r\n" if crlf else "\n")).encode(enc)
+
+PL_STATE = {"n": 0, "dir": None, "wrote": 0, "tpl": None, "enc": "utf-16"}
 
 BENCH = [(k, 1) for s in SUBS for k, _ in s[3]]          # 토요일 벤치 18개 — 볼테익 표 순서 그대로
 PLAYLISTS = [
@@ -1193,25 +1216,27 @@ def playlists_dir(stats_dir):
     return p.parent / "Saved" / "SaveGames" / "Playlists"
 
 def ensure_playlists(stats_dir):
-    """플레이리스트 JSON(UTF-16)을 코박스 폴더에 설치. (성공 개수, 폴더) 반환"""
+    """플레이리스트 JSON 을 코박스 폴더(…\\Saved\\SaveGames\\Playlists)에 설치. (성공 개수, 폴더, 이번에 새로 쓴 개수) 반환.
+    폴더에 코박스가 만든 플레이리스트가 있으면 그 파일의 인코딩·키 구성을 그대로 따른다 (없으면 UTF-16 BOM + CRLF)"""
     try:
         d = playlists_dir(stats_dir)
         if not d.is_dir():
             try: d.mkdir(parents=True)      # 로컬 플레이리스트를 한 번도 안 만든 설치본
-            except OSError: return 0, d
-        ok = 0
+            except OSError: return 0, d, 0
+        tpl, enc, crlf = _pl_template(d)
+        ok = wrote = 0
         for name, items in PLAYLISTS:
-            txt = json.dumps(_pl(name, items), ensure_ascii=False, indent="\t")
-            payload = (txt.replace("\n", "\r\n") + "\n").encode("utf-16")
+            payload = _pl_bytes(_pl(name, items, tpl), enc, crlf)
             fp = d / (name + ".json")
             try:
                 if not fp.exists() or fp.read_bytes() != payload:
-                    fp.write_bytes(payload)
+                    fp.write_bytes(payload); wrote += 1
                 ok += 1
             except OSError: pass
-        return ok, d
+        PL_STATE.update(n=ok, dir=d, wrote=wrote, tpl=(tpl or {}).get("playlistName"), enc=enc)
+        return ok, d, wrote
     except Exception:
-        return 0, None
+        log_exc("ensure_playlists"); return 0, None, 0
 
 def open_uri(uri):
     try:
@@ -1933,6 +1958,7 @@ def main():
         seq_win["auto_lbl"] = tk.Label(w, text="", font=FS, bg=C["bg"], fg=C["hint"],
                                        wraplength=px(470), justify="left")
         seq_win["auto_lbl"].pack(anchor="w", padx=12)
+        seq_win["guide"] = tk.Canvas(w, width=px(470), height=px(54), bg=C["bg"], highlightthickness=0)   # 코박스 탭 그림 — 첫 판 전에만 보인다
         bottom = tk.Frame(w, bg=C["bg"]); bottom.pack(side="bottom", fill="x")       # 조작부: 창을 줄여도 안 잘리게 먼저 자리를 잡는다
         box = tk.Frame(w, bg=C["card"], padx=10, pady=8,
                        highlightbackground=C["line"], highlightthickness=1)
@@ -2018,6 +2044,17 @@ def main():
         w.geometry(pos)
         update_sequence()
 
+    def draw_tab_guide(cv):
+        """코박스 샌드박스 브라우저의 탭 4개를 그려 '로컬 재생 목록'(네 번째)을 가리킨다"""
+        cv.delete("all"); names = ["온라인 시나리오", "로컬 시나리오", "온라인 재생 목록", "로컬 재생 목록"]
+        wbox, h, gap, x, y = px(108), px(24), px(6), px(2), px(2)
+        for i, nm in enumerate(names):
+            on = i == 3
+            rrect(cv, x, y, x + wbox, y + h, 5, fill=("#E8702A" if on else C["bg"]), outline="#E8702A", width=1)
+            cv.create_text(x + wbox / 2, y + h / 2, text=nm, fill=("#0B0E11" if on else "#E8702A"), font=(FAM, 8, "bold" if on else "normal"))
+            x += wbox + gap
+        cv.create_text(x - gap - wbox / 2, y + h + px(13), text="▲ 이 탭(네 번째)에서 AIMDESK 를 고르세요 · 시나리오 탭이 아닙니다", fill=C["gold"], font=(FAM, 8, "bold"), anchor="e")
+
     def remember_seq_pos():
         if seq_alive():
             w = seq_win["win"]; data["win"]["seq"] = "%+d%+d" % (w.winfo_x(), w.winfo_y())
@@ -2099,9 +2136,10 @@ def main():
         elif auto["on"] and fresh:
             # 코박스에서 플레이리스트를 아직 안 켰을 가능성이 크다 → 할 일을 크게. 첫 판이 들어오면 자동 진행 상태로 바뀐다
             key_ok = bool(kst["key"]) and can_send(kst["key"])
-            msg = (f"코박스에서 시작하세요: ESC → 샌드박스 브라우저 → '로컬 재생 목록' 탭 → {seq_win['title']} ▶ 플레이 (상단 토글 '도전 과제'). "
+            msg = (f"코박스에서 시작하세요: ESC → 샌드박스 브라우저 → 네 번째 탭 '로컬 재생 목록'(시나리오 탭 아님) → 목록에서 {seq_win['title']} 선택 → ▶ 플레이 (상단 토글 '도전 과제'). "
                    + (f"첫 판({sname(seq_win['seq'][0])})이 끝나면 앱이 {kst['key']} 키로 이어갑니다" if key_ok
-                      else "⚠ 아래 NEXT 키를 먼저 설정하세요 — 없으면 판이 끝나도 앱이 다음 판으로 넘기지 못합니다"))
+                      else "⚠ 아래 NEXT 키를 먼저 설정하세요 — 없으면 판이 끝나도 앱이 다음 판으로 넘기지 못합니다")
+                   + " · 목록에 AIMDESK 가 없으면 코박스를 껐다 켜세요. 그래도 없으면 '딥링크 방식' 토글을 켜면 앱이 시나리오를 직접 보냅니다")
             if played > 0 and nxt > 0:
                 msg += f" · 오늘 이미 {played}판: 이어서 치는 중이면 다음은 {sname(seq_win['seq'][nxt])}, 플레이리스트를 새로 시작하면 자동으로 1번부터 다시 셉니다"
             col = C["gold"] if key_ok else C["val"]
@@ -2128,6 +2166,11 @@ def main():
         else:
             msg = f"자동 진행 꺼짐 ({mode_txt}) — 코박스에서 직접 넘기거나 '건너뛰기 ▶'"
         cfg(seq_win["auto_lbl"], text=msg, fg=col)
+        g = seq_win.get("guide"); show_guide = bool(auto["on"] and fresh and nxt is not None)
+        if g is not None and g.winfo_exists():
+            if show_guide and not g.winfo_manager():
+                g.pack(anchor="w", padx=12, pady=(2, 4), after=seq_win["auto_lbl"]); draw_tab_guide(g)
+            elif not show_guide and g.winfo_manager(): g.pack_forget()
         if seq_win.get("key_lbl") is not None and seq_win["key_lbl"].winfo_exists():
             kl = key_line(kst) if auto["mode"] == "key" else ("딥링크 방식 — 키를 누르지 않고 매 판 steam:// 링크를 보냅니다", "hint")
             cfg(seq_win["key_lbl"], text=kl[0], fg=C[kl[1]])
@@ -2294,8 +2337,11 @@ def main():
         update_sequence()
 
     def run_playlist(plname):
-        sd = data.get("stats_dir")
-        if sd: ensure_playlists(sd)                    # 로컬 플레이리스트 AIMDESK Day/Friday/Probe 설치
+        sd = data.get("stats_dir"); wrote = 0
+        if sd: _, _, wrote = ensure_playlists(sd)      # 로컬 플레이리스트 AIMDESK Day/Friday/Probe/Bench 설치
+        was_running = kovaaks_running()
+        if wrote and was_running:                      # 코박스는 시작할 때 Playlists 폴더를 읽는다 — 켜진 채로 새로 쓴 파일은 재시작해야 보인다
+            show_toast("⚠ 플레이리스트를 새로 설치했습니다 — 코박스가 켜져 있었다면 껐다 켜야 '로컬 재생 목록'에 보입니다", "warn")
         open_sequence(plname)
         if not seq_win["seq"] or not seq_alive():
             if not launch_kovaaks(): show_toast("스팀 실행 실패 — Steam이 켜져 있는지 확인하고 코박스를 직접 실행하세요", "warn")
@@ -2430,7 +2476,7 @@ def main():
         lt = tk.Frame(lh, bg=C["card"]); lt.pack(side="left")
         tk.Label(lt, text="오늘 루틴", font=FH, bg=C["card"], fg=C["txt"]).pack(anchor="w")
         pl = day_state["pl"]
-        tk.Label(lt, text=(f"▶ 실행 → 코박스 ESC → 샌드박스 브라우저 '로컬 재생 목록' → {pl} ▶ 플레이 (상단 토글 '도전 과제'). "
+        tk.Label(lt, text=(f"▶ 실행 → 코박스 ESC → 샌드박스 브라우저 → 네 번째 탭 '로컬 재생 목록' → {pl} ▶ 플레이 ('도전 과제' 토글). "
                            "판이 끝나면 앱이 NEXT 키를 대신 눌러 다음 판으로 — 결과창에선 기다리기") if pl else "오늘은 휴식 — 컨디션만 적어도 됩니다",
                  font=FS, bg=C["card"], fg=C["hint"], wraplength=px(300), justify="left").pack(anchor="w", pady=(0, 2))
         day_state["sess_lbl"] = tk.Label(lt, text="", font=FNS, bg=C["card"], fg=C["sub"], wraplength=px(300), justify="left")
@@ -2540,14 +2586,22 @@ def main():
     RBtn(plrow, "폴더 선택", pick_stats, padx=12, pady=5).pack(side="left")
     RBtn(plrow, "플레이리스트 재설치", lambda: (install_playlists(), None),
          padx=12, pady=5).pack(side="left", padx=(8, 0))
+    RBtn(plrow, "폴더 열기", lambda: (PL_STATE["dir"] and open_uri(str(PL_STATE["dir"])), None),
+         padx=12, pady=5).pack(side="left", padx=(8, 0))
     pl_lbl = tk.Label(stc, text="", font=FS, bg=C["card"], fg=C["hint"], wraplength=px(268), justify="left"); pl_lbl.pack(anchor="w", pady=(5, 0))
     def install_playlists():
         sd = data.get("stats_dir")
         if not sd:
             pl_lbl.configure(text="stats 폴더를 먼저 지정하세요", fg=C["val"]); return
-        n, d_ = ensure_playlists(sd)
-        if n: pl_lbl.configure(text=f"플레이리스트 {n}개 설치 ✓ — 코박스 '로컬 재생 목록'에 AIMDESK Day · Friday · Probe · Bench", fg=C["ok"])
-        else: pl_lbl.configure(text="설치 실패 — Playlists 폴더를 못 찾았습니다", fg=C["val"])
+        n, d_, wrote = ensure_playlists(sd)
+        if n:
+            msg = f"플레이리스트 {n}개 설치 ✓ → 코박스 샌드박스 브라우저 네 번째 탭 '로컬 재생 목록'에 AIMDESK Day · Friday · Probe · Bench"
+            if PL_STATE["tpl"]: msg += f" (파일 형식은 코박스가 만든 '{PL_STATE['tpl']}' 을 따름)"
+            col = C["ok"]
+            if wrote and kovaaks_running():
+                msg += "\n⚠ 코박스가 켜진 채로 설치됨 — 목록에 안 보이면 코박스를 껐다 켜세요"; col = C["gold"]
+            pl_lbl.configure(text=msg, fg=col)
+        else: pl_lbl.configure(text="설치 실패 — Playlists 폴더를 못 찾았습니다 (stats 폴더가 …\\FPSAimTrainer\\FPSAimTrainer\\stats 인지 확인)", fg=C["val"])
     def sync_stats_lbl():
         ok = data.get("stats_dir") and Path(data["stats_dir"]).is_dir()
         p = data["stats_dir"] if ok else ""
@@ -3090,7 +3144,7 @@ def main():
             return
         root.destroy()
     root.protocol("WM_DELETE_WINDOW", on_close)
-    _DBG.update(root=root, data=data, refresh=refresh, refresh_tab=refresh_tab, dirty=dirty, cur_tab=cur_tab, show=show,
+    _DBG.update(root=root, pl_lbl=pl_lbl, data=data, refresh=refresh, refresh_tab=refresh_tab, dirty=dirty, cur_tab=cur_tab, show=show,
                 scan_once=scan_once, tick=tick, seq_win=seq_win, auto=auto, routine_rows=routine_rows, day_state=day_state,
                 tq=tq, status_lbl=status_lbl, status_dot=status_dot, show_toast=show_toast, render_toasts=render_toasts,
                 toast=toast, toast_tick=toast_tick, on_close=on_close, left_scroll=left_scroll, right_scroll=right_scroll,
@@ -3339,6 +3393,17 @@ if __name__ == "__main__":
         ks = key_status("F5", None); assert ks["key"] == "F5" and ks["mismatch"] is None and "여야" in key_line(ks)[0]
         assert dict(PLAYLISTS)["AIMDESK Bench"] == [(k, 1) for s in SUBS for k, _ in s[3]] and len(dict(PLAYLISTS)["AIMDESK Bench"]) == 18 and len(PLAYLISTS) == 4
         assert seq_rows_apply(["pasu"], [True], None, [None], lambda k: (None, None))[0][0][6] == "건너뜀"
+        import tempfile as _tf
+        with _tf.TemporaryDirectory() as _td:
+            _st = Path(_td) / "FPSAimTrainer" / "stats"; _st.mkdir(parents=True)
+            _n, _d, _w = ensure_playlists(_st); assert (_n, _w) == (4, 4) and _d == Path(_td) / "FPSAimTrainer" / "Saved" / "SaveGames" / "Playlists"
+            _raw = (_d / "AIMDESK Bench.json").read_bytes(); assert _raw[:2] == b"\xff\xfe" and "\r\n" in _raw.decode("utf-16")        # 기본: UTF-16 BOM + CRLF
+            _obj = json.loads(_raw.decode("utf-16")); assert _obj["playlistName"] == "AIMDESK Bench" and [x["scenario_Name"] for x in _obj["scenarioList"]] == [SCEN[k][0] for k, _ in BENCH]
+            assert ensure_playlists(_st)[2] == 0                                                                    # 같은 내용이면 다시 쓰지 않는다
+            (_d / "Mine.json").write_text(json.dumps({"playlistName": "Mine", "version": 3, "scenarioList": [{"scenario_Name": "x", "play_Count": 1}]}), encoding="utf-8")
+            _n, _d, _w = ensure_playlists(_st); assert (_n, _w) == (4, 4) and PL_STATE["tpl"] == "Mine" and PL_STATE["enc"] == "utf-8"
+            _raw = (_d / "AIMDESK Day.json").read_bytes(); assert _raw[:1] == b"{" and b"\r\n" not in _raw            # 코박스 파일 형식(UTF-8, LF)을 따라간다
+            _obj = json.loads(_raw.decode("utf-8")); assert _obj["version"] == 3 and _obj["playlistName"] == "AIMDESK Day" and len(_obj["scenarioList"]) == len(dict(PLAYLISTS)["AIMDESK Day"])
         os.environ["AIMDESK_TODAY"] = "2026-09-05"; assert today_date().weekday() == 5
         os.environ["AIMDESK_TODAY"] = "bad"; assert today_date() == date.today(); del os.environ["AIMDESK_TODAY"]
         print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK")
