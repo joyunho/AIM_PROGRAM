@@ -1968,7 +1968,7 @@ def main():
         Toggle(opt, "항상 위", lambda: bool(data.get("seq_topmost", True)), set_topmost).pack(side="left")
         Toggle(opt, "딥링크 방식", lambda: auto["mode"] == "link", set_mode_link).pack(side="left", padx=(6, 0))
         Toggle(opt, "간단히", lambda: bool(data.get("seq_compact", False)), set_compact).pack(side="left", padx=(6, 0))
-        tk.Label(bottom, text="Space 자동  Ctrl+N 건너뛰기  Ctrl+R 다시 보내기  Esc 닫기  ·  이름 클릭 = 시나리오 상세", font=FS, bg=C["bg"], fg=C["dim"]).pack(anchor="w", padx=12, pady=(0, 10))
+        tk.Label(bottom, text="Space 자동 · Ctrl+N 건너뛰기 · Ctrl+R 다시 · Esc 닫기 · 이름 클릭 = 상세", font=FS, bg=C["bg"], fg=C["dim"]).pack(anchor="w", padx=12, pady=(0, 10))
         def on_seq_key(e):
             if isinstance(e.widget, RBtn) and e.keysym in ("space", "Return"): return   # 버튼 자체가 처리
             act = seq_shortcut_action(e.keysym, e.state, isinstance(e.widget, tk.Entry))
