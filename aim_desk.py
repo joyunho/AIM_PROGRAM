@@ -35,8 +35,53 @@ def sname(k):
     return SCEN[k][0].replace("VT ", "").replace(" Novice S5", "")
 PROBE = ["w4", "pasu", "eddie", "snake", "aether", "fly"]          # 측정: 그날 '첫 판'
 WARMUP = [("ground", 2), ("frog", 1), ("float", 1)]               # 트래킹 웜업→정확→속도 (중복 없음)
-MAIN   = [("ww5", 3), ("popcorn", 3), ("dot", 6), ("drift", 3), ("cts", 2)]
+MAIN   = [("ww5", 3), ("popcorn", 3), ("dot", 6), ("drift", 3), ("cts", 2)]   # v3.1 까지의 고정 본훈련 (호환용)
 FRIDAY = [("raw", 12), ("csphere", 12)]
+
+# 본훈련 테마 — 매일 같은 17판을 치는 게 지겨워지지 않도록 월~목이 서로 다른 결을 갖는다.
+# 판 수는 모두 17로 맞춰 세션 길이(약 45분)를 유지한다. 프로브 6판은 '측정 도구'라 절대 바뀌지 않는다.
+MAIN_THEMES = [
+    ("clk", "클리킹 집중", "한 번에 정확히 찍는 손", [("ww5", 4), ("w4", 4), ("pasu", 3), ("popcorn", 3), ("frog", 3)]),
+    ("trk", "트래킹 집중", "붙어서 따라가는 손",     [("raw", 5), ("csphere", 4), ("ground", 4), ("aether", 4)]),
+    ("swt", "스위칭 집중", "표적을 옮겨 다니는 손",   [("dot", 5), ("eddie", 4), ("drift", 4), ("cts", 4)]),
+    ("mix", "전체 순회", "9개 갈래를 한 판씩 훑는 날", [("pasu", 2), ("ww5", 2), ("frog", 2), ("snake", 2), ("ground", 2),
+                                                    ("raw", 2), ("dot", 2), ("drift", 2), ("penta", 1)]),
+]
+
+def weak_theme(pb: dict):
+    """약점 집중 — 지금 가장 약한 서브카테고리 두 개에서 17판. 기록이 모자라면 None"""
+    subs = [(s_, subE(s_, pb or {})) for s_ in SUBS]
+    subs = [(s_, e) for s_, e in subs if e is not None]
+    if len(subs) < 2: return None
+    subs.sort(key=lambda x: x[1])
+    a, b = subs[0][0], subs[1][0]
+    items = [(a[3][0][0], 5), (a[3][1][0], 4), (b[3][0][0], 4), (b[3][1][0], 4)]
+    return ("weak", "약점 집중", f"가장 낮은 {a[1]}·{a[2]} · {b[1]}·{b[2]} 를 파는 날", items)
+
+def theme_line(dkey: str, pb: dict = None) -> str:
+    """루틴 카드 맨 위 한 줄 — 오늘 무엇이 다른지와 내일 무엇이 오는지. 매일 같은 걸 친다는 느낌을 없애기 위한 것"""
+    d = date.fromisoformat(dkey)
+    dt = ["v", "v", "v", "v", "w", "b", "r"][d.weekday()]
+    if dt != "v": return ""
+    mt = main_theme(dkey, pb)
+    out = f"오늘 본훈련 · {mt[1]} — {mt[2]}"
+    for i in range(1, 5):                                    # 다음 발로 데이 예고 (금·토·일은 고정 루틴이라 건너뛴다 — 목요일이면 +4일)
+        nd = d + timedelta(days=i)
+        if ["v", "v", "v", "v", "w", "b", "r"][nd.weekday()] == "v":
+            nm = main_theme(nd.isoformat(), pb)[1]
+            out += (f" · 내일은 {nm}" if i == 1 else f" · {i}일 뒤는 {nm}")
+            break
+    return out
+
+def main_theme(dkey: str, pb: dict = None):
+    """그날의 본훈련 테마 (id, 이름, 설명, [(시나리오, 판수)]).
+    날짜만으로 정해진다 — 앱을 껐다 켜도, 코박스에 설치된 플레이리스트와도 늘 같은 것을 가리키게.
+    (주차 + 요일) % 4 라서 월~목이 한 주 안에서 모두 다르고, 다음 주에는 요일마다 한 칸씩 밀린다."""
+    d = date.fromisoformat(dkey)
+    i = (d.isocalendar()[1] + d.weekday()) % 4
+    if i == 3:
+        return weak_theme(pb or {}) or MAIN_THEMES[3]   # 기록이 쌓이면 '전체 순회' 자리가 '약점 집중'으로 바뀐다
+    return MAIN_THEMES[i]
 
 SUBS = [
  ("dyn","클리킹","Dynamic",  [("pasu",[555,660,745,800]),("popcorn",[390,500,600,720])]),
@@ -489,8 +534,10 @@ def bench_src_label(src, n: int) -> str:
     if src == SEED_DATE: return f"기준값 · {int(SEED_DATE[5:7])}/{int(SEED_DATE[8:10])} · 9/9"
     return f"{src} · {n}/9"
 
-def seq_rows_apply(seq, done, nxt, scores, rs):
-    """순서창 각 줄의 표시값. rs(key) -> (최근 평균, 역대 최고). 반환: (rows, 신기록 수, 평균 대비 비율 목록)
+def seq_rows_apply(seq, done, nxt, scores, rs, vf=None):
+    """순서창 각 줄의 표시값. rs(key) -> (최근 평균, 역대 최고). vf(key, 점수) -> (판정, 문구, 색키).
+    vf 를 주면 '▲12/▼12' 대신 '평소·잘 나옴·낮음·최고' 로 적는다 — 한 판 점수는 평균과 몇 점 차이인지가
+    의미 없을 만큼 흔들리기 때문. 반환: (rows, 신기록 수, 평균 대비 비율 목록)
     row = (num_fg, nm_fg, st_text, st_fg, sc_text, sc_fg, dl_text, dl_fg) — 색은 팔레트 키 이름"""
     rows, pb_keys, rel = [], set(), []
     for i, k in enumerate(seq):
@@ -500,12 +547,17 @@ def seq_rows_apply(seq, done, nxt, scores, rs):
                 rows.append(("dim", "dim", "–", "dim", "", "txt", "건너뜀", "dim")); continue
             avg, pmax = rs(k)
             if avg: rel.append(s_ / avg - 1)
-            new_pb = pmax is not None and s_ > pmax
+            if vf is not None:
+                kind, label, colk = vf(k, s_)
+                new_pb = kind == "pb"
+                dl = (label, colk)
+            else:
+                new_pb = pmax is not None and s_ > pmax
+                if new_pb: dl = ("PB!", "gold")
+                elif avg is not None:
+                    d_ = s_ - avg; dl = (f"{'▲' if d_ >= 0 else '▼'}{abs(d_):.0f}", "ok" if d_ >= 0 else "val")
+                else: dl = ("", "dim")
             if new_pb: pb_keys.add(k)
-            if new_pb: dl = ("PB!", "gold")
-            elif avg is not None:
-                d_ = s_ - avg; dl = (f"{'▲' if d_ >= 0 else '▼'}{abs(d_):.0f}", "ok" if d_ >= 0 else "val")
-            else: dl = ("", "dim")
             rows.append(("dim", "dim", "✓", "ok", str(s_), "gold" if new_pb else "txt", dl[0], dl[1]))
         elif i == nxt:
             avg, _ = rs(k)
@@ -600,9 +652,8 @@ def session_summary(plays, rc: dict) -> dict:
 def fmt_session(s: dict) -> str:
     if not s["n"]: return ""
     hm = lambda t: t[:5].replace(".", ":")
-    parts = [f"오늘 {s['n']}판", f"{s['minutes']}분 ({hm(s['start'])}–{hm(s['end'])})", f"PB {s['n_pb']}"]
-    if s["rel"] is not None: parts.append(f"7일 평균 대비 {'▲' if s['rel'] >= 0 else '▼'}{abs(s['rel'])*100:.1f}%")
-    return " · ".join(parts)
+    # 신기록 수는 띠 줄이 말한다 (판별 판정 기준) — 여기서 다른 기준으로 또 세면 같은 화면에 다른 숫자가 뜬다
+    return f"{s['minutes']}분 ({hm(s['start'])}–{hm(s['end'])})"
 
 def training_days(data: dict) -> set:
     return {d for d, e in data["days"].items() if d != SEED_DATE and (e.get("first") or e.get("count"))}
@@ -983,6 +1034,214 @@ def fmt_growth_row(r: dict):
     return (sname(r["key"]), f"{r['seed']} → {r['pb']}", "정체" if r["stalled"] else f"+{r['pct']:.1f}%",
             f"{r['band_seed']}→{r['band_pb']}" if r["band_seed"] != r["band_pb"] else "")
 
+# ══════════════════ 성장 가시화 (v3.2) ══════════════════
+# 왜 필요한가: 한 판 점수는 같은 날 반복 사이에도 2~3%, 날마다 5% 안팎으로 흔들린다.
+# 그래서 '7일 평균보다 1점 낮음'을 ▼로 적으면 정상 변동을 하락으로 오해하게 된다.
+# 아래는 '평소 범위'를 먼저 구하고, 그 범위를 벗어난 판만 좋음/낮음으로 부르기 위한 계산이다.
+
+def robust_band(vals, k: float = 1.0):
+    """반복 점수의 '평소 범위'. 중앙값 ± k·(1.4826·MAD). 판이 4개 미만이면 None(판단 보류).
+    표준편차 대신 MAD 를 쓰는 이유: 한 판 크게 튀어도 범위가 흔들리지 않게."""
+    v = sorted(x for x in vals if x is not None)
+    n = len(v)
+    if n < 4: return None
+    def med(a):
+        m = len(a)
+        return a[m // 2] if m % 2 else (a[m // 2 - 1] + a[m // 2]) / 2
+    mid = med(v)
+    sd = 1.4826 * med(sorted(abs(x - mid) for x in v))
+    if sd <= 0: sd = max(1.0, mid * 0.02)          # 전부 같은 값이면 2% 를 폭으로
+    return {"mid": mid, "sd": sd, "lo": mid - k * sd, "hi": mid + k * sd, "n": n}
+
+def play_verdict(score, band, pb=None):
+    """한 판 판정 → (종류, 문구, 팔레트키). 종류: pb·high·normal·low·new(비교 대상 부족)"""
+    if score is None: return ("new", "", "dim")
+    if pb is not None and score > pb: return ("pb", "최고", "gold")
+    if not band: return ("new", "", "dim")
+    if score >= band["hi"]: return ("high", "잘 나옴", "ok")
+    if score <= band["lo"]: return ("low", "낮음", "dim")
+    return ("normal", "평소", "sub")
+
+def band_z(score, band):
+    """평소 범위 기준 위치. 0 = 평소 한가운데, +1 = 범위 위끝. 범위가 없으면 None"""
+    if score is None or not band or not band["sd"]: return None
+    return (score - band["mid"]) / band["sd"]
+
+def scen_play_pool(data: dict, key: str, end_day: str, n_days: int = 10, include_today: bool = False):
+    """최근 n_days 일간 그 시나리오의 '모든 판' 점수 (평소 범위 계산용). 오늘은 기본 제외 —
+    오늘 판을 넣으면 오늘이 좋은 날일 때 범위가 같이 올라가 판정이 무뎌진다."""
+    end = date.fromisoformat(end_day)
+    out = []
+    for i in range(0 if include_today else 1, n_days + 1):
+        dk = (end - timedelta(days=i)).isoformat()
+        if dk == SEED_DATE: continue
+        out += [p[2] for p in day_plays(data, dk) if p[0] == key]
+    return out
+
+def scen_day_band(data: dict, key: str, end_day: str, field: str = "best", n_days: int = 14):
+    """어제까지 '그날 베스트'(또는 그날 첫 판)들의 평소 범위. 줄에 뜨는 값은 하루치 대표값이라
+    판 단위 범위(scen_band)로 재면 좁아서 늘 벗어난다."""
+    def calc():
+        end = date.fromisoformat(end_day); vals = []
+        for i in range(1, n_days + 1):
+            dk = (end - timedelta(days=i)).isoformat()
+            if dk == SEED_DATE: continue
+            v = data["days"].get(dk, {}).get(field, {}).get(key)
+            if v is not None: vals.append(v)
+        return robust_band(vals)
+    return memo(("dayband", key, end_day, field, n_days), calc)
+
+def scen_band(data: dict, key: str, end_day: str):
+    """그 시나리오의 평소 범위 (기록 버전 안에서 한 번만 계산)"""
+    return memo(("band", key, end_day), lambda: robust_band(scen_play_pool(data, key, end_day)))
+
+def day_dots(data: dict, key: str, end_day: str, n_days: int = 14):
+    """점 하나 = 한 판. [(날짜순번 0..n-1, 그날 판 순번, 점수)] — 첫날부터 그릴 수 있는 조밀한 그림용"""
+    end = date.fromisoformat(end_day); out = []
+    for i in range(n_days):
+        dk = (end - timedelta(days=n_days - 1 - i)).isoformat()
+        if dk == SEED_DATE: continue
+        for j, p in enumerate(x for x in day_plays(data, dk) if x[0] == key):
+            out.append((i, j, p[2]))
+    return out
+
+def sub_shape(scores: dict, base: dict = None):
+    """9개 서브카테고리 에너지와 기준 대비 차이 — 총점 하나가 아니라 '어디가 어떻게'를 보여주기 위한 것"""
+    out = []
+    for s_ in SUBS:
+        e = subE(s_, scores or {}); b = subE(s_, base) if base else None
+        out.append({"id": s_[0], "cat": s_[1], "sub": s_[2], "e": e, "base": b,
+                    "delta": (e - b) if (e is not None and b is not None) else None})
+    return out
+
+def within_day_gain(plays):
+    """오늘 3판 이상 친 시나리오에서 (뒤 절반 평균 - 앞 절반 평균) / 앞 절반 평균 × 100 의 중앙값.
+    웜업이 실제로 먹혔는지를 그날 안에서만 보는 값 — 날짜 간 노이즈를 타지 않는다. 대상 없으면 None"""
+    by = {}
+    for k, _t, sc in plays: by.setdefault(k, []).append(sc)
+    rates = []
+    for k, v in by.items():
+        if len(v) < 3: continue
+        h = len(v) // 2
+        a = sum(v[:h]) / h; b = sum(v[-h:]) / h
+        if a > 0: rates.append((b - a) / a * 100)
+    if not rates: return None
+    rates.sort(); m = len(rates)
+    return rates[m // 2] if m % 2 else (rates[m // 2 - 1] + rates[m // 2]) / 2
+
+# ── 훈련 레벨: 실력이 제자리인 날에도 '한 일'은 남는다는 걸 보이게 하는 값 ──
+#    점수가 아니라 '친 판 수 + 신기록'에서만 오른다. 앱을 켜 두는 것만으로는 1점도 오르지 않는다.
+LEVELS = [(0, "입문"), (30, "수련"), (80, "훈련병"), (160, "정조준"), (280, "견습 사수"), (440, "숙련 사수"),
+          (660, "정예 사수"), (950, "저격수"), (1320, "명사수"), (1800, "달인"), (2400, "장인")]
+
+def total_pbs(data: dict) -> int:
+    """누적 신기록 횟수. 기준값(SEED)은 출발선이라 세지 않는다"""
+    best = dict(data["days"].get(SEED_DATE, {}).get("best", {})); n = 0
+    for d in sorted(data["days"]):
+        if d == SEED_DATE: continue
+        for k, v in sorted(data["days"][d].get("best", {}).items()):
+            if v is not None and v > best.get(k, 0): n += 1; best[k] = v
+    return n
+
+def total_xp(data: dict) -> int:
+    """친 판 1점 + 신기록 5점"""
+    plays = sum(len(e.get("plays") or []) for d, e in data["days"].items() if d != SEED_DATE)
+    if not plays:                                    # 옛 파일엔 판별 기록이 없다 — 그날 판 수 합으로
+        plays = sum(sum((e.get("count") or {}).values()) for d, e in data["days"].items() if d != SEED_DATE)
+    return plays + 5 * total_pbs(data)
+
+def level_of(xp: int):
+    """(레벨, 이름, 이번 레벨 시작 xp, 다음 레벨 xp 또는 None)"""
+    i = 0
+    for j, (t, _) in enumerate(LEVELS):
+        if xp >= t: i = j
+    return (i + 1, LEVELS[i][1], LEVELS[i][0], LEVELS[i + 1][0] if i + 1 < len(LEVELS) else None)
+
+def fmt_level(xp: int) -> str:
+    lv, name, lo, hi = level_of(xp)
+    return f"Lv.{lv} {name}" + (f"  {xp - lo}/{hi - lo}" if hi else f"  {xp}")
+
+def level_frac(xp: int) -> float:
+    _lv, _n, lo, hi = level_of(xp)
+    return 1.0 if not hi else max(0.0, min(1.0, (xp - lo) / (hi - lo)))
+
+def play_base(data: dict, key: str, dkey: str):
+    """그 시나리오의 '평소 값' 기준선. 판 단위 평소 범위 → 어제까지 베스트 평균 → 기준값(SEED) 순으로 물러난다.
+    1일차에도 반드시 하나는 나오게 (그래야 첫날부터 그릴 게 생긴다)"""
+    b = scen_band(data, key, dkey)
+    if b: return b["mid"]
+    avg, _ = recent_stats(data, key, dkey, "best")
+    if avg: return avg
+    return SEED.get(key)
+
+def session_points(data: dict, dkey: str, plays=None):
+    """오늘 판마다 (순번, 시나리오, 점수, 평소 대비 %, 판정). 첫날부터 27개 점이 찍힌다"""
+    plays = day_plays(data, dkey) if plays is None else plays
+    pb = pb_before_day(data, dkey); out = []
+    for i, (k, _t, sc) in enumerate(plays):
+        base = play_base(data, k, dkey)
+        pct = ((sc - base) / base * 100) if base else None
+        kind = play_verdict(sc, scen_band(data, k, dkey), pb.get(k))[0]
+        out.append((i, k, sc, pct, kind))
+        if sc > pb.get(k, 0): pb[k] = sc
+    return out
+
+def session_caption(pts, gain) -> str:
+    """세션 곡선 밑 한 줄 — 오늘 안에서만 확인되는 사실만 적는다 (날짜 간 노이즈를 타지 않게)"""
+    have = [p[3] for p in pts if p[3] is not None]
+    if not have: return "판이 들어오면 여기에 한 판씩 점이 찍힙니다"
+    parts = [f"{len(pts)}판"]
+    m = sorted(have)[len(have) // 2]
+    parts.append(f"평소 대비 중앙 {m:+.1f}%")
+    if gain is not None: parts.append(f"세션 중 상승 {gain:+.1f}% (앞 절반 → 뒤 절반)")
+    n_pb = sum(1 for p in pts if p[4] == "pb")
+    if n_pb: parts.append(f"신기록 {n_pb}")
+    return " · ".join(parts)
+
+# ── 오늘의 띠: 계획한 판을 칸으로 깔고, 끝난 판을 판정 색으로 채운다 ──
+VERDICT_FILL = {"pb": "gold", "high": "ok", "normal": "sub", "low": "dim", "new": "sub"}
+VERDICT_NAME = {"pb": "최고", "high": "잘 나옴", "normal": "평소", "low": "낮음", "new": "첫 기록"}
+
+def pb_before_day(data: dict, dkey: str) -> dict:
+    """그날 이전까지의 시나리오별 최고 기록. '그 판이 칠 때 신기록이었나'를 보려면 오늘이 빠진 값이 필요하다"""
+    out = {}
+    for d in sorted(data["days"]):
+        if d >= dkey: continue
+        for k, v in data["days"][d]["best"].items():
+            if v is not None and v > out.get(k, 0): out[k] = v
+    return out
+
+def day_verdicts(data: dict, dkey: str, plays=None):
+    """오늘 친 판마다 (시나리오, 점수, 판정) — 시간순.
+    신기록은 '그 판 직전'까지의 최고와 견주고, 평소 범위는 어제까지의 판들로 잡는다."""
+    plays = day_plays(data, dkey) if plays is None else plays
+    pb = pb_before_day(data, dkey); out = []
+    for k, _t, sc in plays:
+        kind = play_verdict(sc, scen_band(data, k, dkey), pb.get(k))[0]
+        out.append((k, sc, kind))
+        if sc > pb.get(k, 0): pb[k] = sc
+    return out
+
+def ribbon_cells(plan_n: int, kinds):
+    """띠 각 칸의 팔레트 키. 계획보다 더 치면 칸이 늘어난다 ('todo' = 아직 안 친 칸)"""
+    n = max(int(plan_n or 0), len(kinds))
+    return [(VERDICT_FILL.get(kinds[i], "sub") if i < len(kinds) else "todo") for i in range(n)]
+
+def ribbon_counts(kinds) -> dict:
+    out = {k: 0 for k in VERDICT_NAME}
+    for k in kinds: out[k] = out.get(k, 0) + 1
+    return out
+
+def fmt_ribbon(plan_n: int, kinds) -> str:
+    """띠 밑 한 줄. 판정 개수만 적는다 — '7일 평균 대비 ▼5%' 같은 표현은 정상 변동을 하락으로 읽게 만든다"""
+    n = len(kinds)
+    if not n: return f"오늘 0/{plan_n}판 — 한 판만 쳐도 여기가 채워집니다" if plan_n else "오늘 0판"
+    c = ribbon_counts(kinds)
+    parts = [f"오늘 {n}/{max(plan_n, n)}판"]
+    for k in ("pb", "high", "normal", "low"):
+        if c[k]: parts.append(f"{VERDICT_NAME[k]} {c[k]}")
+    return " · ".join(parts)
+
 # ── 단축키 ──
 def shortcut_action(keysym: str, state: int, in_entry: bool):
     ctrl = bool(state & 0x4)
@@ -1203,19 +1462,19 @@ def _pl_bytes(obj, enc="utf-16", crlf=True) -> bytes:
 PL_STATE = {"n": 0, "dir": None, "wrote": 0, "tpl": None, "enc": "utf-16"}
 
 BENCH = [(k, 1) for s in SUBS for k, _ in s[3]]          # 토요일 벤치 18개 — 볼테익 표 순서 그대로
-PLAYLISTS = [
-    ("AIMDESK Day",     WARMUP + [(k, 1) for k in PROBE] + MAIN),
-    ("AIMDESK Friday",  WARMUP + [(k, 1) for k in PROBE] + FRIDAY),
-    ("AIMDESK Probe",   [(k, 1) for k in PROBE]),
-    ("AIMDESK Bench",   BENCH),
-]
+def playlists_for(dkey: str, pb: dict = None):
+    """그날 설치할 플레이리스트 4개. 'AIMDESK Day' 의 본훈련만 날마다 달라진다."""
+    return [("AIMDESK Day",    WARMUP + [(k, 1) for k in PROBE] + list(main_theme(dkey, pb)[3])),
+            ("AIMDESK Friday", WARMUP + [(k, 1) for k in PROBE] + FRIDAY),
+            ("AIMDESK Probe",  [(k, 1) for k in PROBE]),
+            ("AIMDESK Bench",  BENCH)]
 
 def playlists_dir(stats_dir):
     r"""...\FPSAimTrainer\stats -> ...\FPSAimTrainer\Saved\SaveGames\Playlists"""
     p = Path(stats_dir)
     return p.parent / "Saved" / "SaveGames" / "Playlists"
 
-def ensure_playlists(stats_dir):
+def ensure_playlists(stats_dir, dkey: str = None, pb: dict = None):
     """플레이리스트 JSON 을 코박스 폴더(…\\Saved\\SaveGames\\Playlists)에 설치. (성공 개수, 폴더, 이번에 새로 쓴 개수) 반환.
     폴더에 코박스가 만든 플레이리스트가 있으면 그 파일의 인코딩·키 구성을 그대로 따른다 (없으면 UTF-16 BOM + CRLF)"""
     try:
@@ -1225,7 +1484,7 @@ def ensure_playlists(stats_dir):
             except OSError: return 0, d, 0
         tpl, enc, crlf = _pl_template(d)
         ok = wrote = 0
-        for name, items in PLAYLISTS:
+        for name, items in playlists_for(dkey or today_date().isoformat(), pb):
             payload = _pl_bytes(_pl(name, items, tpl), enc, crlf)
             fp = d / (name + ".json")
             try:
@@ -1792,6 +2051,10 @@ def main():
     hdr_mi.pack(side="right", padx=(0, 16))
     hdr_streak = tk.Label(rf, text="", font=FNS, bg=C["bg"], fg=C["sub"])
     hdr_streak.pack(side="right", padx=(0, 16))
+    hdr_lv = tk.Label(rf, text="", font=FNS, bg=C["bg"], fg=C["sub"])
+    hdr_lv.pack(side="right", padx=(0, 6))
+    lv_cv = tk.Canvas(rf, width=px(22), height=px(22), bg=C["bg"], highlightthickness=0)
+    lv_cv.pack(side="right", padx=(0, 16))
 
     # 토스트 — 최대 3개 쌓이고, 클릭하면 닫히고, 각각 10초 뒤 사라진다
     toast = tk.Frame(root, bg=C["bg"])
@@ -1898,7 +2161,7 @@ def main():
     def sequence_for(plname):
         """플레이리스트(또는 토요일 벤치 18개)를 실제 치는 순서대로 펼친 key 목록"""
         if plname:
-            return [k for k, n in dict(PLAYLISTS)[plname] for _ in range(n)]
+            return [k for k, n in dict(playlists_for(today_key[0], data["pb"]))[plname] for _ in range(n)]
         if day_state["dt"] == "b":
             return [k for s in SUBS for k, _ in s[3]]
         return []
@@ -2063,7 +2326,13 @@ def main():
         if not seq_alive(): return
         done, nxt, scores = seq_status()
         dkey = today_key[0]
-        rows, n_pb, rel = seq_rows_apply(seq_win["seq"], done, nxt, scores, lambda k: recent_stats(data, k, dkey))
+        _pbb = pb_before_day(data, dkey); _seen_pb = {}
+        def _vf(k_, sc_):
+            base = max(_pbb.get(k_, 0), _seen_pb.get(k_, 0)) or None
+            r_ = play_verdict(sc_, scen_band(data, k_, dkey), base)
+            _seen_pb[k_] = max(_seen_pb.get(k_, 0), sc_)
+            return r_
+        rows, n_pb, rel = seq_rows_apply(seq_win["seq"], done, nxt, scores, lambda k: recent_stats(data, k, dkey), _vf)
         block_txt = None
         for bk, bs_, be_ in blocks_of(seq_win["seq"]):
             pts = [(i, scores[i]) for i in range(bs_, be_) if scores[i] is not None]
@@ -2338,7 +2607,7 @@ def main():
 
     def run_playlist(plname):
         sd = data.get("stats_dir"); wrote = 0
-        if sd: _, _, wrote = ensure_playlists(sd)      # 로컬 플레이리스트 AIMDESK Day/Friday/Probe/Bench 설치
+        if sd: _, _, wrote = ensure_playlists(sd, today_key[0], data["pb"])   # 오늘 테마로 로컬 플레이리스트 설치
         was_running = kovaaks_running()
         if wrote and was_running:                      # 코박스는 시작할 때 Playlists 폴더를 읽는다 — 켜진 채로 새로 쓴 파일은 재시작해야 보인다
             show_toast("⚠ 플레이리스트를 새로 설치했습니다 — 코박스가 켜져 있었다면 껐다 켜야 '로컬 재생 목록'에 보입니다", "warn")
@@ -2436,6 +2705,35 @@ def main():
             w.lift()
         update_detail()
 
+    def draw_ribbon(cv, cells, pop=None):
+        """한 칸 = 한 판. 아직 안 친 칸은 어둡게, 끝난 칸은 판정 색으로. pop 은 방금 채워진 칸(살짝 크게)"""
+        cv.delete("all")
+        n = len(cells)
+        if not n: return
+        W = max(cv.winfo_width(), px(240)); H = max(cv.winfo_height(), px(24))
+        gap = px(2) if n <= 40 else 1
+        tw = (W - gap * (n - 1)) / n
+        for i, key in enumerate(cells):
+            x1 = i * (tw + gap); x2 = x1 + tw
+            grow = px(3) if (pop is not None and i == pop) else 0
+            y1, y2 = px(5) - grow, H - px(5) + grow
+            fill = C["card2"] if key == "todo" else C[key]
+            if tw >= px(5): rrect(cv, x1, y1, x2, y2, min(px(3), tw / 2), fill=fill, outline="")
+            else: cv.create_rectangle(x1, y1, x2, y2, fill=fill, outline="", width=0)
+
+    def ribbon_pop(cv, cells, i, frame=0):
+        """방금 채워진 칸이 커졌다 돌아온다 — 6프레임 240ms 로 끝나고 타이머를 남기지 않는다"""
+        if not cv.winfo_exists(): return
+        if frame >= 6: draw_ribbon(cv, cells); return
+        draw_ribbon(cv, cells, pop=i if frame < 3 else None)
+        root.after(40, lambda: ribbon_pop(cv, cells, i, frame + 1))
+
+    def today_plan_n():
+        """오늘 계획된 판 수 (띠 칸 수)"""
+        pl = day_state.get("pl")
+        if pl: return sum(n for _, n in dict(playlists_for(today_key[0], data["pb"]))[pl])
+        return 18 if day_state.get("dt") == "b" else 0
+
     def add_section(title, extra=None):
         f = tk.Frame(left_scroll.body, bg=C["card"]); f.pack(fill="x", pady=(10, 3))
         lb = tk.Label(f, text=title, font=FCAP, bg=C["card"], fg=C["gold"]); lb.pack(side="left")
@@ -2479,6 +2777,10 @@ def main():
         tk.Label(lt, text=(f"▶ 실행 → 코박스 ESC → 샌드박스 브라우저 → 네 번째 탭 '로컬 재생 목록' → {pl} ▶ 플레이 ('도전 과제' 토글). "
                            "판이 끝나면 앱이 NEXT 키를 대신 눌러 다음 판으로 — 결과창에선 기다리기") if pl else "오늘은 휴식 — 컨디션만 적어도 됩니다",
                  font=FS, bg=C["card"], fg=C["hint"], wraplength=px(250), justify="left").pack(anchor="w", pady=(0, 2))   # 250: 최소 폭에서도 오른쪽 버튼 3개가 잘리지 않게
+        _tl = theme_line(today_key[0], data["pb"])
+        if _tl:
+            tk.Label(lt, text=_tl, font=FB, bg=C["card"], fg=C["gold"], wraplength=px(250),
+                     justify="left").pack(anchor="w", pady=(2, 2))
         day_state["sess_lbl"] = tk.Label(lt, text="", font=FNS, bg=C["card"], fg=C["sub"], wraplength=px(250), justify="left")
         day_state["sess_lbl"].pack(anchor="w", pady=(0, 4))
         day_state["coach"] = []
@@ -2493,14 +2795,22 @@ def main():
                      padx=12, pady=8).pack(side="right", padx=(8, 0))
             RBtn(lh, "순서 보기", lambda: open_sequence(pl), padx=12, pady=8).pack(side="right")
 
+        rib = tk.Frame(left_scroll.body, bg=C["card"]); rib.pack(fill="x", pady=(8, 0))
+        day_state["rib_cv"] = tk.Canvas(rib, height=px(28), bg=C["card"], highlightthickness=0)
+        day_state["rib_cv"].pack(fill="x")
+        day_state["rib_lbl"] = tk.Label(rib, text="", font=FNS, bg=C["card"], fg=C["sub"], anchor="w")
+        day_state["rib_lbl"].pack(fill="x", pady=(4, 0))
+        day_state["rib_cells"] = []
+
         if dt in ("v", "w"):
             add_section("① 워밍업 · 트래킹 → 정확 → 속도 (점수 무시)")
             for k, n in WARMUP: add_row("warm", k, n)
             add_section("② 프로브 · 그날 첫 판이 측정값")
             for k in PROBE: add_row("probe", k, 1)
             if dt == "v":
-                add_section("③ 본훈련 · 과부하 블록")
-                for k, n in MAIN: add_row("main", k, n)
+                mt = main_theme(today_key[0], data["pb"])
+                add_section(f"③ 본훈련 · {mt[1]}")
+                for k, n in mt[3]: add_row("main", k, n)
             else:
                 add_section("③ 금요일 약점 · 컨트롤")
                 for k, n in FRIDAY: add_row("main", k, n)
@@ -2594,7 +2904,7 @@ def main():
         sd = data.get("stats_dir")
         if not sd:
             pl_lbl.configure(text="stats 폴더를 먼저 지정하세요", fg=C["val"]); return
-        n, d_, wrote = ensure_playlists(sd)
+        n, d_, wrote = ensure_playlists(sd, today_key[0], data["pb"])
         if n:
             msg = f"플레이리스트 {n}개 설치 ✓ → 코박스 샌드박스 브라우저 네 번째 탭 '로컬 재생 목록'에 AIMDESK Day · Friday · Probe · Bench"
             if PL_STATE["tpl"]: msg += f" (파일 형식은 코박스가 만든 '{PL_STATE['tpl']}' 을 따름)"
@@ -2613,6 +2923,8 @@ def main():
     # ══ 성장 탭 ══
     fg_ = tk.Frame(body, bg=C["bg"]); frames["grow"] = fg_
     grow_scroll = VScroll(fg_); grow_scroll.pack(fill="both", expand=True); gbody = grow_scroll.body
+    sess_card = card(gbody, pad=(0, 0)); sess_card.pack(fill="x", pady=(0, 12))
+    cv_sess = tk.Canvas(sess_card, height=px(214), bg=C["card"], highlightthickness=0); cv_sess.pack(fill="x")
     idx_card = card(gbody, pad=(0, 0)); idx_card.pack(fill="x", pady=(0, 12))
     cv_idx = tk.Canvas(idx_card, height=px(236), bg=C["card"], highlightthickness=0); cv_idx.pack(fill="x")
     ben_card = card(gbody, pad=(0, 0)); ben_card.pack(fill="x", pady=(0, 12))
@@ -2790,7 +3102,16 @@ def main():
 
     # ── 차트 ──
     def draw_idx(cv, series):
-        cv.delete("all"); W = max(cv.winfo_width(), px(400)); H = px(236)
+        cv.delete("all"); W = max(cv.winfo_width(), px(400))
+        _has = [p for p in series if p["vi"] is not None or p["oi"] is not None]
+        H = px(236) if _has else px(74)                     # 그릴 게 없으면 자리를 덜 차지한다
+        if int(cv.cget("height")) != H: cv.configure(height=H)
+        if not _has:
+            cv.create_text(px(16), px(20), text="프로브 지수", anchor="w", fill=C["txt"], font=FB)
+            cv.create_text(px(16), px(46), anchor="w", fill=C["hint"], font=FS,
+                           text="그날 첫 판만 모아 컨디션을 뺀 실력 곡선을 그립니다 — 프로브 4일치가 쌓이면 여기에 나타납니다")
+            return
+        H = px(236)
         cv.create_text(px(16), px(16), text="프로브 지수", anchor="w", fill=C["txt"], font=FB)
         cv.create_text(W-px(16), px(16), text="점 = 일별 · 선 = 7일 평균", anchor="e", fill=C["hint"], font=FS)
         cv.create_rectangle(px(96), px(11), px(108), px(14), fill=C["val"], outline="")
@@ -2846,6 +3167,41 @@ def main():
             cv.create_text(x, y-px(14), text=str(e), fill=C["txt"], font=FNS)
             cv.create_text(x, H-px(10), text=k[5:], fill=C["dim"], font=FNS)
 
+    def draw_session(cv, pts, gain):
+        """오늘 친 판을 점으로. 세로는 '그 시나리오 평소 대비 %' — 시나리오마다 점수 단위가 달라 그대로 겹쳐 그릴 수 없다.
+        점을 선으로 잇지 않는 이유: 옆 점은 다른 시나리오라 이으면 없는 추세가 보인다."""
+        cv.delete("all")
+        W = max(cv.winfo_width(), px(420)); H = px(214)
+        L, R, T, B = px(52), px(16), px(34), px(38)
+        cv.create_text(px(14), px(17), text="오늘 세션", anchor="w", fill=C["txt"], font=FB)
+        cv.create_text(W - px(14), px(17), text="점 하나 = 한 판 · 세로 = 그 시나리오 평소 대비",
+                       anchor="e", fill=C["hint"], font=FNS)
+        vals = [p[3] for p in pts if p[3] is not None]
+        if not vals:
+            cv.create_text(W / 2, H / 2, text=session_caption(pts, gain), fill=C["hint"], font=FS); return
+        rng = max(6.0, float(math.ceil(max(abs(min(vals)), abs(max(vals))))))
+        Y = lambda v: T + (H - T - B) * (1 - (v + rng) / (2 * rng))
+        for v, txt in ((rng, f"+{rng:.0f}%"), (0.0, "평소"), (-rng, f"-{rng:.0f}%")):
+            y = Y(v)
+            cv.create_line(L, y, W - R, y, fill=C["dim"] if v == 0 else C["line"], dash=() if v == 0 else (2, 3))
+            cv.create_text(L - px(7), y, text=txt, anchor="e", fill=C["sub"] if v == 0 else C["dim"], font=FNS)
+        n = len(pts)
+        X = lambda i: L + (W - L - R) * (i / (n - 1) if n > 1 else 0.5)
+        prev_k = None; last_lbl = -1e9
+        for i, k, _sc, pct, kind in pts:
+            if k != prev_k:                                   # 시나리오가 바뀌는 자리에 옅은 칸막이와 이름
+                if prev_k is not None:
+                    cv.create_line(X(i) - px(3), T, X(i) - px(3), H - B, fill=C["line"])
+                if X(i) - last_lbl >= px(44):                 # 자리가 있을 때만 — 짧은 블록이 이어지면 이름이 겹친다
+                    cv.create_text(X(i), H - B + px(11), text=sname(k)[:8], anchor="w", fill=C["dim"], font=(FAM, 7))
+                    last_lbl = X(i)
+                prev_k = k
+            if pct is None: continue
+            x, y = X(i), Y(max(-rng, min(rng, pct)))
+            r = px(4) if kind == "pb" else px(3)
+            cv.create_oval(x - r, y - r, x + r, y + r, fill=C[VERDICT_FILL.get(kind, "sub")], outline="")
+        cv.create_text(px(14), H - px(12), text=session_caption(pts, gain), anchor="w", fill=C["sub"], font=FS)
+
     def draw_spark(k, cv, pbl):
         cv.delete("all"); W = max(cv.winfo_width(), px(200)); H = px(48)
         days = sorted(d_ for d_ in data["days"] if data["days"][d_]["first"].get(k) is not None)[-14:]
@@ -2857,7 +3213,17 @@ def main():
         tag = spark_tag(vals)
         pbl.configure(text=(f"PB {pb}{delta}" if pb else "") + (f" · {tag}" if tag else ""))
         if len(vals) < 2:
-            cv.create_text(W/2, H/2, text="첫 판 2개부터 선이 생깁니다", fill=C["hint"], font=FS)
+            th = th_of(k); cur = pb
+            if not th or cur is None:
+                cv.create_text(W / 2, H / 2, text="첫 판을 치면 여기가 채워집니다", fill=C["hint"], font=FS); return
+            # 첫날엔 이을 점이 없으니 '지금 어느 등급 칸에 있는지'를 보여준다 — 이건 한 판만 있어도 뜻이 있다
+            bw = W - px(24); h = px(13); x0 = px(12); y0 = px(8)
+            for i, t in enumerate(th):
+                x1 = x0 + bw * i / 4; x2 = x0 + bw * (i + 1) / 4
+                cv.create_rectangle(x1, y0, x2 - px(2), y0 + h, fill=RANKC[i] if cur >= t else C["card2"], outline="")
+            rank, t_, gap = next_rank_gap(cur, th)
+            cv.create_text(W / 2, y0 + h + px(13), font=FS, fill=C["sub"],
+                           text=(f"{rank}까지 {gap}점" if rank else "Gold 칸 ✓"))
             return
         lo, hi = min(vals), max(vals)
         if hi == lo: hi += 1
@@ -2876,13 +3242,24 @@ def main():
         return cands[-1] if cands else None
 
     def set_next_marker(nk):
-        if nk == routine_next[0]: return
-        for kind, key, target, bar, cl, sl, gc, mark, nml, rowf in routine_rows:
-            if key == routine_next[0] or key == nk:
-                on = key == nk
-                for w_ in (rowf, mark, nml, bar, cl, sl): w_.configure(bg=C["card2"] if on else C["card"])
-                mark.configure(text="▶" if on else "")
-        routine_next[0] = nk
+        """다음에 칠 줄 하나만 강조. 같은 시나리오가 프로브와 본훈련에 같이 있을 수 있어(테마에 따라)
+        '키'가 아니라 '줄 번호'로 고른다 — 아직 안 끝난 줄이 우선."""
+        day = data["days"].get(today_key[0], blank_day())
+        cands = [i for i, r in enumerate(routine_rows) if r[1] == nk] if nk is not None else []
+        idx = None
+        for i in cands:
+            kind, key, target = routine_rows[i][0], routine_rows[i][1], routine_rows[i][2]
+            done = (day["first"].get(key) is not None) if kind == "probe" else day["count"].get(key, 0) >= target
+            if not done: idx = i; break
+        if idx is None and cands: idx = cands[0]
+        if idx == routine_next[0]: return
+        for i in (routine_next[0], idx):
+            if i is None or i >= len(routine_rows): continue
+            kind, key, target, bar, cl, sl, gc, mark, nml, rowf = routine_rows[i]
+            on = i == idx
+            for w_ in (rowf, mark, nml, bar, cl, sl): w_.configure(bg=C["card2"] if on else C["card"])
+            mark.configure(text="▶" if on else "")
+        routine_next[0] = idx
 
     def refresh_today():
         dkey = today_key[0]; day = data["days"].get(dkey, blank_day())
@@ -2891,6 +3268,7 @@ def main():
             _, nx_, _ = seq_status()
             if nx_ is not None: seq_next = seq_win["seq"][nx_]
         unmapped = False
+        pb_prev = pb_before_day(data, dkey)
         for kind, key, target, bar, cl, sl, gc, mark, nml, rowf in routine_rows:
             c = day["count"].get(key, 0)
             done = (day["first"].get(key) is not None) if kind == "probe" else c >= target
@@ -2909,15 +3287,11 @@ def main():
             if val is None:
                 sl.configure(text="", fg=C["dim"])
             else:
-                avg, pmax = recent_stats(data, key, dkey, field)
-                if pmax is not None and val > pmax: txt, col = f"{val} PB!", C["gold"]
-                elif avg is not None:
-                    d_ = val - avg
-                    txt, col = f"{val} {'▲' if d_ >= 0 else '▼'}{abs(d_):.0f}", (C["ok"] if d_ >= 0 else C["val"])
-                else: txt, col = f"{val}", C["txt"]
+                kind_, label_, colk_ = play_verdict(val, scen_day_band(data, key, dkey, field), pb_prev.get(key))
+                txt, col = f"{val} {label_}".strip(), C[colk_]
                 if kind == "bench" and th_of(key):                                       # 벤치 데이: ▲▼ 대신 다음 등급까지 (순서창이 ▲▼를 보여 준다)
-                    g_, gcol = fmt_gap(val, th_of(key)); is_pb = pmax is not None and val > pmax
-                    txt, col = f"{val}{' PB!' if is_pb else ''} · {g_}", (C["gold"] if is_pb else gcol)
+                    g_, gcol = fmt_gap(val, th_of(key)); is_pb = kind_ == "pb"
+                    txt, col = f"{val}{' 최고' if is_pb else ''} · {g_}", (C["gold"] if is_pb else gcol)
                 cfg(sl, text=txt, fg=col)
         if unmapped and not day_state.get("redraw_pending"):
             day_state["redraw_pending"] = True
@@ -2931,6 +3305,18 @@ def main():
                 cfg(lb, text=f"{title} · {d_}/{t_}", fg=C["ok"] if d_ >= t_ else C["gold"])
         # 다음에 칠 판 표시 (순서창이 열려 있으면 그 포인터, 아니면 첫 미완료 줄)
         set_next_marker(next_routine_key([(r[0], r[1], r[2]) for r in routine_rows], day, seq_next))
+        # 오늘의 띠
+        if day_state.get("rib_cv") is not None and day_state["rib_cv"].winfo_exists():
+            kinds = [k_ for _, _, k_ in day_verdicts(data, dkey, cur_plays())]
+            plan = today_plan_n(); cells = ribbon_cells(plan, kinds)
+            prev = day_state.get("rib_cells") or []
+            day_state["rib_cells"] = cells
+            if len(kinds) and len(cells) == len(prev) and prev[len(kinds) - 1] == "todo":
+                ribbon_pop(day_state["rib_cv"], cells, len(kinds) - 1)      # 방금 한 칸 찼다
+            else:
+                draw_ribbon(day_state["rib_cv"], cells)
+            cfg(day_state["rib_lbl"], text=fmt_ribbon(plan, kinds),
+                fg=C["gold"] if ribbon_counts(kinds)["pb"] else C["sub"])
         # 오늘 세션 요약 줄
         if day_state["sess_lbl"] is not None:
             cp = cur_plays(); keys_ = {p_[0] for p_ in cp}
@@ -2976,6 +3362,14 @@ def main():
         else:
             nprobe = memo(("nprobe",), lambda: len([1 for k_ in data["days"] if any(data["days"][k_]["first"].get(p) is not None for p in PROBE)]))
             hdr_idx.configure(text=f"지수 준비 {min(nprobe,4)}/4일", fg=C["dim"])
+        xp = memo(("xp",), lambda: total_xp(data))
+        cfg(hdr_lv, text=fmt_level(xp), fg=C["gold"] if level_frac(xp) >= 0.85 else C["sub"])
+        lv_cv.delete("all"); _r = px(9); _c = px(11)
+        lv_cv.create_oval(_c - _r, _c - _r, _c + _r, _c + _r, outline=C["line"], width=px(3))
+        _f = level_frac(xp)
+        if _f > 0:
+            lv_cv.create_arc(_c - _r, _c - _r, _c + _r, _c + _r, start=90, extent=-359.9 * _f,
+                             style="arc", outline=C["gold"] if _f >= 0.85 else C["ok"], width=px(3))
         mi = memo(("miyagi",), lambda: sum(1 for e in data["days"].values() if e["checks"].get("miyagi")))
         hdr_mi.configure(text=f"미야기 D+{min(mi, 30)}/30" + (" ✓" if mi >= 30 else ""))
         tdays = memo(("tdays",), lambda: training_days(data)); today_d = date.fromisoformat(dkey)
@@ -3009,6 +3403,8 @@ def main():
                 draw_thcells(cvth, th, x)
 
     def refresh_grow():
+        _cp = cur_plays()
+        draw_session(cv_sess, session_points(data, today_key[0], _cp), within_day_gain(_cp))
         draw_idx(cv_idx, probe_series(data))
         draw_bench_chart(cv_ben, memo(("bench_days",), lambda: bench_days(data)))
         for k, (cv, pbl) in spark_cvs.items(): draw_spark(k, cv, pbl)
@@ -3034,7 +3430,7 @@ def main():
         dirty[tab_of.get(w, cur_tab[0])] = True
         if resize_job[0]: root.after_cancel(resize_job[0])
         resize_job[0] = root.after(80, _resize_flush)
-    for cv in [cv_idx, cv_ben] + [c for c, _ in spark_cvs.values()]:
+    for cv in [cv_sess, cv_idx, cv_ben] + [c for c, _ in spark_cvs.values()]:
         tab_of[cv] = "grow"; cv.bind("<Configure>", on_resize)
     for _, cells_, _card in ben_rows.values():
         for _k, _th, _l, _g, cvth in cells_:
@@ -3052,6 +3448,7 @@ def main():
         if detail["win"] is not None and detail["win"].winfo_exists(): detail["win"].destroy()
         if seq_alive(): remember_seq_pos(); seq_win["win"].destroy()
         build_day_ui()
+        install_playlists()                     # 오늘 테마로 다시 설치 — 코박스 목록이 어제 구성으로 남지 않게
         sync_sleep_entry()
         refresh()
         root.after(300, lambda: (dirty.__setitem__("today", True), refresh_tab("today")))   # 새 줄들이 자리를 잡은 뒤 진행바를 실제 폭으로
@@ -3145,7 +3542,7 @@ def main():
             return
         root.destroy()
     root.protocol("WM_DELETE_WINDOW", on_close)
-    _DBG.update(root=root, pl_lbl=pl_lbl, data=data, refresh=refresh, refresh_tab=refresh_tab, dirty=dirty, cur_tab=cur_tab, show=show,
+    _DBG.update(root=root, pl_lbl=pl_lbl, draw_ribbon=draw_ribbon, today_plan_n=today_plan_n, cv_sess=cv_sess, hdr_lv=hdr_lv, data=data, refresh=refresh, refresh_tab=refresh_tab, dirty=dirty, cur_tab=cur_tab, show=show,
                 scan_once=scan_once, tick=tick, seq_win=seq_win, auto=auto, routine_rows=routine_rows, day_state=day_state,
                 tq=tq, status_lbl=status_lbl, status_dot=status_dot, show_toast=show_toast, render_toasts=render_toasts,
                 toast=toast, toast_tick=toast_tick, on_close=on_close, left_scroll=left_scroll, right_scroll=right_scroll,
@@ -3175,7 +3572,7 @@ if __name__ == "__main__":
         ev, ch = apply_scan(t, [("pasu", "13.00.00", 520)], "2026-01-01")
         assert d1["first"]["pasu"] == 500 and d1["best"]["pasu"] == 520 and d1["count"]["pasu"] == 2 and ev == [("pasu", 520, 20)], (d1, ev)
         # 플레이리스트 펼치기: Day = 웜업 4 + 프로브 6 + 본훈련 17
-        assert sum(n for _, n in dict(PLAYLISTS)["AIMDESK Day"]) == 27
+        assert sum(n for _, n in dict(playlists_for("2026-09-10"))["AIMDESK Day"]) == 27
         # 코박스 딥링크 형식 (3.0.0 패치노트: 공백은 %20)
         assert scenario_uri("VT Pasu Novice S5") == "steam://run/824270/?action=jump-to-scenario;name=VT%20Pasu%20Novice%20S5"
         t2 = {"days": {"2026-01-01": {"best": {"pasu": 700}, "first": {"pasu": 650}},
@@ -3263,7 +3660,7 @@ if __name__ == "__main__":
             assert SCAN_INFO["miss"] == 1 and _SCAN_STATE["sig"] is not None and _SCORE_CACHE["VT Pasu Novice S5 - Challenge - 2026.01.06-10.09.00 Stats.csv"][1] is None
         # v3 정보: 세션 요약·스트릭·주간·진행바·벤치 조언·죽음 추세
         ss = session_summary([("pasu","19.02.10",500),("dot","19.43.00",900)], {"pasu":(450,480),"dot":(1000,1100)})
-        assert ss["n"] == 2 and ss["minutes"] == 41 and ss["n_pb"] == 1 and "PB 1" in fmt_session(ss) and "41분" in fmt_session(ss), ss
+        assert ss["n"] == 2 and ss["minutes"] == 41 and ss["n_pb"] == 1 and fmt_session(ss) == "41분 (19:02–19:43)", (ss, fmt_session(ss))
         assert session_summary([("pasu","10.00.00",500),("pasu","10.01.00",520),("pasu","10.02.00",530)], {"pasu":(450,480)})["n_pb"] == 1
         assert fmt_session(session_summary([], {})) == ""
         assert streak({"2026-09-01","2026-09-02","2026-09-03"}, date(2026,9,4)) == (3, 3)
@@ -3333,6 +3730,42 @@ if __name__ == "__main__":
         g0 = growth_since_seed({"pb": dict(SEED), "days": {}}); assert all(r["stalled"] for r in g0) and energy_delta({"pb": dict(SEED)}) == (339, 339)
         g1 = growth_since_seed(hx); assert g1[0]["key"] == "pasu" and abs(g1[0]["pct"] - 5.46) < 0.01 and fmt_growth_row(g1[0])[3] == "" and g1[0]["band_pb"] == "Gold"
         assert fmt_growth_row(g1[-1])[2] == "정체"
+        # v3.2 훈련 레벨
+        assert level_of(0)[:2] == (1, "입문") and level_of(29)[0] == 1 and level_of(30)[:2] == (2, "수련")
+        assert level_of(10 ** 6)[3] is None and level_frac(10 ** 6) == 1.0
+        assert level_frac(0) == 0.0 and abs(level_frac(55) - 0.5) < 1e-9
+        assert fmt_level(55) == "Lv.2 수련  25/50", fmt_level(55)
+        _xd = {"days": {SEED_DATE: dict(blank_day(), best={"pasu": 800}),
+                        "2026-09-09": dict(blank_day(), best={"pasu": 850}, plays=[["pasu", "10.00.00", 850]] * 3),
+                        "2026-09-10": dict(blank_day(), best={"pasu": 840}, plays=[["pasu", "11.00.00", 840]] * 2)}}
+        assert total_pbs(_xd) == 1 and total_xp(_xd) == 5 + 5 * 1           # 판 5 + 신기록 1
+        assert total_xp({"days": {}}) == 0 and total_pbs({"days": {}}) == 0
+        assert total_xp({"days": {"2026-09-09": dict(blank_day(), count={"pasu": 4})}}) == 4   # 옛 파일: count 합
+        # v3.2 세션 곡선
+        bump_ver()
+        _sd = {"pb": {}, "days": {"2026-09-10": dict(blank_day(), plays=[["pasu", "10.00.00", 806], ["pasu", "10.02.00", 900]])}}
+        assert play_base(_sd, "pasu", "2026-09-10") == SEED["pasu"]                  # 첫날: 기준값으로 물러난다
+        _sp = session_points(_sd, "2026-09-10")
+        assert len(_sp) == 2 and _sp[0][3] == 0.0 and _sp[1][3] > 0
+        assert session_points({"pb": {}, "days": {}}, "2026-09-10") == []
+        assert session_caption([], None) == "판이 들어오면 여기에 한 판씩 점이 찍힙니다"
+        _cap = session_caption(_sp, 4.0)
+        assert "2판" in _cap and "평소 대비 중앙" in _cap and "세션 중 상승 +4.0%" in _cap, _cap
+        # v3.2 오늘의 띠
+        _dd = {"pb": {}, "days": {
+            "2026-09-08": dict(blank_day(), best={"pasu": 820}, plays=[["pasu", "10.00.00", 800], ["pasu", "10.02.00", 820],
+                                                                        ["pasu", "10.04.00", 790], ["pasu", "10.06.00", 810]]),
+            "2026-09-10": dict(blank_day(), plays=[["pasu", "10.00.00", 900], ["pasu", "10.02.00", 805], ["pasu", "10.04.00", 700]])}}
+        bump_ver()
+        assert pb_before_day(_dd, "2026-09-10") == {"pasu": 820} and pb_before_day(_dd, "2026-09-08") == {}
+        _v = [k for _, _, k in day_verdicts(_dd, "2026-09-10")]
+        assert _v == ["pb", "normal", "low"], _v                       # 900 신기록 → 805 평소 → 700 낮음
+        assert ribbon_cells(5, _v) == ["gold", "sub", "dim", "todo", "todo"]
+        assert ribbon_cells(2, _v) == ["gold", "sub", "dim"]           # 계획보다 더 치면 칸이 늘어난다
+        assert ribbon_cells(3, []) == ["todo"] * 3 and ribbon_cells(0, []) == []
+        assert ribbon_counts(_v)["pb"] == 1 and ribbon_counts([])["low"] == 0
+        assert fmt_ribbon(27, _v) == "오늘 3/27판 · 최고 1 · 평소 1 · 낮음 1", fmt_ribbon(27, _v)
+        assert fmt_ribbon(27, []).endswith("여기가 채워집니다") and fmt_ribbon(0, []) == "오늘 0판"
         assert shortcut_action("2", 0, False) == "tab:grow" and shortcut_action("2", 0, True) is None and shortcut_action("F5", 0, True) == "rescan"
         assert shortcut_action("r", 0x4, False) == "run" and shortcut_action("r", 0, False) is None and shortcut_action("o", 0x4, True) == "folder"
         assert seq_shortcut_action("space", 0, False) == "auto" and seq_shortcut_action("space", 0, True) is None and seq_shortcut_action("n", 0x4, False) == "skip"
@@ -3370,6 +3803,14 @@ if __name__ == "__main__":
         assert visible_rows([True]*5, None, set(), True) == ([3, 4], 3, 0)
         assert visible_rows([True, False, True, False], 1, set(), True) == ([0, 1, 3], 1, 0)
         r2, npb2, _ = seq_rows_apply(["pasu","pasu"], [True, True], None, [850, 860], lambda k: (800.0, 806)); assert npb2 == 1 and r2[1][6] == "PB!"
+        _b = robust_band([790, 800, 810, 820])
+        _vfn = lambda k_, sc_: play_verdict(sc_, _b, 820)
+        _r3, _n3, _ = seq_rows_apply(["pasu", "pasu"], [True, True], None, [805, 900], lambda k: (800.0, 820), _vfn)
+        assert _r3[0][6] == "평소" and _r3[0][7] == "sub" and _r3[1][6] == "최고" and _n3 == 1, (_r3[0], _r3[1])
+        _dd2 = {"days": {"2026-09-06": dict(blank_day(), best={"pasu": 800}), "2026-09-07": dict(blank_day(), best={"pasu": 810}),
+                         "2026-09-08": dict(blank_day(), best={"pasu": 790}), "2026-09-09": dict(blank_day(), best={"pasu": 820})}}
+        bump_ver(); _db = scen_day_band(_dd2, "pasu", "2026-09-10"); assert _db and _db["n"] == 4 and _db["mid"] == 805
+        assert scen_day_band(_dd2, "pasu", "2026-09-10", "first") is None            # first 기록이 없으면 판단 보류
         sh = scen_history(hx, "pasu", "2026-09-03"); assert [h["date"] for h in sh] == [SEED_DATE, "2026-09-01"] and sh[1]["first"] == 800
         ssm = scen_summary(hx, "pasu", "2026-09-03"); assert ssm["pb"] == 850 and ssm["pb_date"] == "2026-09-01" and ssm["trend"] is None and "PB 850" in fmt_scen_summary(ssm)
         # v3.1: 키 이름 정규화 · 키 상태 · 벤치 플레이리스트 · 날짜 재정의
@@ -3392,7 +3833,24 @@ if __name__ == "__main__":
         ks = key_status(None, None); assert ks["key"] is None and ks["src"] is None and "PlaylistNext" in key_line(ks)[0] and key_line(ks)[1] == "val"
         ks = key_status(None, "Gamepad_X"); assert ks["key"] is None and ks["unknown"] == "Gamepad_X" and key_line(ks)[1] == "val"
         ks = key_status("F5", None); assert ks["key"] == "F5" and ks["mismatch"] is None and "여야" in key_line(ks)[0]
-        assert dict(PLAYLISTS)["AIMDESK Bench"] == [(k, 1) for s in SUBS for k, _ in s[3]] and len(dict(PLAYLISTS)["AIMDESK Bench"]) == 18 and len(PLAYLISTS) == 4
+        _pls = playlists_for("2026-09-10")
+        assert dict(_pls)["AIMDESK Bench"] == [(k, 1) for s in SUBS for k, _ in s[3]] and len(dict(_pls)["AIMDESK Bench"]) == 18 and len(_pls) == 4
+        # 요일 변주: 월~목이 한 주 안에서 모두 다르고, 판 수는 늘 17, 다음 주엔 밀린다
+        _mon = date.fromisoformat("2026-09-07")
+        _wk = [main_theme((_mon + timedelta(days=i)).isoformat())[0] for i in range(4)]
+        assert len(set(_wk)) == 4, _wk
+        _wk2 = [main_theme((_mon + timedelta(days=7 + i)).isoformat())[0] for i in range(4)]
+        assert _wk2 != _wk and len(set(_wk2)) == 4, _wk2
+        for _t in MAIN_THEMES: assert sum(n for _, n in _t[3]) == 17, _t[0]
+        assert sum(n for _, n in main_theme("2026-09-10", SEED)[3]) == 17
+        assert main_theme("2026-09-10")[0] != "weak"                      # 기록 없으면 약점 테마로 안 감
+        assert {main_theme((_mon + timedelta(days=i)).isoformat(), SEED)[0] for i in range(4)} == {"clk", "trk", "swt", "weak"}
+        _w = weak_theme(SEED); assert _w and _w[0] == "weak" and sum(n for _, n in _w[3]) == 17
+        assert weak_theme({}) is None and weak_theme({"pasu": 700}) is None
+        assert theme_line("2026-09-07", SEED).startswith("오늘 본훈련 · ") and "내일은 " in theme_line("2026-09-07", SEED)   # 월→화
+        assert "4일 뒤는 " in theme_line("2026-09-10", SEED), theme_line("2026-09-10", SEED)             # 목→월
+        assert theme_line("2026-09-11") == "" and theme_line("2026-09-12") == "" and theme_line("2026-09-13") == ""   # 금·토·일은 고정
+        assert sum(n for _, n in dict(playlists_for("2026-09-10", SEED))["AIMDESK Day"]) == 27
         assert seq_rows_apply(["pasu"], [True], None, [None], lambda k: (None, None))[0][0][6] == "건너뜀"
         import tempfile as _tf
         with _tf.TemporaryDirectory() as _td:
@@ -3404,9 +3862,27 @@ if __name__ == "__main__":
             (_d / "Mine.json").write_text(json.dumps({"playlistName": "Mine", "version": 3, "scenarioList": [{"scenario_Name": "x", "play_Count": 1}]}), encoding="utf-8")
             _n, _d, _w = ensure_playlists(_st); assert (_n, _w) == (4, 4) and PL_STATE["tpl"] == "Mine" and PL_STATE["enc"] == "utf-8"
             _raw = (_d / "AIMDESK Day.json").read_bytes(); assert _raw[:1] == b"{" and b"\r\n" not in _raw            # 코박스 파일 형식(UTF-8, LF)을 따라간다
-            _obj = json.loads(_raw.decode("utf-8")); assert _obj["version"] == 3 and _obj["playlistName"] == "AIMDESK Day" and len(_obj["scenarioList"]) == len(dict(PLAYLISTS)["AIMDESK Day"])
+            _obj = json.loads(_raw.decode("utf-8")); assert _obj["version"] == 3 and _obj["playlistName"] == "AIMDESK Day" and len(_obj["scenarioList"]) == len(dict(playlists_for(today_date().isoformat()))["AIMDESK Day"])
         os.environ["AIMDESK_TODAY"] = "2026-09-05"; assert today_date().weekday() == 5
         os.environ["AIMDESK_TODAY"] = "bad"; assert today_date() == date.today(); del os.environ["AIMDESK_TODAY"]
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK")
+        # v3.2 성장 가시화
+        assert robust_band([100, 100, 100]) is None                      # n<4 판단 보류
+        b_ = robust_band([90, 95, 100, 105, 110]); assert b_["mid"] == 100 and b_["n"] == 5 and b_["lo"] < 100 < b_["hi"]
+        assert abs(robust_band([100] * 6)["sd"] - 2.0) < 1e-9            # 전부 같으면 2%
+        assert play_verdict(None, b_) == ("new", "", "dim") and play_verdict(500, None)[0] == "new"
+        assert play_verdict(120, b_)[0] == "high" and play_verdict(80, b_) == ("low", "낮음", "dim") and play_verdict(100, b_)[0] == "normal"
+        assert play_verdict(101, b_, pb=100)[0] == "pb" and play_verdict(99, b_, pb=100)[0] == "normal"
+        assert abs(band_z(b_["mid"] + b_["sd"], b_) - 1.0) < 1e-9 and band_z(100, None) is None
+        _d = {"days": {"2026-09-08": dict(blank_day(), plays=[["pasu", "10.00.00", 800], ["pasu", "10.02.00", 820]]),
+                       "2026-09-09": dict(blank_day(), plays=[["pasu", "10.00.00", 810]]),
+                       "2026-09-10": dict(blank_day(), plays=[["pasu", "10.00.00", 900]])}}
+        assert scen_play_pool(_d, "pasu", "2026-09-10") == [810, 800, 820]                  # 오늘 제외
+        assert 900 in scen_play_pool(_d, "pasu", "2026-09-10", include_today=True)
+        assert day_dots(_d, "pasu", "2026-09-10", 3) == [(0, 0, 800), (0, 1, 820), (1, 0, 810), (2, 0, 900)]
+        _sh = sub_shape({"pasu": 660, "popcorn": 500}, SEED)
+        assert len(_sh) == 9 and _sh[0]["id"] == "dyn" and _sh[0]["e"] == 200 and _sh[0]["delta"] < 0 and _sh[1]["e"] is None
+        assert within_day_gain([("a", "1", 100), ("a", "2", 100)]) is None                   # 3판 미만 제외
+        assert within_day_gain([("a", "1", 100), ("a", "2", 110), ("a", "3", 120)]) == 20.0  # 앞1 뒤1: 100→120
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK")
         sys.exit(0)
     main()
