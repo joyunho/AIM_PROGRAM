@@ -1369,6 +1369,7 @@ def shortcut_action(keysym: str, state: int, in_entry: bool):
     if keysym == "F5": return "rescan"
     if keysym == "Escape": return "dismiss"
     if in_entry and not ctrl: return None
+    if ctrl and keysym.lower() == "b": return "cast"
     if ctrl and keysym.lower() == "o": return "folder"
     if ctrl and keysym.lower() == "r": return "run"
     if in_entry: return None
@@ -3229,7 +3230,7 @@ def main():
         _b = RBtn(srow if _i < 3 else srow2, scale_label(_v), (lambda v=_v: set_scale(v)), padx=7, pady=4)
         _b.pack(side="left", padx=(0, 4)); scale_btns[_v] = _b
     sync_scale_btns()
-    RBtn(vc, "방송 화면 열기", open_broadcast, bg="#1B2A22", fg=C["ok"], padx=12, pady=6).pack(anchor="w", pady=(8, 0))
+    RBtn(vc, "방송 화면 열기 (Ctrl+B)", open_broadcast, bg="#1B2A22", fg=C["ok"], padx=12, pady=6).pack(anchor="w", pady=(8, 0))
     brow = tk.Frame(vc, bg=C["card"]); brow.pack(anchor="w", pady=(8, 0))
     def set_broadcast(v):
         if bool(data.get("broadcast")) == bool(v): return
@@ -3870,10 +3871,11 @@ def main():
             if seq_alive(): update_sequence()
         elif act == "dismiss": tq.clear(); render_toasts()
         elif act == "folder": pick_stats()
+        elif act == "cast": open_broadcast()
         elif act == "run" and day_state["pl"]: run_playlist(day_state["pl"])
         return "break"
     root.bind("<Key>", on_key)
-    legend_lbl.configure(text="1·2·3·4 탭  F5 재스캔  Ctrl+R 실행")
+    legend_lbl.configure(text="1·2·3·4 탭  F5 재스캔  Ctrl+R 실행  Ctrl+B 방송 화면")
 
     root.deiconify(); root.update_idletasks(); win_dark()
     if data["win"].get("zoomed") and sys.platform == "win32":
@@ -4158,6 +4160,7 @@ if __name__ == "__main__":
         assert "PB 1 🏆" in _fs2 and "%" in _fs2, _fs2                                  # counts 없으면 옛 표기 유지
         assert shortcut_action("2", 0, False) == "tab:grow" and shortcut_action("2", 0, True) is None and shortcut_action("F5", 0, True) == "rescan"
         assert shortcut_action("r", 0x4, False) == "run" and shortcut_action("r", 0, False) is None and shortcut_action("o", 0x4, True) == "folder"
+        assert shortcut_action("b", 0x4, False) == "cast" and shortcut_action("b", 0, False) is None
         assert seq_shortcut_action("space", 0, False) == "auto" and seq_shortcut_action("space", 0, True) is None and seq_shortcut_action("n", 0x4, False) == "skip"
         assert seq_shortcut_action("Escape", 0, True) == "blur" and seq_shortcut_action("Escape", 0, False) == "close" and seq_shortcut_action("r", 0, False) is None
         # v3 권장: 정체·다음 한 걸음·벤치 준비도·주간 리캡
