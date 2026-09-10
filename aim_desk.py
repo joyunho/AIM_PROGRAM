@@ -923,13 +923,19 @@ def remaining_estimate(plays, remaining: int):
     gap = sorted(gaps)[len(gaps) // 2] if len(gaps) >= 3 else 1.5
     return round(remaining * gap)
 
-def fmt_seq_summary(played, total, n_pb, rel, probe, idx, est_min, block_txt=None) -> str:
+def fmt_seq_summary(played, total, n_pb, rel, probe, idx, est_min, block_txt=None, counts=None) -> str:
+    """counts 를 주면 '평균 대비 ▼4.8%' 대신 판정 개수를 적는다 — 그 정도 차이는 정상 변동이라
+    하락으로 읽히면 안 된다 (줄마다 이미 판정이 붙어 있어 뜻도 겹친다)"""
     parts = []
     if block_txt: parts.append(block_txt)
     parts.append(f"오늘 {played}/{total}판")
-    if n_pb: parts.append(f"PB {n_pb} 🏆")
-    if rel:
-        m = sum(rel) / len(rel) * 100; parts.append(f"{'▲' if m >= 0 else '▼'}{abs(m):.1f}%")
+    if counts is not None:
+        for kk in ("pb", "high", "normal", "low"):
+            if counts.get(kk): parts.append(f"{VERDICT_NAME[kk]} {counts[kk]}")
+    else:
+        if n_pb: parts.append(f"PB {n_pb} 🏆")
+        if rel:
+            m = sum(rel) / len(rel) * 100; parts.append(f"{'▲' if m >= 0 else '▼'}{abs(m):.1f}%")
     if probe:
         pr = f"프로브 {probe[0]}/{probe[1]}"
         vi, oi = idx
@@ -2461,11 +2467,12 @@ def main():
         if not seq_alive(): return
         done, nxt, scores = seq_status()
         dkey = today_key[0]
-        _pbb = pb_before_day(data, dkey); _seen_pb = {}
+        _pbb = pb_before_day(data, dkey); _seen_pb = {}; _kinds = []
         def _vf(k_, sc_):
             base = max(_pbb.get(k_, 0), _seen_pb.get(k_, 0)) or None
             r_ = play_verdict(sc_, scen_band(data, k_, dkey), base)
             _seen_pb[k_] = max(_seen_pb.get(k_, 0), sc_)
+            _kinds.append(r_[0])
             return r_
         rows, n_pb, rel = seq_rows_apply(seq_win["seq"], done, nxt, scores, lambda k: recent_stats(data, k, dkey), _vf)
         block_txt = None
@@ -2525,7 +2532,7 @@ def main():
             remaining = sum(1 for i in range(total) if not done[i]); cp = cur_plays()
             est = remaining_estimate(cp, remaining) if (len(cp) >= 2 or remaining <= 15) else None
             summ = fmt_seq_summary(played, total - (done_n - played), n_pb, rel, probe_status(data["days"].get(dkey, blank_day())) if day_state["dt"] in ("v", "w") else None,
-                                   (HDR_STATE["vi"], HDR_STATE["oi"]), est, block_txt)
+                                   (HDR_STATE["vi"], HDR_STATE["oi"]), est, block_txt, ribbon_counts(_kinds))
             if done_n - played: summ += f" · 건너뜀 {done_n - played}"
             if nxt is None:
                 avg_ = {k_: recent_stats(data, k_, dkey, "first")[0] for k_ in PROBE}
@@ -4145,6 +4152,10 @@ if __name__ == "__main__":
         assert mask_user_path("D:\\Games\\stats") == "D:\\Games\\stats" and mask_user_path("") == "" and mask_user_path(None) == ""
         assert fmt_ribbon(27, _v) == "오늘 3/27판 · 최고 1 · 평소 1 · 낮음 1", fmt_ribbon(27, _v)
         assert fmt_ribbon(27, []).endswith("여기가 채워집니다") and fmt_ribbon(0, []) == "오늘 0판"
+        _fs = fmt_seq_summary(3, 27, 1, [0.05, -0.05], None, (None, None), None, None, ribbon_counts(_v))
+        assert "오늘 3/27판" in _fs and "최고 1" in _fs and "%" not in _fs, _fs        # 판정 개수로 (▲▼% 없음)
+        _fs2 = fmt_seq_summary(3, 27, 1, [0.05], None, (None, None), None)
+        assert "PB 1 🏆" in _fs2 and "%" in _fs2, _fs2                                  # counts 없으면 옛 표기 유지
         assert shortcut_action("2", 0, False) == "tab:grow" and shortcut_action("2", 0, True) is None and shortcut_action("F5", 0, True) == "rescan"
         assert shortcut_action("r", 0x4, False) == "run" and shortcut_action("r", 0, False) is None and shortcut_action("o", 0x4, True) == "folder"
         assert seq_shortcut_action("space", 0, False) == "auto" and seq_shortcut_action("space", 0, True) is None and seq_shortcut_action("n", 0x4, False) == "skip"
