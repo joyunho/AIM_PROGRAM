@@ -188,6 +188,30 @@ check("session card opens with real content", cw is not None and cw.winfo_exists
 _ct = [D["card_win"]["cv"].itemcget(i, "text") for i in D["card_win"]["cv"].find_all() if D["card_win"]["cv"].type(i) == "text"]
 check("card names the day, theme and play count", any("발로 데이" in x for x in _ct) and any(x.startswith("5판") for x in _ct), str(_ct[:4]))
 cw.destroy(); pump(80)
+# ── 방송 화면: 창을 키우면 글씨도 커져야 한다 (시청자 쪽에서 읽히도록) ──
+import tkinter.font as _tkfont
+def big_px(cv):
+    b = 0
+    for i in cv.find_all():
+        if cv.type(i) != "text": continue
+        try: b = max(b, abs(_tkfont.Font(font=cv.itemcget(i, "font")).cget("size")))
+        except Exception: pass
+    return b
+D["open_broadcast"](); pump(300)
+bw = D["bcast"]["win"]; bcv = D["bcast"]["cv"]
+check("broadcast view opens with content", bw is not None and bw.winfo_exists() and len(bcv.find_all()) > 5, str(len(bcv.find_all())))
+bw.geometry("900x200"); pump(350); small = big_px(bcv)
+bw.geometry("900x420"); pump(350); large = big_px(bcv)
+check("broadcast text grows with the window", large > small * 1.5 > 0, f"{small} -> {large}")
+_bt = [bcv.itemcget(i, "text") for i in bcv.find_all() if bcv.type(i) == "text"]
+check("broadcast shows theme and play count", any("집중" in x or "데이" in x for x in _bt) and any(x.endswith("판") for x in _bt), str(_bt[:4]))
+bw.destroy(); pump(80)
+# 글씨 크기 설정은 저장되고 다시 켤 때 쓰인다 (테스트에선 프로세스를 띄우지 않는다)
+D["set_scale"](1.5); pump(60)
+check("scale setting saved for next launch", data.get("ui_scale") == 1.5 and "geo" not in data["win"], str(data.get("ui_scale")))
+check("current scale button highlighted", D["scale_btns"][1.5].bgc == ad.C["gold"], D["scale_btns"][1.5].bgc)
+D["set_scale"](None); pump(60)
+check("auto scale restores", data.get("ui_scale") is None and D["scale_btns"][None].bgc == ad.C["gold"])
 coach = [l.cget("text") for l in D["day_state"]["coach"]]; check("coach card has lines", any(coach) and ("지수" in coach[0] or "프로브" in coach[0]), str(coach)[:160])
 plus = btn(D["steppers"][0], "＋"); plus.cmd(); pump(50)
 check("deaths trend after +1", "1회" in D["dth_lbl"].cget("text"), D["dth_lbl"].cget("text"))

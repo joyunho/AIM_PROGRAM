@@ -538,6 +538,17 @@ def bench_days(data: dict):
 UI_SCALE = [1.0]
 def px(n): return int(round(n * UI_SCALE[0]))
 
+SCALE_STEPS = [1.0, 1.25, 1.5, 1.75, 2.0]      # 녹화하면 100% 글씨는 시청자 화면에서 뭉갠다
+
+def scale_label(v) -> str:
+    return "자동" if not v else f"{int(round(float(v) * 100))}%"
+
+def pick_scale(saved, env, auto) -> float:
+    """실제로 쓸 배율. 환경변수(테스트) > 사용자가 고른 값 > 모니터 DPI"""
+    if env: return float(env)
+    if saved: return max(0.8, min(3.0, float(saved)))
+    return max(1.0, float(auto or 1.0))
+
 TOAST_MS = 10000
 HDR_STATE = {"vi": None, "oi": None}
 COACH_STATE = {"brief": [], "validity": None, "fat_sig": None, "fat_len": 0, "toasts": []}
@@ -573,6 +584,16 @@ def status_line(info: dict, stats_ok: bool, scan_err: bool, save_err, auto_on: b
         r = (t, "ok")
     if auto_on: r = (r[0] + " · 자동 진행 ▶", r[1])
     return r
+
+def mask_user_path(p: str) -> str:
+    r"""C:\Users\홍길동\... → C:\Users\…\... — 화면을 녹화하면 윈도우 계정명이 그대로 나간다"""
+    if not p: return ""
+    parts = re.split(r"([\\/])", str(p))
+    for i, seg in enumerate(parts):
+        if seg.lower() in ("users", "home") and i + 2 < len(parts) and parts[i + 2]:
+            parts[i + 2] = "…"
+            break
+    return "".join(parts)
 
 def bench_src_label(src, n: int) -> str:
     if not src: return ""
@@ -1292,6 +1313,8 @@ def session_card(data: dict, dkey: str, day_name: str, theme_name: str = "", pla
 
 # ── 오늘의 띠: 계획한 판을 칸으로 깔고, 끝난 판을 판정 색으로 채운다 ──
 VERDICT_FILL = {"pb": "gold", "high": "ok", "normal": "sub", "low": "dim", "new": "sub"}
+# 색만으로 구분하면 영상 압축(4:2:0)에서 뭉갠다. 칸 높이로도 같은 정보를 실어 밝기·모양 둘 다로 읽히게 한다.
+RIBBON_H = {"gold": 1.0, "ok": 0.78, "sub": 0.56, "dim": 0.36, "todo": 0.20}
 VERDICT_NAME = {"pb": "최고", "high": "잘 나옴", "normal": "평소", "low": "낮음", "new": "첫 기록"}
 
 def pb_before_day(data: dict, dkey: str) -> dict:
@@ -1893,17 +1916,35 @@ C = {"bg":"#0B0E11","card":"#14191F","card2":"#1D242C","c3":"#242C35","line":"#2
      "txt":"#EDF1F5","sub":"#8CA0B3","dim":"#5C6C7C","hint":"#7A8B9C",
      "val":"#E8453A","ow":"#3B87F7","ok":"#4ED490","gold":"#F5C24B"}
 RANKC = ["#98A2AC", "#E08A3C", "#C9D6E2", "#F5C24B"]
+
+# 방송 모드 팔레트 — 녹화·스트리밍에서 가장 먼저 사라지는 것은 어두운 회색 글씨(dim 3.27:1)와
+# 진한 빨강이다(4:2:0 색 서브샘플링이 채도 높은 빨강 테두리를 뭉갠다). 밝기를 올리고 빨강을 연하게 한다.
+C_BROADCAST = {"txt": "#FFFFFF", "sub": "#C2D0DC", "hint": "#A9BACA", "dim": "#93A4B4",
+               "line": "#3D4B59", "card2": "#252E38", "c3": "#2F3A46",
+               "val": "#FF7A6E", "ow": "#6FAEFF", "ok": "#63E6A6", "gold": "#FFD36B"}
+RANKC_BROADCAST = ["#B6C0CA", "#F0A257", "#DCE6F0", "#FFD36B"]
+
+def apply_broadcast(on: bool):
+    """팔레트를 바꾼다. 위젯은 만들 때 색이 정해지므로 창을 만들기 전에 불러야 한다"""
+    if not on: return False
+    C.update(C_BROADCAST)
+    RANKC[:] = RANKC_BROADCAST
+    return True
 DAY_TYPE = {"v": ("발로 데이", C["val"]), "w": ("약점 데이", "#8A94A2"), "b": ("벤치마크", C["gold"]), "r": ("휴식", C["dim"])}
 
-def single_instance_lock():
-    """두 개가 동시에 떠서 서로 기록을 덮어쓰는 것 방지. 소켓 하나를 점유(참조를 유지해야 함)"""
+def single_instance_lock(tries: int = 1):
+    """두 개가 동시에 떠서 서로 기록을 덮어쓰는 것 방지. 소켓 하나를 점유(참조를 유지해야 함).
+    글씨 크기를 바꿔 다시 켜는 중이면 앞 창이 닫히기를 잠깐 기다린다"""
     import socket
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        s.bind(("127.0.0.1", 47653)); s.listen(1)
-        return s
-    except OSError:
-        return None
+    for i in range(max(1, tries)):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind(("127.0.0.1", 47653)); s.listen(1)
+            return s
+        except OSError:
+            s.close()
+            if i + 1 < tries: time.sleep(0.4)
+    return None
 
 def main():
     import tkinter as tk
@@ -1919,13 +1960,14 @@ def main():
         except OSError: pass
     sys.excepthook = _hook
 
-    lock = single_instance_lock()
+    lock = single_instance_lock(tries=12 if os.environ.get("AIMDESK_RESTART") else 1)
     if lock is None:
         r0 = tk.Tk(); r0.withdraw()
         messagebox.showwarning("에임 데스크", "에임 데스크가 이미 실행 중입니다.\n두 개를 동시에 켜면 기록이 서로 덮어써집니다.")
         r0.destroy(); return
 
     data = load_data(); bump_ver()
+    apply_broadcast(bool(data.get("broadcast")))      # 색은 위젯을 만들기 전에 정해야 한다
     if sys.platform == "win32":                      # 125~150% 배율 모니터에서 흐릿하지 않게 (시스템 DPI 인식)
         try:
             import ctypes
@@ -1937,15 +1979,16 @@ def main():
     root.report_callback_exception = lambda t, v, tb: _hook(t, v, tb)
     root.title("에임 데스크"); root.configure(bg=C["bg"])
     env_scale = float(os.environ.get("AIMDESK_SCALE") or 0)
-    if env_scale:
-        UI_SCALE[0] = env_scale; root.tk.call("tk", "scaling", env_scale * 96 / 72)
-    else:
-        try: UI_SCALE[0] = max(1.0, round(root.winfo_fpixels("1i") / 96, 2))
-        except Exception: UI_SCALE[0] = 1.0
+    try: auto_scale = max(1.0, round(root.winfo_fpixels("1i") / 96, 2))
+    except Exception: auto_scale = 1.0
+    UI_SCALE[0] = pick_scale(data.get("ui_scale"), env_scale, auto_scale)
+    root.tk.call("tk", "scaling", UI_SCALE[0] * 96 / 72)      # 글꼴 크기(포인트)도 같이 커지게
     vroot = (root.winfo_vrootx(), root.winfo_vrooty(), root.winfo_vrootwidth(), root.winfo_vrootheight())
     sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
     MINW, MINH = min(px(960), sw - 80), min(px(660), sh - 120)
     root.minsize(MINW, MINH)
+    if abs(float(data["win"].get("geo_scale") or UI_SCALE[0]) - UI_SCALE[0]) > 1e-6:
+        data["win"].pop("geo", None); data["win"].pop("seq", None)   # 다른 배율에서 잰 크기는 지금 화면에 안 맞는다
     root.geometry(clamp_geometry(data["win"].get("geo"), *vroot, MINW, MINH) or f"{min(px(1060), sw - 80)}x{min(px(760), sh - 120)}")
     try: root.iconphoto(True, tk.PhotoImage(data=ICON_B64))
     except Exception: pass
@@ -2805,12 +2848,15 @@ def main():
         W = max(cv.winfo_width(), px(240)); H = max(cv.winfo_height(), px(24))
         gap = px(2) if n <= 40 else 1
         tw = (W - gap * (n - 1)) / n
+        base = H - px(4)                                   # 바닥을 맞추고 위로 자란다
+        full = H - px(8)
         for i, key in enumerate(cells):
             x1 = i * (tw + gap); x2 = x1 + tw
             grow = px(3) if (pop is not None and i == pop) else 0
-            y1, y2 = px(5) - grow, H - px(5) + grow
+            h = full * RIBBON_H.get(key, 0.56) + grow
+            y1, y2 = base - h, base
             fill = C["card2"] if key == "todo" else C[key]
-            if tw >= px(5): rrect(cv, x1, y1, x2, y2, min(px(3), tw / 2), fill=fill, outline="")
+            if tw >= px(5): rrect(cv, x1, y1, x2, y2, min(px(3), tw / 2, h / 2), fill=fill, outline="")
             else: cv.create_rectangle(x1, y1, x2, y2, fill=fill, outline="", width=0)
 
     def ribbon_pop(cv, cells, i, frame=0):
@@ -2826,6 +2872,77 @@ def main():
         if pl: return sum(n for _, n in dict(playlists_for(today_key[0], data["pb"]))[pl])
         return 18 if day_state.get("dt") == "b" else 0
 
+    # ── 방송 화면: 시청자가 3초 안에 알아야 할 것만. 글씨 크기를 창 높이에 비례시켜(음수 = 픽셀)
+    #    OBS 창 캡처로 키우면 그대로 커진다 — 본창 배율과 따로 논다.
+    bcast = {"win": None, "cv": None}
+
+    def draw_broadcast(cv):
+        cv.delete("all")
+        W = max(cv.winfo_width(), 320); H = max(cv.winfo_height(), 120)
+        fam = lambda fr, b=True: tkfont.Font(family=FAM, size=-max(11, int(H * fr)), weight="bold" if b else "normal")
+        mon = lambda fr: tkfont.Font(family=MONO, size=-max(11, int(H * fr)), weight="bold")
+        dkey = today_key[0]; cp = cur_plays()
+        kinds = [k_ for _, _, k_ in day_verdicts(data, dkey, cp)]
+        plan = today_plan_n(); pad = int(W * 0.025)
+        dt = day_state.get("dt", "v")
+        top = main_theme(dkey, data["pb"])[1] if dt == "v" else DAY_TYPE.get(dt, ("훈련", ""))[0]
+        cv.create_text(pad, int(H * 0.14), text=top, anchor="w", fill=C["gold"], font=fam(0.135))
+        cv.create_text(W - pad, int(H * 0.14), text=f"{len(kinds)}/{max(plan, len(kinds))}판",
+                       anchor="e", fill=C["sub"], font=mon(0.135))
+        cur_k = None                                  # 진행 중이면 '지금 치는 판', 아니면 방금 끝난 판
+        if seq_alive():
+            _dn, _nx, _sc = seq_status()
+            if _nx is not None: cur_k = seq_win["seq"][_nx]
+        if cp:
+            k_, _t_, sc_ = cp[-1]
+            kind = kinds[-1] if kinds else "new"
+            col = C[VERDICT_FILL.get(kind, "sub")]
+            live = cur_k is not None
+            cv.create_text(pad, int(H * 0.46), text=("▶ " if live else "") + sname(cur_k or k_),
+                           anchor="w", fill=C["txt"] if live else C["sub"], font=fam(0.21))
+            cv.create_text(W - pad, int(H * 0.44), text=str(sc_), anchor="e", fill=col, font=mon(0.30))
+            nm = VERDICT_NAME.get(kind, "")
+            sub_ = (f"직전 {sname(k_)} · {nm}" if live else nm)
+            if sub_: cv.create_text(pad, int(H * 0.66), text=sub_, anchor="w", fill=col, font=fam(0.13))
+        elif cur_k:
+            cv.create_text(pad, int(H * 0.46), text="▶ " + sname(cur_k), anchor="w", fill=C["txt"], font=fam(0.21))
+            cv.create_text(W - pad, int(H * 0.46), text="첫 판", anchor="e", fill=C["hint"], font=fam(0.14, False))
+        else:
+            cv.create_text(W / 2, int(H * 0.48), text="첫 판을 치면 여기에 뜹니다",
+                           fill=C["hint"], font=fam(0.13, False))
+        cells = ribbon_cells(plan, kinds)
+        n = max(1, len(cells)); y1, y2 = int(H * 0.73), int(H * 0.95)
+        gap = max(1, int(W * 0.0022)); tw = (W - 2 * pad - gap * (n - 1)) / n
+        for i, ck in enumerate(cells):
+            x1 = pad + i * (tw + gap); h = (y2 - y1) * RIBBON_H.get(ck, 0.56)
+            cv.create_rectangle(x1, y2 - h, x1 + tw, y2,
+                                fill=C["card2"] if ck == "todo" else C[ck], outline="", width=0)
+
+    def remember_bcast():
+        w = bcast["win"]
+        if w is not None and w.winfo_exists(): data["win"]["bcast"] = w.winfo_geometry()
+
+    def update_broadcast():
+        if bcast["win"] is not None and bcast["win"].winfo_exists() and bcast["cv"].winfo_exists():
+            draw_broadcast(bcast["cv"])
+
+    def open_broadcast():
+        w = bcast["win"]
+        if w is None or not w.winfo_exists():
+            w = tk.Toplevel(root); bcast["win"] = w
+            w.title("에임 데스크 — 방송 화면"); w.configure(bg=C["bg"])
+            w.minsize(px(360), px(120))
+            cv = tk.Canvas(w, bg=C["bg"], highlightthickness=0, width=px(880), height=px(220))
+            cv.pack(fill="both", expand=True); bcast["cv"] = cv
+            cv.bind("<Configure>", lambda e: draw_broadcast(cv))
+            w.bind("<Escape>", lambda e: (remember_bcast(), w.destroy()))
+            w.protocol("WM_DELETE_WINDOW", lambda: (remember_bcast(), w.destroy()))
+            g = data["win"].get("bcast")
+            if g: w.geometry(g)                       # 지난번 크기·위치 그대로 (OBS 소스가 어긋나지 않게)
+        else:
+            w.lift()
+        update_broadcast()
+
     card_win = {"win": None, "cv": None}
 
     def draw_card(cv, sc):
@@ -2836,12 +2953,13 @@ def main():
         cv.create_text(x0, y, text=sc["stat"], anchor="w", fill=C["sub"], font=F); y += px(24)
         cells = ribbon_cells(len(sc["kinds"]), sc["kinds"])
         n = max(1, len(cells)); gap = px(2); bw = W - 2 * x0; tw = (bw - gap * (n - 1)) / n
+        rh = px(22)
         for i, ck in enumerate(cells):
-            x1 = x0 + i * (tw + gap)
+            x1 = x0 + i * (tw + gap); h = rh * RIBBON_H.get(ck, 0.56)
             fill = C["card2"] if ck == "todo" else C[ck]
-            if tw >= px(5): rrect(cv, x1, y, x1 + tw, y + px(17), min(px(3), tw / 2), fill=fill, outline="")
-            else: cv.create_rectangle(x1, y, x1 + tw, y + px(17), fill=fill, outline="", width=0)
-        y += px(38)
+            if tw >= px(5): rrect(cv, x1, y + rh - h, x1 + tw, y + rh, min(px(3), tw / 2, h / 2), fill=fill, outline="")
+            else: cv.create_rectangle(x1, y + rh - h, x1 + tw, y + rh, fill=fill, outline="", width=0)
+        y += px(43)
         cv.create_text(x0, y, text="오늘 바뀐 것", anchor="w", fill=C["gold"], font=FCAP); y += px(22)
         if sc["changed"]:
             for line in sc["changed"]:
@@ -2950,7 +3068,7 @@ def main():
                                              wraplength=px(520), justify="left", anchor="w")
             day_state["chal_lbl"].pack(fill="x", padx=px(8))
         rib = tk.Frame(left_scroll.body, bg=C["card"]); rib.pack(fill="x", pady=(8, 0))
-        day_state["rib_cv"] = tk.Canvas(rib, height=px(28), bg=C["card"], highlightthickness=0)
+        day_state["rib_cv"] = tk.Canvas(rib, height=px(34), bg=C["card"], highlightthickness=0)
         day_state["rib_cv"].pack(fill="x")
         rl = tk.Frame(rib, bg=C["card"]); rl.pack(fill="x", pady=(4, 0))
         day_state["rib_lbl"] = tk.Label(rl, text="", font=FNS, bg=C["card"], fg=C["sub"], anchor="w")
@@ -3056,6 +3174,68 @@ def main():
     RBtn(plrow2, "플레이리스트 폴더 열기", lambda: (PL_STATE["dir"] and open_uri(str(PL_STATE["dir"])), None),
          padx=12, pady=5).pack(side="left")
     pl_lbl = tk.Label(stc, text="", font=FS, bg=C["card"], fg=C["hint"], wraplength=px(268), justify="left"); pl_lbl.pack(anchor="w", pady=(5, 0))
+
+    # ── 화면 (녹화·방송) ──
+    vc = card(rbody); vc.pack(fill="x", pady=(10, 0))
+    tk.Label(vc, text="화면 · 녹화", font=FB, bg=C["card"], fg=C["txt"]).pack(anchor="w", pady=(0, 4))
+    tk.Label(vc, text="녹화하면 시청자 쪽에서 글씨가 뭉갭니다. 크기를 올리면 저장하고 앱을 다시 켜서 적용합니다.",
+             font=FS, bg=C["card"], fg=C["hint"], wraplength=px(268), justify="left").pack(anchor="w", pady=(0, 7))
+    srow = tk.Frame(vc, bg=C["card"]); srow.pack(anchor="w")
+    srow2 = tk.Frame(vc, bg=C["card"]); srow2.pack(anchor="w", pady=(4, 0))
+    scale_btns = {}
+
+    def restart_app() -> bool:
+        """새 창으로 다시 켠다 — 창 크기·글씨는 시작할 때 한 번 정해지기 때문"""
+        if os.environ.get("AIMDESK_NO_MAINLOOP"): return False        # 테스트에선 프로세스를 띄우지 않는다
+        try:
+            import subprocess
+            args = ([sys.executable] if getattr(sys, "frozen", False)
+                    else [sys.executable, os.path.abspath(sys.argv[0])]) + list(sys.argv[1:])
+            env = dict(os.environ); env["AIMDESK_RESTART"] = "1"
+            kw = {"creationflags": getattr(subprocess, "DETACHED_PROCESS", 0)} if sys.platform == "win32" else {}
+            subprocess.Popen(args, env=env, **kw)
+        except Exception:
+            log_exc("restart_app"); return False
+        try: root._aimdesk_lock.close()                               # 새 창이 잠금을 잡을 수 있게 먼저 놓아준다
+        except Exception: pass
+        root.after(200, root.destroy)
+        return True
+
+    def sync_scale_btns():
+        cur = data.get("ui_scale")
+        for v, b in scale_btns.items():
+            on = (v == cur) or (v is None and not cur)
+            b.restyle(bg=C["gold"] if on else C["card2"], fg="#10141A" if on else C["txt"])
+
+    def set_scale(v):
+        if (data.get("ui_scale") or None) == (v or None): return
+        data["win"].pop("geo", None); data["win"].pop("seq", None)    # 새 배율에 맞는 기본 크기로 열리게
+        data["ui_scale"] = v
+        data["win"].update(zoomed=False, tab=cur_tab[0])
+        save_data(data); sync_scale_btns()
+        if SAVE_ERROR[0]:
+            show_toast("저장에 실패해 크기를 바꾸지 못했습니다", "warn"); return
+        if not restart_app():
+            show_toast(f"글씨 크기 {scale_label(v)} — 앱을 껐다 켜면 적용됩니다")
+
+    for _i, _v in enumerate([None] + SCALE_STEPS):          # 두 줄로 — 배율을 올리면 한 줄에 안 들어간다
+        _b = RBtn(srow if _i < 3 else srow2, scale_label(_v), (lambda v=_v: set_scale(v)), padx=7, pady=4)
+        _b.pack(side="left", padx=(0, 4)); scale_btns[_v] = _b
+    sync_scale_btns()
+    RBtn(vc, "방송 화면 열기", open_broadcast, bg="#1B2A22", fg=C["ok"], padx=12, pady=6).pack(anchor="w", pady=(8, 0))
+    brow = tk.Frame(vc, bg=C["card"]); brow.pack(anchor="w", pady=(8, 0))
+    def set_broadcast(v):
+        if bool(data.get("broadcast")) == bool(v): return
+        data["broadcast"] = bool(v); save_data(data)
+        if SAVE_ERROR[0]:
+            show_toast("저장에 실패해 바꾸지 못했습니다", "warn"); return
+        if not restart_app():
+            show_toast("방송 모드 — 앱을 껐다 켜면 적용됩니다")
+    bc_tg = Toggle(brow, "방송 모드 (고대비)", lambda: bool(data.get("broadcast")), set_broadcast)
+    bc_tg.pack(side="left")
+    tk.Label(vc, text="방송 모드: 흐린 회색 글씨를 밝히고 빨강을 연하게 — 영상으로 넘어가면 어두운 색부터 뭉갭니다.\n"
+                      "OBS 는 '창 캡처'로 이 창만 담으면 게임 화면과 따로 크기를 맞출 수 있습니다.",
+             font=FS, bg=C["card"], fg=C["dim"], wraplength=px(268), justify="left").pack(anchor="w", pady=(7, 0))
     def install_playlists():
         sd = data.get("stats_dir")
         if not sd:
@@ -3071,7 +3251,7 @@ def main():
         else: pl_lbl.configure(text="설치 실패 — Playlists 폴더를 못 찾았습니다 (stats 폴더가 …\\FPSAimTrainer\\FPSAimTrainer\\stats 인지 확인)", fg=C["val"])
     def sync_stats_lbl():
         ok = data.get("stats_dir") and Path(data["stats_dir"]).is_dir()
-        p = data["stats_dir"] if ok else ""
+        p = mask_user_path(data["stats_dir"]) if ok else ""
         if len(p) > 44: p = "…" + p[-43:]          # 공백 없는 긴 경로가 카드 밖으로 넘치지 않게 꼬리만
         stats_lbl.configure(text=(p if ok else "자동 탐지 실패 — 폴더를 선택해 주세요"),
                             fg=C["hint"] if ok else C["val"])
@@ -3579,6 +3759,7 @@ def main():
         refresh_tab(cur_tab[0])
         update_sequence()
         update_detail()
+        update_broadcast()
 
     # 창 크기 변경: 캔버스마다 오는 <Configure> 폭풍을 80ms 로 묶어 한 번만, 보이는 탭만 다시 그린다
     tab_of = {}; last_w = {}; resize_job = [None]
@@ -3698,17 +3879,18 @@ def main():
     root.after(300, tick)
     root.after(450, refresh)
     def on_close():
-        remember_seq_pos()
+        remember_seq_pos(); remember_bcast()
         try: z = (root.state() == "zoomed")
         except tk.TclError: z = False
-        data["win"].update(geo=(data["win"].get("geo") if z else root.winfo_geometry()), zoomed=z, tab=cur_tab[0])
+        data["win"].update(geo=(data["win"].get("geo") if z else root.winfo_geometry()), zoomed=z,
+                           tab=cur_tab[0], geo_scale=UI_SCALE[0])
         save_data(data)
         if SAVE_ERROR[0] and not messagebox.askyesno(
                 "에임 데스크", f"기록 저장에 실패했습니다:\n{SAVE_ERROR[0]}\n\n그래도 닫을까요? (아니오 = 열어 둠)"):
             return
         root.destroy()
     root.protocol("WM_DELETE_WINDOW", on_close)
-    _DBG.update(root=root, pl_lbl=pl_lbl, draw_ribbon=draw_ribbon, today_plan_n=today_plan_n, cv_sess=cv_sess, hdr_lv=hdr_lv, open_card=open_card, card_win=card_win, data=data, refresh=refresh, refresh_tab=refresh_tab, dirty=dirty, cur_tab=cur_tab, show=show,
+    _DBG.update(root=root, pl_lbl=pl_lbl, draw_ribbon=draw_ribbon, today_plan_n=today_plan_n, cv_sess=cv_sess, hdr_lv=hdr_lv, open_card=open_card, card_win=card_win, set_scale=set_scale, scale_btns=scale_btns, set_broadcast=set_broadcast, open_broadcast=open_broadcast, bcast=bcast, data=data, refresh=refresh, refresh_tab=refresh_tab, dirty=dirty, cur_tab=cur_tab, show=show,
                 scan_once=scan_once, tick=tick, seq_win=seq_win, auto=auto, routine_rows=routine_rows, day_state=day_state,
                 tq=tq, status_lbl=status_lbl, status_dot=status_dot, show_toast=show_toast, render_toasts=render_toasts,
                 toast=toast, toast_tick=toast_tick, on_close=on_close, left_scroll=left_scroll, right_scroll=right_scroll,
@@ -3786,6 +3968,18 @@ if __name__ == "__main__":
         def _f(): calls[0] += 1; return 1
         memo(("x",), _f); memo(("x",), _f); assert calls[0] == 1; bump_ver(); memo(("x",), _f); assert calls[0] == 2
         UI_SCALE[0] = 1.5; assert px(70) == 105 and px(8) == 12; UI_SCALE[0] = 1.0
+        assert scale_label(None) == "자동" and scale_label(1.25) == "125%" and scale_label(2.0) == "200%"
+        assert pick_scale(None, 0, 1.0) == 1.0 and pick_scale(None, 0, 1.5) == 1.5      # 저장값 없으면 모니터
+        assert pick_scale(1.5, 0, 1.0) == 1.5 and pick_scale(1.5, 2.0, 1.0) == 2.0      # 환경변수가 가장 셈
+        assert pick_scale(9.9, 0, 1.0) == 3.0 and pick_scale(0.1, 0, 1.0) == 0.8        # 말도 안 되는 값은 자른다
+        assert SCALE_STEPS[0] == 1.0 and SCALE_STEPS[-1] == 2.0
+        _c0 = dict(C); _r0 = list(RANKC)
+        assert apply_broadcast(False) is False and C == _c0
+        assert apply_broadcast(True) is True and C["dim"] != _c0["dim"] and RANKC != _r0
+        for _k in ("txt", "sub", "hint", "dim", "val", "ow", "ok", "gold"):     # 카드 위에서 전부 4.5:1 이상
+            assert contrast_ratio(C[_k], C["card"]) >= 4.5, (_k, contrast_ratio(C[_k], C["card"]))
+        assert contrast_ratio(_c0["dim"], _c0["card"]) < 4.5                    # 원래 팔레트는 dim 이 부족했다
+        C.update(_c0); RANKC[:] = _r0
         assert contrast_ratio(C["hint"], C["card"]) >= 4.5 and contrast_ratio(C["txt"], C["card"]) >= 7 and contrast_ratio(C["dim"], C["card"]) >= 3.0
         assert shade("#14191F", 16) == "#24292f" and shade("#000000", -10) == "#000000"
         assert t_min("19.43.00") == 1183
@@ -3943,6 +4137,12 @@ if __name__ == "__main__":
         assert ribbon_cells(2, _v) == ["gold", "sub", "dim"]           # 계획보다 더 치면 칸이 늘어난다
         assert ribbon_cells(3, []) == ["todo"] * 3 and ribbon_cells(0, []) == []
         assert ribbon_counts(_v)["pb"] == 1 and ribbon_counts([])["low"] == 0
+        assert set(RIBBON_H) == {"gold", "ok", "sub", "dim", "todo"} and RIBBON_H["gold"] == 1.0
+        _hs = [RIBBON_H[k] for k in ("gold", "ok", "sub", "dim", "todo")]
+        assert _hs == sorted(_hs, reverse=True) and min(_hs[i] - _hs[i + 1] for i in range(4)) >= 0.15   # 눈에 띄는 차이
+        assert mask_user_path(r"C:\Users\hong\Steam\stats") == r"C:\Users\…\Steam\stats"
+        assert mask_user_path("/home/joy/FPSAimTrainer/stats") == "/home/…/FPSAimTrainer/stats"
+        assert mask_user_path("D:\\Games\\stats") == "D:\\Games\\stats" and mask_user_path("") == "" and mask_user_path(None) == ""
         assert fmt_ribbon(27, _v) == "오늘 3/27판 · 최고 1 · 평소 1 · 낮음 1", fmt_ribbon(27, _v)
         assert fmt_ribbon(27, []).endswith("여기가 채워집니다") and fmt_ribbon(0, []) == "오늘 0판"
         assert shortcut_action("2", 0, False) == "tab:grow" and shortcut_action("2", 0, True) is None and shortcut_action("F5", 0, True) == "rescan"
