@@ -76,6 +76,48 @@ def theme_line(dkey: str, pb: dict = None) -> str:
             break
     return out
 
+def week_themes(dkey: str, pb: dict = None) -> str:
+    """이번 주 월~목 본훈련 테마 한 줄. '매일 같은 걸 친다'는 느낌을 눈으로 반박하는 용도"""
+    d = date.fromisoformat(dkey)
+    if d.weekday() > 3: return ""
+    mon = d - timedelta(days=d.weekday())
+    out = []
+    for i in range(4):
+        dd = mon + timedelta(days=i)
+        out.append(("▶" if dd == d else "") + f"{'월화수목'[i]} {main_theme(dd.isoformat(), pb)[1]}")
+    return "이번 주 · " + " · ".join(out)
+
+def daily_challenge(data: dict, dkey: str, pb: dict = None):
+    """오늘의 도전 — 오늘 칠 시나리오 중 '다음 등급 칸'이 가장 가까운 하나.
+    목표를 앱이 지어내지 않고 볼테익 등급 임계값을 그대로 쓴다. 손이 닿는 거리가 아니면 (2.5 표준편차 밖) 내지 않는다."""
+    d = date.fromisoformat(dkey)
+    dt = ["v", "v", "v", "v", "w", "b", "r"][d.weekday()]
+    if dt == "r": return None
+    if dt == "v":   items = [k for k, _n in main_theme(dkey, pb)[3]]
+    elif dt == "w": items = [k for k, _n in FRIDAY]
+    else:           items = [k for k, _n in BENCH]
+    pb = pb if pb is not None else data.get("pb", {})
+    best = None
+    for k in dict.fromkeys(items):
+        th = th_of(k); cur = pb.get(k)
+        if not th or cur is None: continue
+        rank, t, gap = next_rank_gap(cur, th)
+        if rank is None: continue                      # 이미 Gold 칸
+        band = scen_band(data, k, dkey) or scen_day_band(data, k, dkey)
+        sd = band["sd"] if band else max(1.0, cur * 0.03)
+        sig = gap / sd
+        if sig > 2.5: continue                         # 오늘 손이 닿는 거리가 아니면 도전으로 내지 않는다
+        if best is None or sig < best["sigma"]:
+            best = {"key": k, "target": t, "cur": cur, "rank": rank, "gap": gap, "sigma": sig}
+    return best
+
+def fmt_challenge(ch, today_best=None) -> str:
+    if not ch: return ""
+    s_ = f"오늘의 도전 · {sname(ch['key'])} {ch['target']}점 — 넘으면 {ch['rank']} 칸 (지금 최고 {ch['cur']})"
+    if today_best is not None:
+        s_ += f" · 오늘 {today_best}" + (" ✓ 달성" if today_best >= ch["target"] else f" · {ch['target'] - today_best} 남음")
+    return s_
+
 def main_theme(dkey: str, pb: dict = None):
     """그날의 본훈련 테마 (id, 이름, 설명, [(시나리오, 판수)]).
     날짜만으로 정해진다 — 앱을 껐다 켜도, 코박스에 설치된 플레이리스트와도 늘 같은 것을 가리키게.
@@ -2880,7 +2922,11 @@ def main():
         _tl = theme_line(today_key[0], data["pb"])
         if _tl:
             tk.Label(lt, text=_tl, font=FB, bg=C["card"], fg=C["gold"], wraplength=px(250),
-                     justify="left").pack(anchor="w", pady=(2, 2))
+                     justify="left").pack(anchor="w", pady=(2, 0))
+        _wt = week_themes(today_key[0], data["pb"])
+        if _wt:
+            tk.Label(lt, text=_wt, font=FS, bg=C["card"], fg=C["dim"], wraplength=px(250),
+                     justify="left").pack(anchor="w", pady=(0, 2))
         day_state["sess_lbl"] = tk.Label(lt, text="", font=FNS, bg=C["card"], fg=C["sub"], wraplength=px(250), justify="left")
         day_state["sess_lbl"].pack(anchor="w", pady=(0, 4))
         day_state["coach"] = []
@@ -2895,6 +2941,14 @@ def main():
                      padx=12, pady=8).pack(side="right", padx=(8, 0))
             RBtn(lh, "순서 보기", lambda: open_sequence(pl), padx=12, pady=8).pack(side="right")
 
+        day_state["chal"] = daily_challenge(data, today_key[0], data["pb"])
+        day_state["chal_lbl"] = None
+        if day_state["chal"]:
+            cf = tk.Frame(left_scroll.body, bg=C["card2"], highlightbackground=C["gold"], highlightthickness=1)
+            cf.pack(fill="x", pady=(8, 0), ipady=px(5), ipadx=px(8))
+            day_state["chal_lbl"] = tk.Label(cf, text="", font=FB, bg=C["card2"], fg=C["gold"],
+                                             wraplength=px(520), justify="left", anchor="w")
+            day_state["chal_lbl"].pack(fill="x", padx=px(8))
         rib = tk.Frame(left_scroll.body, bg=C["card"]); rib.pack(fill="x", pady=(8, 0))
         day_state["rib_cv"] = tk.Canvas(rib, height=px(28), bg=C["card"], highlightthickness=0)
         day_state["rib_cv"].pack(fill="x")
@@ -3407,6 +3461,11 @@ def main():
                 cfg(lb, text=f"{title} · {d_}/{t_}", fg=C["ok"] if d_ >= t_ else C["gold"])
         # 다음에 칠 판 표시 (순서창이 열려 있으면 그 포인터, 아니면 첫 미완료 줄)
         set_next_marker(next_routine_key([(r[0], r[1], r[2]) for r in routine_rows], day, seq_next))
+        # 오늘의 도전
+        if day_state.get("chal_lbl") is not None and day_state["chal_lbl"].winfo_exists():
+            ch = day_state["chal"]; tb = day.get("best", {}).get(ch["key"])
+            done_ = tb is not None and tb >= ch["target"]
+            cfg(day_state["chal_lbl"], text=fmt_challenge(ch, tb), fg=C["ok"] if done_ else C["gold"])
         # 오늘의 띠
         if day_state.get("rib_cv") is not None and day_state["rib_cv"].winfo_exists():
             kinds = [k_ for _, _, k_ in day_verdicts(data, dkey, cur_plays())]
@@ -3970,6 +4029,16 @@ if __name__ == "__main__":
         assert theme_line("2026-09-07", SEED).startswith("오늘 본훈련 · ") and "내일은 " in theme_line("2026-09-07", SEED)   # 월→화
         assert "4일 뒤는 " in theme_line("2026-09-10", SEED), theme_line("2026-09-10", SEED)             # 목→월
         assert theme_line("2026-09-11") == "" and theme_line("2026-09-12") == "" and theme_line("2026-09-13") == ""   # 금·토·일은 고정
+        _wt = week_themes("2026-09-09", SEED)
+        assert _wt.startswith("이번 주 · 월 ") and "▶수 " in _wt and _wt.count("·") == 4, _wt
+        assert week_themes("2026-09-12") == ""                                   # 토요일엔 안 띄운다
+        _ch = daily_challenge({"pb": dict(SEED), "days": {}}, "2026-09-10", dict(SEED))
+        assert _ch is None or (_ch["target"] > _ch["cur"] and _ch["sigma"] <= 2.5 and _ch["key"] in dict(SCEN)), _ch
+        _far = daily_challenge({"pb": {"ww5": 10}, "days": {}}, "2026-09-10", {"ww5": 10}); assert _far is None   # 너무 멀면 안 낸다
+        _c2 = {"key": "dot", "target": 1030, "cur": 983, "rank": "Silver", "gap": 47, "sigma": 1.2}
+        assert fmt_challenge(_c2).startswith("오늘의 도전 · DotTS 1030점 — 넘으면 Silver 칸")
+        assert "17 남음" in fmt_challenge(_c2, 1013) and "✓ 달성" in fmt_challenge(_c2, 1030)
+        assert fmt_challenge(None) == "" and daily_challenge({"pb": {}, "days": {}}, "2026-09-13") is None
         assert sum(n for _, n in dict(playlists_for("2026-09-10", SEED))["AIMDESK Day"]) == 27
         assert seq_rows_apply(["pasu"], [True], None, [None], lambda k: (None, None))[0][0][6] == "건너뜀"
         import tempfile as _tf

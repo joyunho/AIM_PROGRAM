@@ -178,6 +178,10 @@ sess = D["day_state"]["sess_lbl"].cget("text"); check("session line shows the se
 rib = D["day_state"]["rib_lbl"].cget("text"); check("ribbon line counts today's plays", rib.startswith("오늘 5/") and ("최고" in rib or "평소" in rib), rib)
 check("ribbon cells match the plan", len(D["day_state"]["rib_cells"]) == D["today_plan_n"]() == 27, str(len(D["day_state"]["rib_cells"])))
 check("training level shown in header", D["hdr_lv"].cget("text").startswith("Lv."), D["hdr_lv"].cget("text"))
+_tt = texts(root)
+check("week theme line lists four weekday themes", any(x.startswith("이번 주 · 월 ") and x.count("·") == 4 for x in _tt), str([x for x in _tt if x.startswith("이번 주")])[:120])
+_cl = D["day_state"].get("chal_lbl")
+check("daily challenge is either a real rank target or absent", _cl is None or ("넘으면" in _cl.cget("text") and "칸" in _cl.cget("text")), _cl.cget("text") if _cl else "none")
 D["open_card"](); pump(250)
 cw = D["card_win"]["win"]
 check("session card opens with real content", cw is not None and cw.winfo_exists() and len(D["card_win"]["cv"].find_all()) > 5, str(len(D["card_win"]["cv"].find_all())))
