@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v3.0 — 코박스 자동 기록 + 성장 시각화 + 루틴 자동 진행 + 코치
+에임 데스크 v3.2 — 코박스 자동 기록 + 성장 시각화 + 루틴 자동 진행 + 코치
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
@@ -10,6 +10,9 @@
 · 순서창/루틴 줄에 판별 점수 + 최근 7일 평균 대비 ▲▼ + 역대 최고 경신(PB!) 표시
 · 보낸 시나리오가 60초를 훌쩍 넘겨도 기록이 없으면 FREEPLAY(타이머 없음) 의심 경고
 · 기록 보호: 원자적 저장 · 손상 파일 백업 · 스캔 실패 시 기록 보존 · 오류 로그
+· 본훈련 테마가 요일마다 다르고(클리킹/트래킹/스위칭/전체 순회, 기록이 쌓이면 약점 집중), 프로브 6판은 측정 도구라 고정
+· 한 판 점수는 흔들리므로 '평소 범위(중앙값±1.4826·MAD)' 기준 판정(최고/잘 나옴/평소/낮음) — ▲▼ 도배 금지
+· 오늘의 띠 · 오늘 세션 곡선 · 훈련 레벨 · 오늘 한 장: 하루치 기록만 있어도 보이는 것들
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
 from __future__ import annotations
@@ -1197,6 +1200,53 @@ def session_caption(pts, gain) -> str:
     n_pb = sum(1 for p in pts if p[4] == "pb")
     if n_pb: parts.append(f"신기록 {n_pb}")
     return " · ".join(parts)
+
+def day_changes(data: dict, dkey: str, max_n: int = 6):
+    """오늘 실제로 달라진 것만. 전부 기록 파일에서 확인되는 사실이고, 없으면 빈 목록을 돌려준다
+    (없는 날 억지로 문장을 만들면 있는 날의 말이 같이 싸구려가 된다)"""
+    day = data["days"].get(dkey) or blank_day()
+    prev = pb_before_day(data, dkey)
+    best = day.get("best") or {}
+    out = []
+    for k, v in sorted(best.items(), key=lambda kv: -(kv[1] - prev.get(kv[0], 0))):
+        old = prev.get(k)
+        if v is None or old is None or v <= old: continue
+        line = f"{sname(k)} {v} 신기록 (+{v - old})"
+        th = th_of(k)
+        if th:
+            r_old = sum(1 for t in th if old >= t); r_new = sum(1 for t in th if v >= t)
+            if r_new > r_old: line += f" · {RANK_NAMES[r_new - 1]} 칸 진입"
+        out.append(line)
+    if len(out) < max_n:                       # 신기록은 아니지만 최근 14일 중 가장 높은 값
+        for k, v in sorted(best.items()):
+            if v is None or (prev.get(k) is not None and v > prev[k]): continue
+            b = scen_day_band(data, k, dkey)
+            hi = max((data["days"].get((date.fromisoformat(dkey) - timedelta(days=i)).isoformat(), {}).get("best", {}).get(k)
+                      for i in range(1, 15)), key=lambda x: (x is not None, x), default=None)
+            if hi is not None and v > hi:
+                out.append(f"{sname(k)} {v} — 최근 14일 중 가장 높음")
+            if len(out) >= max_n: break
+    e_now, _ = totalE(data["pb"]); e_old, _ = totalE(prev)
+    if e_now is not None and e_old is not None and e_now > e_old:
+        out.append(f"총 에너지 {e_old} → {e_now} (+{e_now - e_old})")
+    return out[:max_n]
+
+def session_card(data: dict, dkey: str, day_name: str, theme_name: str = "", plays=None):
+    """마감 카드 내용. 그리는 쪽은 이 값만 받아 쓴다 (테스트가 화면 없이 돌게)"""
+    plays = day_plays(data, dkey) if plays is None else plays
+    d = date.fromisoformat(dkey)
+    kinds = [k for _, _, k in day_verdicts(data, dkey, plays)]
+    ss = session_summary(plays, {})
+    stat = [f"{len(plays)}판"]
+    if ss["n"] and ss["minutes"] is not None: stat.append(f"{ss['minutes']}분")
+    c = ribbon_counts(kinds)
+    for kk in ("pb", "high", "normal", "low"):
+        if c[kk]: stat.append(f"{VERDICT_NAME[kk]} {c[kk]}")
+    head = f"{d.month}월 {d.day}일 {DOWK[d.weekday()]} · {day_name}" + (f" · {theme_name}" if theme_name else "")
+    g = within_day_gain(plays)
+    return {"title": head, "kinds": kinds, "stat": " · ".join(stat),
+            "changed": day_changes(data, dkey), "gain": (f"세션 중 {g:+.1f}% (앞 절반 → 뒤 절반)" if g is not None else ""),
+            "next": theme_line(dkey, data.get("pb")).split(" · ")[-1] if theme_line(dkey, data.get("pb")) else ""}
 
 # ── 오늘의 띠: 계획한 판을 칸으로 깔고, 끝난 판을 판정 색으로 채운다 ──
 VERDICT_FILL = {"pb": "gold", "high": "ok", "normal": "sub", "low": "dim", "new": "sub"}
@@ -2734,6 +2784,56 @@ def main():
         if pl: return sum(n for _, n in dict(playlists_for(today_key[0], data["pb"]))[pl])
         return 18 if day_state.get("dt") == "b" else 0
 
+    card_win = {"win": None, "cv": None}
+
+    def draw_card(cv, sc):
+        cv.delete("all")
+        W = max(cv.winfo_width(), px(600)); H = max(cv.winfo_height(), px(220))
+        x0 = px(22); y = px(28)
+        cv.create_text(x0, y, text=sc["title"], anchor="w", fill=C["txt"], font=FH); y += px(28)
+        cv.create_text(x0, y, text=sc["stat"], anchor="w", fill=C["sub"], font=F); y += px(24)
+        cells = ribbon_cells(len(sc["kinds"]), sc["kinds"])
+        n = max(1, len(cells)); gap = px(2); bw = W - 2 * x0; tw = (bw - gap * (n - 1)) / n
+        for i, ck in enumerate(cells):
+            x1 = x0 + i * (tw + gap)
+            fill = C["card2"] if ck == "todo" else C[ck]
+            if tw >= px(5): rrect(cv, x1, y, x1 + tw, y + px(17), min(px(3), tw / 2), fill=fill, outline="")
+            else: cv.create_rectangle(x1, y, x1 + tw, y + px(17), fill=fill, outline="", width=0)
+        y += px(38)
+        cv.create_text(x0, y, text="오늘 바뀐 것", anchor="w", fill=C["gold"], font=FCAP); y += px(22)
+        if sc["changed"]:
+            for line in sc["changed"]:
+                cv.create_text(x0 + px(6), y, text="· " + line, anchor="w", fill=C["txt"], font=F); y += px(21)
+        else:
+            cv.create_text(x0 + px(6), y, text="기록이 바뀐 건 없습니다 — 판을 쌓은 것도 그대로 남습니다",
+                           anchor="w", fill=C["hint"], font=FS); y += px(21)
+        if sc["gain"]:
+            y += px(8); cv.create_text(x0, y, text=sc["gain"], anchor="w", fill=C["ok"], font=FS)
+        if sc["next"]: cv.create_text(x0, H - px(22), text=sc["next"], anchor="w", fill=C["sub"], font=FS)
+        cv.create_text(W - x0, H - px(22), text="아무 곳이나 누르면 닫힘", anchor="e", fill=C["dim"], font=FS)
+
+    def open_card():
+        dkey = today_key[0]; dt = day_state.get("dt", "v")
+        sc = session_card(data, dkey, DAY_TYPE[dt][0],
+                          main_theme(dkey, data["pb"])[1] if dt == "v" else "", cur_plays())
+        CH = px(150) + px(21) * max(1, len(sc["changed"])) + px(56)      # 내용만큼만 — 빈 카드가 커 보이지 않게
+        w = card_win["win"]
+        if w is None or not w.winfo_exists():
+            w = tk.Toplevel(root); card_win["win"] = w
+            w.title("오늘 한 장"); w.configure(bg=C["bg"]); w.resizable(False, False)
+            cv = tk.Canvas(w, width=px(620), height=CH, bg=C["card"], highlightthickness=0)
+            cv.pack(padx=px(10), pady=px(10)); card_win["cv"] = cv
+            cv.bind("<Button-1>", lambda e: w.destroy())
+            w.bind("<Escape>", lambda e: w.destroy())
+            w.geometry(clamp_pos("+%d+%d" % (root.winfo_x() + px(80), root.winfo_y() + px(70)),
+                                 px(640), px(450), *vroot) or "")
+            if seq_alive() and bool(data.get("seq_topmost", True)): w.attributes("-topmost", True)
+        else:
+            w.lift()
+        if int(card_win["cv"].cget("height")) != CH: card_win["cv"].configure(height=CH)
+        card_win["cv"].update_idletasks()
+        draw_card(card_win["cv"], sc)
+
     def add_section(title, extra=None):
         f = tk.Frame(left_scroll.body, bg=C["card"]); f.pack(fill="x", pady=(10, 3))
         lb = tk.Label(f, text=title, font=FCAP, bg=C["card"], fg=C["gold"]); lb.pack(side="left")
@@ -2798,8 +2898,10 @@ def main():
         rib = tk.Frame(left_scroll.body, bg=C["card"]); rib.pack(fill="x", pady=(8, 0))
         day_state["rib_cv"] = tk.Canvas(rib, height=px(28), bg=C["card"], highlightthickness=0)
         day_state["rib_cv"].pack(fill="x")
-        day_state["rib_lbl"] = tk.Label(rib, text="", font=FNS, bg=C["card"], fg=C["sub"], anchor="w")
-        day_state["rib_lbl"].pack(fill="x", pady=(4, 0))
+        rl = tk.Frame(rib, bg=C["card"]); rl.pack(fill="x", pady=(4, 0))
+        day_state["rib_lbl"] = tk.Label(rl, text="", font=FNS, bg=C["card"], fg=C["sub"], anchor="w")
+        day_state["rib_lbl"].pack(side="left")
+        RBtn(rl, "오늘 한 장", open_card, padx=10, pady=3).pack(side="right")
         day_state["rib_cells"] = []
 
         if dt in ("v", "w"):
@@ -3446,6 +3548,7 @@ def main():
         COACH_STATE.update(brief=[], validity=None, fat_sig=None, fat_len=0)
         routine_next[0] = None
         if detail["win"] is not None and detail["win"].winfo_exists(): detail["win"].destroy()
+        if card_win["win"] is not None and card_win["win"].winfo_exists(): card_win["win"].destroy()
         if seq_alive(): remember_seq_pos(); seq_win["win"].destroy()
         build_day_ui()
         install_playlists()                     # 오늘 테마로 다시 설치 — 코박스 목록이 어제 구성으로 남지 않게
@@ -3475,6 +3578,10 @@ def main():
                         msg_ = fatigue_msg(sig); show_toast(msg_, "warn"); set_hint(msg_, C["gold"])
                         COACH_STATE.update(fat_sig=kind, fat_len=len(cp))
                     elif kind is None: COACH_STATE["fat_sig"] = None
+                    pn = today_plan_n()
+                    if pn and len(cp) >= pn and data.get("card_day") != nk:
+                        data["card_day"] = nk; save_data(data)
+                        root.after(800, open_card)              # 오늘 계획을 다 친 순간 한 번만
                 if changed or events: refresh()
                 auto_step()
                 if auto["on"] and seq_alive(): update_sequence()     # 보낸 지 n초 / FREEPLAY 경고 갱신
@@ -3542,7 +3649,7 @@ def main():
             return
         root.destroy()
     root.protocol("WM_DELETE_WINDOW", on_close)
-    _DBG.update(root=root, pl_lbl=pl_lbl, draw_ribbon=draw_ribbon, today_plan_n=today_plan_n, cv_sess=cv_sess, hdr_lv=hdr_lv, data=data, refresh=refresh, refresh_tab=refresh_tab, dirty=dirty, cur_tab=cur_tab, show=show,
+    _DBG.update(root=root, pl_lbl=pl_lbl, draw_ribbon=draw_ribbon, today_plan_n=today_plan_n, cv_sess=cv_sess, hdr_lv=hdr_lv, open_card=open_card, card_win=card_win, data=data, refresh=refresh, refresh_tab=refresh_tab, dirty=dirty, cur_tab=cur_tab, show=show,
                 scan_once=scan_once, tick=tick, seq_win=seq_win, auto=auto, routine_rows=routine_rows, day_state=day_state,
                 tq=tq, status_lbl=status_lbl, status_dot=status_dot, show_toast=show_toast, render_toasts=render_toasts,
                 toast=toast, toast_tick=toast_tick, on_close=on_close, left_scroll=left_scroll, right_scroll=right_scroll,
@@ -3751,6 +3858,19 @@ if __name__ == "__main__":
         assert session_caption([], None) == "판이 들어오면 여기에 한 판씩 점이 찍힙니다"
         _cap = session_caption(_sp, 4.0)
         assert "2판" in _cap and "평소 대비 중앙" in _cap and "세션 중 상승 +4.0%" in _cap, _cap
+        # v3.2 오늘 한 장
+        bump_ver()
+        _cd = {"pb": {"pasu": 900, "popcorn": 500}, "days": {
+            "2026-09-09": dict(blank_day(), best={"pasu": 790, "popcorn": 500}),
+            "2026-09-10": dict(blank_day(), best={"pasu": 900}, plays=[["pasu", "10.00.00", 870], ["pasu", "10.30.00", 900]])}}
+        _ch = day_changes(_cd, "2026-09-10")
+        assert _ch and _ch[0].startswith("Pasu 900 신기록 (+110)") and "Gold 칸 진입" in _ch[0], _ch
+        assert any(x.startswith("총 에너지") for x in _ch), _ch
+        assert day_changes(_cd, "2026-09-09") == []                     # 달라진 게 없으면 빈 목록
+        _sc = session_card(_cd, "2026-09-10", "발로 데이", "클리킹 집중")
+        assert _sc["title"] == "9월 10일 목 · 발로 데이 · 클리킹 집중" and _sc["kinds"] == ["pb", "pb"], _sc
+        assert _sc["stat"].startswith("2판") and "최고 2" in _sc["stat"], _sc["stat"]
+        assert session_card({"pb": {}, "days": {}}, "2026-09-10", "휴식")["changed"] == []
         # v3.2 오늘의 띠
         _dd = {"pb": {}, "days": {
             "2026-09-08": dict(blank_day(), best={"pasu": 820}, plays=[["pasu", "10.00.00", 800], ["pasu", "10.02.00", 820],

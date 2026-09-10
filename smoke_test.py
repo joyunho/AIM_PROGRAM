@@ -178,6 +178,12 @@ sess = D["day_state"]["sess_lbl"].cget("text"); check("session line shows the se
 rib = D["day_state"]["rib_lbl"].cget("text"); check("ribbon line counts today's plays", rib.startswith("오늘 5/") and ("최고" in rib or "평소" in rib), rib)
 check("ribbon cells match the plan", len(D["day_state"]["rib_cells"]) == D["today_plan_n"]() == 27, str(len(D["day_state"]["rib_cells"])))
 check("training level shown in header", D["hdr_lv"].cget("text").startswith("Lv."), D["hdr_lv"].cget("text"))
+D["open_card"](); pump(250)
+cw = D["card_win"]["win"]
+check("session card opens with real content", cw is not None and cw.winfo_exists() and len(D["card_win"]["cv"].find_all()) > 5, str(len(D["card_win"]["cv"].find_all())))
+_ct = [D["card_win"]["cv"].itemcget(i, "text") for i in D["card_win"]["cv"].find_all() if D["card_win"]["cv"].type(i) == "text"]
+check("card names the day, theme and play count", any("발로 데이" in x for x in _ct) and any(x.startswith("5판") for x in _ct), str(_ct[:4]))
+cw.destroy(); pump(80)
 coach = [l.cget("text") for l in D["day_state"]["coach"]]; check("coach card has lines", any(coach) and ("지수" in coach[0] or "프로브" in coach[0]), str(coach)[:160])
 plus = btn(D["steppers"][0], "＋"); plus.cmd(); pump(50)
 check("deaths trend after +1", "1회" in D["dth_lbl"].cget("text"), D["dth_lbl"].cget("text"))
