@@ -2953,12 +2953,14 @@ def main():
 
     card_win = {"win": None, "cv": None}
 
+    FCARD_H = (FAM, 17, "bold"); FCARD = (FAM, 12); FCARD_C = (FAM, 11, "bold")
+
     def draw_card(cv, sc):
         cv.delete("all")
-        W = max(cv.winfo_width(), px(600)); H = max(cv.winfo_height(), px(220))
-        x0 = px(22); y = px(28)
-        cv.create_text(x0, y, text=sc["title"], anchor="w", fill=C["txt"], font=FH); y += px(28)
-        cv.create_text(x0, y, text=sc["stat"], anchor="w", fill=C["sub"], font=F); y += px(24)
+        W = max(cv.winfo_width(), px(740)); H = max(cv.winfo_height(), px(240))
+        x0 = px(24); y = px(30)
+        cv.create_text(x0, y, text=sc["title"], anchor="w", fill=C["txt"], font=FCARD_H); y += px(32)
+        cv.create_text(x0, y, text=sc["stat"], anchor="w", fill=C["sub"], font=FCARD); y += px(26)
         cells = ribbon_cells(len(sc["kinds"]), sc["kinds"])
         n = max(1, len(cells)); gap = px(2); bw = W - 2 * x0; tw = (bw - gap * (n - 1)) / n
         rh = px(22)
@@ -2968,28 +2970,28 @@ def main():
             if tw >= px(5): rrect(cv, x1, y + rh - h, x1 + tw, y + rh, min(px(3), tw / 2, h / 2), fill=fill, outline="")
             else: cv.create_rectangle(x1, y + rh - h, x1 + tw, y + rh, fill=fill, outline="", width=0)
         y += px(43)
-        cv.create_text(x0, y, text="오늘 바뀐 것", anchor="w", fill=C["gold"], font=FCAP); y += px(22)
+        cv.create_text(x0, y, text="오늘 바뀐 것", anchor="w", fill=C["gold"], font=FCARD_C); y += px(25)
         if sc["changed"]:
             for line in sc["changed"]:
-                cv.create_text(x0 + px(6), y, text="· " + line, anchor="w", fill=C["txt"], font=F); y += px(21)
+                cv.create_text(x0 + px(6), y, text="· " + line, anchor="w", fill=C["txt"], font=FCARD); y += px(25)
         else:
             cv.create_text(x0 + px(6), y, text="기록이 바뀐 건 없습니다 — 판을 쌓은 것도 그대로 남습니다",
-                           anchor="w", fill=C["hint"], font=FS); y += px(21)
+                           anchor="w", fill=C["hint"], font=FCARD); y += px(25)
         if sc["gain"]:
-            y += px(8); cv.create_text(x0, y, text=sc["gain"], anchor="w", fill=C["ok"], font=FS)
-        if sc["next"]: cv.create_text(x0, H - px(22), text=sc["next"], anchor="w", fill=C["sub"], font=FS)
-        cv.create_text(W - x0, H - px(22), text="아무 곳이나 누르면 닫힘", anchor="e", fill=C["dim"], font=FS)
+            y += px(9); cv.create_text(x0, y, text=sc["gain"], anchor="w", fill=C["ok"], font=FCARD)
+        if sc["next"]: cv.create_text(x0, H - px(24), text=sc["next"], anchor="w", fill=C["sub"], font=FCARD)
+        cv.create_text(W - x0, H - px(24), text="아무 곳이나 누르면 닫힘", anchor="e", fill=C["dim"], font=FS)
 
     def open_card():
         dkey = today_key[0]; dt = day_state.get("dt", "v")
         sc = session_card(data, dkey, DAY_TYPE[dt][0],
                           main_theme(dkey, data["pb"])[1] if dt == "v" else "", cur_plays())
-        CH = px(150) + px(21) * max(1, len(sc["changed"])) + px(56)      # 내용만큼만 — 빈 카드가 커 보이지 않게
+        CH = px(170) + px(25) * max(1, len(sc["changed"])) + px(62)      # 내용만큼만 — 빈 카드가 커 보이지 않게
         w = card_win["win"]
         if w is None or not w.winfo_exists():
             w = tk.Toplevel(root); card_win["win"] = w
             w.title("오늘 한 장"); w.configure(bg=C["bg"]); w.resizable(False, False)
-            cv = tk.Canvas(w, width=px(620), height=CH, bg=C["card"], highlightthickness=0)
+            cv = tk.Canvas(w, width=px(760), height=CH, bg=C["card"], highlightthickness=0)
             cv.pack(padx=px(10), pady=px(10)); card_win["cv"] = cv
             cv.bind("<Button-1>", lambda e: w.destroy())
             w.bind("<Escape>", lambda e: w.destroy())
