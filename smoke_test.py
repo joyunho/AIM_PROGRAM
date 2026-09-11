@@ -14,6 +14,7 @@ STATS = TMP / "FPSAimTrainer" / "stats"; STATS.mkdir(parents=True, exist_ok=True
 for f in STATS.iterdir(): f.unlink()
 for f in TMP.glob("*.json"): f.unlink()
 for f in TMP.glob("*.log"): f.unlink()
+for f in (TMP / "기록").glob("*.txt") if (TMP / "기록").is_dir() else (): f.unlink()
 (TMP / "aim_desk_data.json").write_text(json.dumps({
     "stats_dir": str(STATS), "auto_delay": 1, "seeded": False, "pb": {}, "days": {}, "next_key": "f10",
     "win": {"geo": "1000x700+30+40"}}), encoding="utf-8")
@@ -255,10 +256,39 @@ check("detail summary has PB and today count", "PB 3300" in dw["sum"].cget("text
 dw["win"].geometry("+1180+560"); pump(120); shot("7_detail")
 check("UI scale applied to daych", D["daych"].winfo_reqwidth() == ad.px(70), f"{D['daych'].winfo_reqwidth()} vs {ad.px(70)}")
 check("window fits screen", root.winfo_width() <= root.winfo_screenwidth())
+# ── v3.4 트레이너: 답장 붙여넣기 → 목표·도전·테마·메모 · 하루 기록 텍스트 저장 ──
+D["show"]("today"); pump(100)
+D["trainer_txt"].insert("1.0", "목표 Ground 3300\n도전 Pasu 900\n테마 내일 트래킹\n메모 첫 판 전에 손 풀기\n이상한 줄")
+D["apply_trainer"](); pump(450)
+check("trainer reply applied: targets + challenge + theme saved", data["trainer"]["targets"] == {"ground": 3300, "pasu": 900} and data["trainer"]["challenge"] == "pasu" and data["trainer"]["themes"] == {"2026-09-04": "trk"}, str(data.get("trainer")))
+_cl = D["day_state"]["chal_lbl"]; check("challenge box shows the trainer target", _cl is not None and "Pasu 900점" in _cl.cget("text") and "트레이너 목표" in _cl.cget("text") and "200 남음" in _cl.cget("text"), _cl.cget("text") if _cl else "none")
+_gr = next(r for r in D["routine_rows"] if r[1] == "ground"); check("ground row: 3300 meets 목표 3300 ✓ (green)", _gr[5].cget("text").endswith("목표 3300 ✓") and _gr[5].cget("fg") in (ad.C["ok"], ad.C["gold"]), _gr[5].cget("text"))
+_pr = next(r for r in D["routine_rows"] if r[1] == "pasu"); check("pasu row: 700 vs 목표 900 not met", _pr[5].cget("text").startswith("700") and _pr[5].cget("text").endswith("목표 900"), _pr[5].cget("text"))
+_st = D["trainer_lbl"].cget("text"); check("trainer status lists targets, theme, memo and the unread line", "목표 2개" in _st and "09/04 트래킹 집중" in _st and "손 풀기" in _st and "읽지 못한 줄 1" in _st, _st)
+check("paste box cleared after apply", D["trainer_txt"].get("1.0", "end").strip() == "")
+check("routine card shows the trainer memo", any(x.startswith("트레이너 메모 · 첫 판 전에 손 풀기") for x in texts(root)))
+ke4 = KE(); ke4.widget = D["trainer_txt"]; ke4.keysym = "2"; ke4.state = 0
+D["on_key"](ke4); pump(50); check("'2' typed in the paste box does not switch tab", D["cur_tab"][0] == "today")
+_rp = D["save_report_today"](True); pump(100)
+check("report saved as 기록/에임데스크_<date>.txt", _rp is not None and _rp.exists() and _rp == TMP / "기록" / "에임데스크_2026-09-03.txt", str(_rp))
+_rt = _rp.read_text(encoding="utf-8-sig") if _rp else ""
+check("report has every section and today's numbers", all(x in _rt for x in ("[요약]", "[판별 기록]", "[시나리오별]", "[트레이너 목표 현황]", "[트레이너에게]", "[데이터]")) and "판 5/27" in _rt and "Ground" in _rt and "목표  3300 · 오늘  3300  ✓ 넘음" in _rt and "메모: 첫 판 전에 손 풀기" in _rt, _rt[:300])
+check("status line shows today's report saved", "에임데스크_2026-09-03.txt ✓" in D["trainer_lbl"].cget("text"), D["trainer_lbl"].cget("text")[-80:])
+shot("9_trainer")
+# 오늘 테마를 바꾸는 답장 → 열려 있는 순서창도 새 계획으로 다시 열린다 (자동 진행 상태는 유지)
+_nf = len(fired); _old_seq = list(D["seq_win"]["seq"])
+D["trainer_txt"].insert("1.0", "테마 오늘 트래킹"); D["apply_trainer"](); pump(500)
+top = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel) and w.title().startswith("오늘 순서")][0]
+check("today's theme override rebuilds the plan and reopens the sequence window", data["trainer"]["themes"].get("2026-09-03") == "trk" and D["seq_win"]["seq"] != _old_seq and D["seq_win"]["seq"].count("raw") == 5 and len(D["seq_win"]["rows"]) == 27 and top.winfo_exists(), str(D["seq_win"]["seq"][10:16]))
+check("theme override keeps auto mode and sends nothing by itself", D["auto"]["on"] and len(fired) == _nf, f"{D['auto']['on']} {len(fired) - _nf}")
+_pl = json.loads((TMP / "FPSAimTrainer" / "Saved" / "SaveGames" / "Playlists" / "AIMDESK Day.json").read_bytes().decode("utf-16"))
+check("installed AIMDESK Day.json follows the new theme", sum(1 for x in _pl["scenarioList"] if x["scenario_Name"] == "VT Raw Control Novice S5") >= 1 and len(_pl["scenarioList"]) == len(D["seq_win"]["rows"]) or sum(x.get("play_Count", 1) for x in _pl["scenarioList"]) == 27, str([x["scenario_Name"] for x in _pl["scenarioList"]][-4:]))
+(TMP / "기록" / "에임데스크_2026-09-03.txt").unlink()          # 아래 자정 통과 검사: 켜 둔 채 날이 바뀌면 어제 기록이 다시 저장돼야 한다
 # ── 토요일(벤치 데이)로 날짜가 넘어감 → AIMDESK Bench 플레이리스트 · 줄 18개 ──
 btn(top, "딥링크 방식").cmd(); pump(50)
 os.environ["AIMDESK_TODAY"] = "2026-09-05"; scan(); pump(700)
 check("day change → bench day with AIMDESK Bench", D["day_state"]["dt"] == "b" and D["day_state"]["pl"] == "AIMDESK Bench", str(D["day_state"]["dt"]))
+check("day change wrote yesterday's report first", (TMP / "기록" / "에임데스크_2026-09-03.txt").exists() and "판 5/27" in (TMP / "기록" / "에임데스크_2026-09-03.txt").read_text(encoding="utf-8-sig"))
 check("day change resets auto engine", D["auto"]["on"] is False and D["auto"]["pending"] is None and D["auto"]["fired_at"] is None)
 bb = btn(root, "▶ 벤치 18개 실행"); check("bench run button exists", bb is not None)
 check("bench rows: 18 in Voltaic order", [r[1] for r in D["routine_rows"]] == [k for s_ in ad.SUBS for k, _ in s_[3]], str([r[1] for r in D["routine_rows"]])[:120])
@@ -286,6 +316,8 @@ D["on_close"]()
 saved = json.loads((TMP / "aim_desk_data.json").read_text(encoding="utf-8"))
 check("on_close saved win.geo/tab/seq", saved["win"].get("tab") == "today" and "geo" in saved["win"] and saved["win"].get("seq", "").startswith("+"), str(saved["win"]))
 check("auto_mode persisted", saved.get("auto_mode") == "key")
+check("on_close wrote the bench-day report", (TMP / "기록" / "에임데스크_2026-09-05.txt").exists() and "벤치마크" in (TMP / "기록" / "에임데스크_2026-09-05.txt").read_text(encoding="utf-8-sig"))
+check("trainer targets survive in the saved file", saved.get("trainer", {}).get("targets") == {"ground": 3300, "pasu": 900})
 log = (TMP / "aim_desk.log").read_text() if (TMP / "aim_desk.log").exists() else ""
 check("no exceptions logged", log.strip() == "", log[-600:])
 n_ok = sum(1 for _, ok in results if ok)
