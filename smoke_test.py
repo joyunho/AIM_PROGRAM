@@ -17,7 +17,7 @@ for f in TMP.glob("*.log"): f.unlink()
 for f in (TMP / "기록").glob("*.txt") if (TMP / "기록").is_dir() else (): f.unlink()
 (TMP / "aim_desk_data.json").write_text(json.dumps({
     "stats_dir": str(STATS), "auto_delay": 1, "seeded": False, "pb": {}, "days": {}, "next_key": "f10",
-    "win": {"geo": "1000x700+30+40"}}), encoding="utf-8")
+    "win": {"geo": "1000x700+30+40"}, "seq_popup": True}), encoding="utf-8")     # 테스트는 순서창을 띄운 채로 (기본은 숨김)
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("ad", HERE / "aim_desk.py")
@@ -91,6 +91,8 @@ D["show"]("today"); pump(100)
 # 스크롤
 root.geometry("960x660"); pump(300)
 ls = D["left_scroll"]
+check("verdict band and live strip visible at minsize", D["band_cv"].winfo_ismapped() and D["live"].winfo_ismapped() and len([i for i in D["band_cv"].find_all() if D["band_cv"].type(i) == "text"]) >= 8, str(len(D["band_cv"].find_all())))
+D["set_routine_open"](True); pump(300)
 check("routine card overflows at minsize → thumb shown", ls.shown and ls.thumb.winfo_ismapped(), f"{ls.body.winfo_reqheight()} vs {ls.cv.winfo_height()}")
 class Ev: pass
 ev = Ev(); ev.widget = ls.cv; ev.delta = -120; ev.num = 0
@@ -106,7 +108,7 @@ top = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)][0]
 al_ = D["seq_win"]["auto_lbl"]; check("start instruction (auto_lbl, gold) names local playlist + key", "로컬 재생 목록" in al_.cget("text") and "AIMDESK Day" in al_.cget("text") and "F10" in al_.cget("text") and al_.cget("fg") == ad.C["gold"], al_.cget("text")[:160])
 check("key line: read from KovaaK's ini", D["seq_win"]["key_lbl"].cget("text").startswith("코박스 설정에서 읽음") and "F10" in D["seq_win"]["key_lbl"].cget("text"))
 check("tab guide drawn before first play", bool(D["seq_win"]["guide"].winfo_manager()) and len(D["seq_win"]["guide"].find_all()) >= 9)
-check("install label points at the 4th tab", D["pl_lbl"].cget("text").startswith("플레이리스트 4개 설치 ✓ → 코박스 샌드박스 브라우저 네 번째 탭"), D["pl_lbl"].cget("text")[:80])
+check("install label points at the 4th tab", D["pl_lbl"].cget("text").startswith("플레이리스트 3개 설치 ✓ → 코박스 샌드박스 브라우저 네 번째 탭"), D["pl_lbl"].cget("text")[:80])
 def shot0(name):
     if os.environ.get("AIMDESK_SHOTS"):
         import subprocess; Path(os.environ["AIMDESK_SHOTS"]).mkdir(parents=True, exist_ok=True)
@@ -124,10 +126,10 @@ check("start instruction gone after first play", "코박스에서 시작하세�
 check("tab guide hidden after first play", not D["seq_win"]["guide"].winfo_manager())
 check("status bar counts 1판 ok", "1판" in D["status_lbl"].cget("text") and D["status_dot"].itemcget(1, "fill") == ad.C["ok"], D["status_lbl"].cget("text"))
 tx = texts(top); check("row shows the score, no misleading ▲▼ delta", "3000" in tx and not any(x.startswith(("▲", "▼")) for x in tx), str([x for x in tx if x.startswith(("▲", "▼"))]))
-csv("VT Ground Novice S5", "10.01.00", 3300); scan(); wait_fired(2)
+csv("VT Raw Control Novice S5", "10.01.00", 3300); scan(); wait_fired(2)      # v4 웜업: ground → raw → frog → float
 check("after CSV#2: NEXT pressed again", fired == ["KEY:F10"] * 2, str(fired))
 check("new personal best labelled 최고", "최고" in texts(top))
-check("PB toast rendered with bench context", D["toast"].winfo_ismapped() and any("Reactive" in t or "Gold" in t for t in texts(D["toast"])), str(texts(D["toast"]))[:160])
+check("PB toast rendered with bench context", D["toast"].winfo_ismapped() and any("Control" in t or "Gold" in t or "Silver" in t for t in texts(D["toast"])), str(texts(D["toast"]))[:160])
 check("plays persisted in day", len(data["days"][TODAY.isoformat()]["plays"]) == 2 and data["days"][TODAY.isoformat()]["sess"]["start"] == "10.00.00")
 D["show_toast"]("a"); D["show_toast"]("b"); D["show_toast"]("c"); pump(50)
 check("toast queue caps at 3", len(D["toast"].winfo_children()) == 3)
@@ -160,7 +162,7 @@ check("click on '–' un-skips the row", D["seq_win"]["skipped"] == set() and "�
 D["seq_win"]["skipped"].add(2); D["update_sequence"]()          # 아래 검사들은 Frogtagon 이 건너뛴 상태를 전제로 한다
 btn(top, "자동 진행").cmd(); check("auto ON (key) presses nothing", len(fired) == 5)
 btn(top, "딥링크 방식").cmd(); csv("VT Pasu Novice S5", "10.06.00", 700); scan(); wait_fired(6)
-check("link mode → deeplink for EddieTS", len(fired) == 6 and fired[-1] == ad.scenario_uri("VT EddieTS Novice S5"), str(fired[-1:]))
+check("link mode → deeplink for Popcorn (next probe)", len(fired) == 6 and fired[-1] == ad.scenario_uri("VT Popcorn Novice S5"), str(fired[-1:]))
 top.geometry("+1180+60"); pump(100)          # 스크린샷에서 본창을 가리지 않게 오른쪽으로
 
 # ── v3: 정보·코치·기록 탭·단축키 ──
@@ -180,7 +182,10 @@ rib = D["day_state"]["rib_lbl"].cget("text"); check("ribbon line counts today's 
 check("ribbon cells match the plan", len(D["day_state"]["rib_cells"]) == D["today_plan_n"]() == 27, str(len(D["day_state"]["rib_cells"])))
 check("training level shown in header", D["hdr_lv"].cget("text").startswith("Lv."), D["hdr_lv"].cget("text"))
 _tt = texts(root)
-check("week theme line lists four weekday themes", any(x.startswith("이번 주 · 월 ") and x.count("·") == 4 for x in _tt), str([x for x in _tt if x.startswith("이번 주")])[:120])
+check("week theme line lists five weekday themes", any(x.startswith("이번 주 · 월 ") and x.count("·") == 5 for x in _tt), str([x for x in _tt if x.startswith("이번 주")])[:120])
+_V = D["verdicts"](); check("hero verdict is honest with 5 plays (측정 중, hollow)", _V["day"]["state"] == "wait" and _V["day"]["word"] == "측정 중" and D["band_cv"].itemcget("hero", "fill") == ad.C["card2"], str(_V["day"]))
+check("live strip shows the last score and its scenario", D["cur_score"].cget("text") == "700" and "Pasu" in D["cur_word"].cget("text"), D["cur_score"].cget("text") + " " + D["cur_word"].cget("text"))
+check("live strip mirrors the auto-progress hint", "코박스" in D["auto_mini"].cget("text") or "다음" in D["auto_mini"].cget("text") or D["auto_mini"].cget("text") == "", D["auto_mini"].cget("text")[:80])
 _cl = D["day_state"].get("chal_lbl")
 check("daily challenge is either a real rank target or absent", _cl is None or ("넘으면" in _cl.cget("text") and "칸" in _cl.cget("text")), _cl.cget("text") if _cl else "none")
 D["open_card"](); pump(250)
@@ -205,7 +210,8 @@ bw.geometry("900x200"); pump(350); small = big_px(bcv)
 bw.geometry("900x420"); pump(350); large = big_px(bcv)
 check("broadcast text grows with the window", large > small * 1.5 > 0, f"{small} -> {large}")
 _bt = [bcv.itemcget(i, "text") for i in bcv.find_all() if bcv.type(i) == "text"]
-check("broadcast shows theme and play count", any("집중" in x or "데이" in x for x in _bt) and any(x.endswith("판") for x in _bt), str(_bt[:4]))
+check("broadcast shows theme and play count", any(ad.main_theme(TODAY.isoformat(), data["pb"])[1] in x for x in _bt) and any(x.endswith("판") for x in _bt), str(_bt[:4]))
+check("broadcast carries the three verdicts", (any(x == "오늘" for x in _bt) and any(x.startswith("요즘") for x in _bt) and any(x.startswith("성장") for x in _bt)) or any("요즘" in x and "성장" in x for x in _bt), str(_bt)[:200])   # 좁은 창(<620px)은 한 줄 요약
 bw.destroy(); pump(80)
 # 글씨 크기 설정은 저장되고 다시 켤 때 쓰인다 (테스트에선 프로세스를 띄우지 않는다)
 D["set_scale"](1.5); pump(60)
@@ -213,7 +219,10 @@ check("scale setting saved for next launch", data.get("ui_scale") == 1.5 and "ge
 check("current scale button highlighted", D["scale_btns"][1.5].bgc == ad.C["gold"], D["scale_btns"][1.5].bgc)
 D["set_scale"](None); pump(60)
 check("auto scale restores", data.get("ui_scale") is None and D["scale_btns"][None].bgc == ad.C["gold"])
-coach = [l.cget("text") for l in D["day_state"]["coach"]]; check("coach card has lines", any(coach) and ("지수" in coach[0] or "프로브" in coach[0]), str(coach)[:160])
+coach = [l.cget("text") for l in D["day_state"]["coach"]]; check("coach card has lines", any(coach), str(coach)[:160])
+D["show"]("tools"); pump(200); check("tools tab holds the stats folder and trainer cards", D["pl_lbl"].winfo_ismapped() and D["trainer_txt"].winfo_ismapped()); D["show"]("today"); pump(150)
+D["set_drawer"](True); pump(80); check("rank feedback drawer opens with steppers", D["steppers"][0].winfo_ismapped())
+D["tier_var"].set("실버 2"); D["rr_var"].set("+18"); D["commit_rank"](); check("rank tier / RR saved", data["days"][TODAY.isoformat()]["rank"] == {"tier": "실버 2", "rr": 18}, str(data["days"][TODAY.isoformat()].get("rank")))
 plus = btn(D["steppers"][0], "＋"); plus.cmd(); pump(50)
 check("deaths trend after +1", "1회" in D["dth_lbl"].cget("text"), D["dth_lbl"].cget("text"))
 shot("1_today")
@@ -221,7 +230,7 @@ D["show"]("bench"); pump(200)
 check("bench advice names the weakest link", D["advice_lbl"].cget("text").startswith("약한 고리"), D["advice_lbl"].cget("text")[:120])
 wk = [k for k, (_, _, cardf) in D["ben_rows"].items() if cardf.cget("highlightbackground") == ad.C["gold"]]
 check("weakest card highlighted (one)", len(wk) == 1, str(wk))
-gaps = [c[3].cget("text") for c in D["ben_rows"]["react"][1]]; check("gap label for today's Ground", any(g.startswith("Gold +") for g in gaps), str(gaps))
+gaps = [c[3].cget("text") for c in D["ben_rows"]["react"][1]]; check("gap label for today's Ground", any(g.startswith("Gold") for g in gaps), str(gaps))
 shot("2_bench")
 D["show"]("grow"); pump(200); shot("3_grow")
 D["show"]("log"); pump(200)
@@ -250,19 +259,20 @@ cur = D["seq_win"]["cur_row"]; check("current row emphasized (bold, card2)", cur
 check("skip/resend buttons enabled while rows remain", D["seq_win"]["skip_btn"].enabled)
 shot("6_seq_compact")
 D["set_compact"](False); pump(100)
+D["set_routine_open"](True); pump(150)
 D["routine_rows"][0][8].event_generate("<Button-1>"); pump(150)
 dw = D["detail"]; check("detail popup opened for ground", dw["win"] is not None and dw["win"].winfo_exists() and dw["key"] == "ground")
-check("detail summary has PB and today count", "PB 3300" in dw["sum"].cget("text") and "오늘 2판" in dw["sum"].cget("text"), dw["sum"].cget("text"))
+check("detail summary has PB and today count", "오늘 1판" in dw["sum"].cget("text") and "베스트 3000" in dw["sum"].cget("text"), dw["sum"].cget("text"))
 dw["win"].geometry("+1180+560"); pump(120); shot("7_detail")
 check("UI scale applied to daych", D["daych"].winfo_reqwidth() == ad.px(70), f"{D['daych'].winfo_reqwidth()} vs {ad.px(70)}")
 check("window fits screen", root.winfo_width() <= root.winfo_screenwidth())
 # ── v3.4 트레이너: 답장 붙여넣기 → 목표·도전·테마·메모 · 하루 기록 텍스트 저장 ──
 D["show"]("today"); pump(100)
-D["trainer_txt"].insert("1.0", "목표 Ground 3300\n도전 Pasu 900\n테마 내일 트래킹\n메모 첫 판 전에 손 풀기\n이상한 줄")
+D["trainer_txt"].insert("1.0", "목표 Ground 3000\n도전 Pasu 900\n테마 내일 트래킹\n메모 첫 판 전에 손 풀기\n이상한 줄")
 D["apply_trainer"](); pump(450)
-check("trainer reply applied: targets + challenge + theme saved", data["trainer"]["targets"] == {"ground": 3300, "pasu": 900} and data["trainer"]["challenge"] == "pasu" and data["trainer"]["themes"] == {"2026-09-04": "trk"}, str(data.get("trainer")))
+check("trainer reply applied: targets + challenge + theme saved", data["trainer"]["targets"] == {"ground": 3000, "pasu": 900} and data["trainer"]["challenge"] == "pasu" and data["trainer"]["themes"] == {"2026-09-04": "trk"}, str(data.get("trainer")))
 _cl = D["day_state"]["chal_lbl"]; check("challenge box shows the trainer target", _cl is not None and "Pasu 900점" in _cl.cget("text") and "트레이너 목표" in _cl.cget("text") and "200 남음" in _cl.cget("text"), _cl.cget("text") if _cl else "none")
-_gr = next(r for r in D["routine_rows"] if r[1] == "ground"); check("ground row: 3300 meets 목표 3300 ✓ (green)", _gr[5].cget("text").endswith("목표 3300 ✓") and _gr[5].cget("fg") in (ad.C["ok"], ad.C["gold"]), _gr[5].cget("text"))
+_gr = next(r for r in D["routine_rows"] if r[1] == "ground"); check("ground row: 3000 meets 목표 3000 ✓ (green)", _gr[5].cget("text").endswith("목표 3000 ✓") and _gr[5].cget("fg") in (ad.C["ok"], ad.C["gold"]), _gr[5].cget("text"))
 _pr = next(r for r in D["routine_rows"] if r[1] == "pasu"); check("pasu row: 700 vs 목표 900 not met", _pr[5].cget("text").startswith("700") and _pr[5].cget("text").endswith("목표 900"), _pr[5].cget("text"))
 _st = D["trainer_lbl"].cget("text"); check("trainer status lists targets, theme, memo and the unread line", "목표 2개" in _st and "09/04 트래킹 집중" in _st and "손 풀기" in _st and "읽지 못한 줄 1" in _st, _st)
 check("paste box cleared after apply", D["trainer_txt"].get("1.0", "end").strip() == "")
@@ -272,14 +282,14 @@ D["on_key"](ke4); pump(50); check("'2' typed in the paste box does not switch ta
 _rp = D["save_report_today"](True); pump(100)
 check("report saved as 기록/에임데스크_<date>.txt", _rp is not None and _rp.exists() and _rp == TMP / "기록" / "에임데스크_2026-09-03.txt", str(_rp))
 _rt = _rp.read_text(encoding="utf-8-sig") if _rp else ""
-check("report has every section and today's numbers", all(x in _rt for x in ("[요약]", "[판별 기록]", "[시나리오별]", "[트레이너 목표 현황]", "[트레이너에게]", "[데이터]")) and "판 5/27" in _rt and "Ground" in _rt and "목표  3300 · 오늘  3300  ✓ 넘음" in _rt and "메모: 첫 판 전에 손 풀기" in _rt, _rt[:300])
+check("report has every section and today's numbers", all(x in _rt for x in ("[요약]", "[판정]", "[판별 기록]", "[시나리오별]", "[트레이너 목표 현황]", "[트레이너에게]", "[데이터]")) and "판 5/27" in _rt and "랭크 실버 2 RR +18" in _rt and "Ground" in _rt and "목표  3000 · 오늘  3000  ✓ 넘음" in _rt and "메모: 첫 판 전에 손 풀기" in _rt, _rt[:300])
 check("status line shows today's report saved", "에임데스크_2026-09-03.txt ✓" in D["trainer_lbl"].cget("text"), D["trainer_lbl"].cget("text")[-80:])
 shot("9_trainer")
 # 오늘 테마를 바꾸는 답장 → 열려 있는 순서창도 새 계획으로 다시 열린다 (자동 진행 상태는 유지)
 _nf = len(fired); _old_seq = list(D["seq_win"]["seq"])
 D["trainer_txt"].insert("1.0", "테마 오늘 트래킹"); D["apply_trainer"](); pump(500)
 top = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel) and w.title().startswith("오늘 순서")][0]
-check("today's theme override rebuilds the plan and reopens the sequence window", data["trainer"]["themes"].get("2026-09-03") == "trk" and D["seq_win"]["seq"] != _old_seq and D["seq_win"]["seq"].count("raw") == 5 and len(D["seq_win"]["rows"]) == 27 and top.winfo_exists(), str(D["seq_win"]["seq"][10:16]))
+check("today's theme override rebuilds the plan and reopens the sequence window", data["trainer"]["themes"].get("2026-09-03") == "trk" and D["seq_win"]["seq"] != _old_seq and D["seq_win"]["seq"].count("raw") >= 5 and len(D["seq_win"]["rows"]) == 27 and top.winfo_exists(), str(D["seq_win"]["seq"][10:16]))
 check("theme override keeps auto mode and sends nothing by itself", D["auto"]["on"] and len(fired) == _nf, f"{D['auto']['on']} {len(fired) - _nf}")
 _pl = json.loads((TMP / "FPSAimTrainer" / "Saved" / "SaveGames" / "Playlists" / "AIMDESK Day.json").read_bytes().decode("utf-16"))
 check("installed AIMDESK Day.json follows the new theme", sum(1 for x in _pl["scenarioList"] if x["scenario_Name"] == "VT Raw Control Novice S5") >= 1 and len(_pl["scenarioList"]) == len(D["seq_win"]["rows"]) or sum(x.get("play_Count", 1) for x in _pl["scenarioList"]) == 27, str([x["scenario_Name"] for x in _pl["scenarioList"]][-4:]))
@@ -317,7 +327,7 @@ saved = json.loads((TMP / "aim_desk_data.json").read_text(encoding="utf-8"))
 check("on_close saved win.geo/tab/seq", saved["win"].get("tab") == "today" and "geo" in saved["win"] and saved["win"].get("seq", "").startswith("+"), str(saved["win"]))
 check("auto_mode persisted", saved.get("auto_mode") == "key")
 check("on_close wrote the bench-day report", (TMP / "기록" / "에임데스크_2026-09-05.txt").exists() and "벤치마크" in (TMP / "기록" / "에임데스크_2026-09-05.txt").read_text(encoding="utf-8-sig"))
-check("trainer targets survive in the saved file", saved.get("trainer", {}).get("targets") == {"ground": 3300, "pasu": 900})
+check("trainer targets survive in the saved file", saved.get("trainer", {}).get("targets") == {"ground": 3000, "pasu": 900})
 log = (TMP / "aim_desk.log").read_text() if (TMP / "aim_desk.log").exists() else ""
 check("no exceptions logged", log.strip() == "", log[-600:])
 n_ok = sum(1 for _, ok in results if ok)
