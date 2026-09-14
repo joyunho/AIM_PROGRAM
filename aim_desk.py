@@ -56,9 +56,18 @@ MAIN_THEMES = [
     ("mix", "전체 순회",     "9개 갈래를 한 판씩 훑는 날",                  [("pasu", 2), ("ww5", 2), ("frog", 2), ("snake", 2), ("ground", 2),
                                                                        ("raw", 2), ("dot", 2), ("drift", 2), ("penta", 1)]),
 ]
-# 10 훈련일(월~금 × 2주) 주기. 같은 테마가 이틀 연속 오지 않고, 같은 요일에 같은 테마가 2주 연속 오지 않는다. 클리킹 4 · 스위칭 2 · 플릭 1 · 약점 2 · 순회 1
-CYCLE = ["clk", "swt", "spd", "flk", "weak", "swt", "clk", "mix", "weak", "spd"]
-CYCLE_EPOCH = "2026-09-14"                                          # 월요일 — 주기의 0번 날
+# 10 훈련일(2주) 주기. 세 가지를 동시에 만족하게 짠 순서다 — ① 같은 테마가 이틀 연속 오지 않고,
+# ② 같은 요일에 2주 연속 같은 테마가 오지 않고, ③ 달력 한 주(월~금) 안에서 5일이 전부 다른 테마다.
+# ③ 때문에 순서가 CYCLE_EPOCH 요일에 묶인다 — 시작 요일을 바꾸면 주기 경계가 주 중간에 걸려 이 순서를 다시 짜야 한다.
+# 구성: 클리킹 4 (정확 2 · 스피드 2) · 스위칭 2 · 약점 2 · 플릭 1 · 순회 1
+CYCLE = ["clk", "swt", "spd", "mix", "clk", "weak", "spd", "flk", "swt", "weak"]
+CYCLE_EPOCH = "2026-09-15"                                          # 화요일 — 주기의 1번 날 (여기부터 CYCLE[0])
+
+def _train_ord(d: date) -> int:
+    """월~금만 세는 일련번호. 주말은 그 주 금요일과 같은 번호(훈련일이 아니라 쓸 일이 없다).
+    기준일이 무슨 요일이든 주기가 맞게 돌도록 — 날짜 차이를 7로 나누는 방식은 기준일이 월요일일 때만 맞다."""
+    n = d.toordinal() - 1                            # 0 = 0001-01-01 (월요일)
+    return (n // 7) * 5 + min(n % 7, 4)
 
 def weak_theme(pb: dict):
     """약점 집중 — 발로란트에 닿는 클리킹·스위칭 서브카테고리 중 가장 약한 둘에서 17판. 기록이 모자라면 None"""
@@ -144,12 +153,11 @@ def fmt_challenge(ch, today_best=None) -> str:
 def main_theme(dkey: str, pb: dict = None):
     """그날의 본훈련 테마 (id, 이름, 설명, [(시나리오, 판수)]).
     날짜만으로 정해진다 — 앱을 껐다 켜도, 코박스에 설치된 플레이리스트와도 늘 같은 것을 가리키게.
-    (주차 + 요일) % 4 라서 월~목이 한 주 안에서 모두 다르고, 다음 주에는 요일마다 한 칸씩 밀린다."""
+    CYCLE_EPOCH(화요일)부터 훈련일(월~금)을 세어 10일 주기로 돌린다 — 10 훈련일 = 딱 2주."""
     d = date.fromisoformat(dkey)
     tid = TRAINER["themes"].get(dkey)                    # 트레이너가 그날 테마를 지정했으면 그것이 먼저
     if tid is None:
-        e = date.fromisoformat(CYCLE_EPOCH); n = ((d - e).days // 7) * 5 + min(d.weekday(), 4)
-        tid = CYCLE[n % len(CYCLE)]
+        tid = CYCLE[(_train_ord(d) - _train_ord(date.fromisoformat(CYCLE_EPOCH))) % len(CYCLE)]
     if tid == "weak": return weak_theme(pb or {}) or THEME_BY_ID["mix"]   # 기록이 모자라면 '약점' 자리는 '전체 순회'
     return THEME_BY_ID.get(tid, MAIN_THEMES[0])
 
@@ -5180,7 +5188,7 @@ if __name__ == "__main__":
         for _t in MAIN_THEMES: assert sum(n for _, n in _t[3]) == 17, _t[0]
         assert sum(n for _, n in main_theme("2026-09-10", SEED)[3]) == 17
         assert main_theme("2026-09-10")[0] != "weak"                      # 기록 없으면 약점 테마로 안 감
-        assert [main_theme((_mon + timedelta(days=i)).isoformat(), SEED)[0] for i in range(5)] == ["swt", "clk", "mix", "weak", "spd"], [main_theme((_mon + timedelta(days=i)).isoformat(), SEED)[0] for i in range(5)]
+        assert [main_theme((_mon + timedelta(days=i)).isoformat(), SEED)[0] for i in range(5)] == ["clk", "weak", "spd", "flk", "swt"], [main_theme((_mon + timedelta(days=i)).isoformat(), SEED)[0] for i in range(5)]
         _c10 = [main_theme((date.fromisoformat(CYCLE_EPOCH) + timedelta(days=i)).isoformat(), SEED)[0] for i in range(14) if day_type_of((date.fromisoformat(CYCLE_EPOCH) + timedelta(days=i)).isoformat()) == "v"]
         assert _c10 == CYCLE and all(_c10[i] != _c10[i + 1] for i in range(9)) and all(_c10[i] != _c10[i + 5] for i in range(5)), _c10   # 이틀 연속 같은 테마 없음 · 같은 요일 2주 연속 없음
         assert _c10.count("clk") + _c10.count("spd") == 4 and "trk" not in _c10                                      # 발로: 클리킹 4/10, 트래킹은 지정할 때만
@@ -5257,7 +5265,7 @@ if __name__ == "__main__":
         _td = {"pb": dict(SEED), "days": {}}
         _pp = trainer_apply(_td, "목표 Pasu 850\n도전 Pasu 850\n테마 2026-09-14 트래킹\n메모 손 풀기", "2026-09-10")
         assert TRAINER["targets"] == {"pasu": 850} and TRAINER["challenge"] == "pasu" and _td["trainer"]["set_on"] == "2026-09-10" and TRAINER["note"] == "손 풀기"
-        assert main_theme("2026-09-14", SEED)[0] == "trk" and main_theme("2026-09-15", SEED)[0] != "trk"     # 월요일만 지정 (원래 월 = swt)
+        assert main_theme("2026-09-14", SEED)[0] == "trk" and main_theme("2026-09-15", SEED)[0] != "trk"     # 그 하루만 지정 (원래 9/14 = weak)
         assert "트레이너 지정" in theme_line("2026-09-14", SEED) and "트레이너 지정" not in theme_line("2026-09-15", SEED)
         assert sum(n for _, n in dict(playlists_for("2026-09-14", SEED))["AIMDESK Day"]) == 27
         _ch = daily_challenge(_td, "2026-09-10", dict(SEED))
@@ -5296,7 +5304,7 @@ if __name__ == "__main__":
             assert _pth == Path(_td2) / "에임데스크_2026-09-10.txt" and _pth.read_bytes()[:3] == b"\xef\xbb\xbf" and "[요약]" in _pth.read_text(encoding="utf-8-sig")
             assert report_path("2026-09-10", _td2) == _pth and not _pth.with_name(_pth.name + ".tmp").exists()
         trainer_clear(_td); assert TRAINER == {"targets": {}, "themes": {}, "note": "", "challenge": None, "set_on": None}
-        assert main_theme("2026-09-14", SEED)[0] == "clk"
+        assert main_theme("2026-09-14", SEED)[0] == "weak"                                    # 지정이 지워지면 다시 주기대로
         # v4.0 판정 엔진 — 합성 기록(그날 계획대로 SEED×배율, 판마다 ±0.4% 번갈아)
         def _syn(days_fac, start="2026-09-14"):
             dd = {"pb": dict(SEED), "days": {SEED_DATE: dict(blank_day(), best=dict(SEED))}}; d0 = date.fromisoformat(start)
@@ -5328,7 +5336,7 @@ if __name__ == "__main__":
         _v = verdict_day(_syn({0: 1.0, 7: 1.0}), "2026-09-21"); assert _v["word"] == "지난 월요일과 비슷" and _iga("월요일") == "이" and _iga("어제") == "가", _v
         _e = _syn({0: 1.0, 1: (1.0, 10)}); _v = verdict_day(_e, "2026-09-15"); assert _v["n"] == 6 and "어제 10판" in _v["cap2"], _v   # 같은 지점 = 웜업 뺀 판 수
         _v = verdict_day(_syn({-2: (1.0, 0)}) if False else _syn({0: 1.0}), "2026-09-19"); assert _v["state"] == "wait" and _v["word"] == "벤치 시작 전" and _v["num"] == "0/18", _v
-        _dv = day_value(_syn({0: 1.0}), "2026-09-14"); assert "frog" in _dv and "float" in _dv and "ground" not in _dv, sorted(_dv)   # 본훈련의 frog/float 블록은 남고 웜업 1판만 빠진다
+        _dv = day_value(_syn({1: 1.0}), "2026-09-15"); assert "frog" in _dv and "float" in _dv and "ground" not in _dv, sorted(_dv)   # 클리킹 정확 날: 본훈련의 frog/float 블록은 남고 웜업 1판만 빠진다
         _e = _syn({-2: 1.0}); _v = verdict_day(_e, "2026-09-12"); assert _v["state"] in ("flat", "up", "down") and _v["word"].startswith("확정") and _v["colk"] == "rank", _v   # 벤치 18/18
         _e = _syn({-2: (1.0, 5)}); _v = verdict_day(_e, "2026-09-12"); assert _v["state"] == "bench" and _v["word"].startswith("예상") and _v["fill"] == "hollow", _v
         _ps = probe_level_series({"days": {SEED_DATE: dict(blank_day(), best=dict(SEED)), "2026-09-15": dict(blank_day(), first={k: SEED[k] * 2 for k in PROBE}), "2026-09-16": dict(blank_day(), first={k: SEED[k] for k in PROBE[:3]})}})
