@@ -299,6 +299,21 @@ def plan_items(dkey: str, pb: dict = None):
 def plan_count(dkey: str, pb: dict = None) -> int:
     return sum(n for _, n in plan_items(dkey, pb))
 
+def off_plan_plays(data: dict, dkey: str, plays=None, pb: dict = None):
+    """오늘 친 판 중 '오늘 계획에 없는 시나리오' 의 판 → (판 수, 시나리오 목록).
+    코박스가 예전 플레이리스트를 들고 있으면 여기에 쌓인다 — 기록에는 남지만 오늘 진행률에는 안 잡힌다."""
+    plays = day_plays(data, dkey) if plays is None else [tuple(p) for p in plays]
+    plan = {k for k, _n in plan_items(dkey, pb if pb is not None else data.get("pb"))}
+    if not plan or not plays: return (0, [])
+    off = [k for k, _t, _s in plays if k not in plan]
+    return (len(off), sorted(dict.fromkeys(off)))
+
+def fmt_off_plan(n: int, keys) -> str:
+    if not n: return ""
+    nm = " · ".join(sname(k) for k in keys[:4]) + ("…" if len(keys) > 4 else "")
+    return (f"⚠ 계획 밖 {n}판 ({nm}) — 기록에는 남지만 오늘 진행률에는 안 잡힙니다. "
+            "코박스가 예전 플레이리스트를 들고 있으면 껐다 켜세요")
+
 def _cell(x, w=5):
     return f"{'—' if x is None else x:>{w}}"
 
@@ -482,13 +497,20 @@ def _base_dir():
         return Path(sys.executable).parent
     return Path(__file__).parent
 
+DAY_CUTOFF_H = [5]          # 훈련일이 바뀌는 시각 (기본 새벽 5시). 0 이면 자정 — 옛 동작
+# 왜 자정이 아닌가: 밤 11시에 시작해 새벽 1시에 끝난 세션이 자정에서 이틀로 쪼개지면
+# 한 루틴이 반씩 나뉘어 진행률·첫 판·세션 길이가 전부 어긋난다. 게다가 자정을 넘기는 순간
+# 앱은 다음 날 테마로 갈아타는데 코박스는 켤 때 읽은 어제 플레이리스트를 그대로 들고 있다.
+
 def today_date() -> date:
-    """오늘. 환경변수 AIMDESK_TODAY=YYYY-MM-DD 가 있으면 그 날 (테스트가 요일·날짜에 좌우되지 않게)"""
+    """오늘 훈련일. 자정이 아니라 DAY_CUTOFF_H 에 날이 바뀐다 — 자정을 넘긴 세션도 한 날로 모이게.
+    환경변수 AIMDESK_TODAY=YYYY-MM-DD 가 있으면 그 날 (테스트가 요일·날짜에 좌우되지 않게)"""
     t = os.environ.get("AIMDESK_TODAY")
     if t:
         try: return date.fromisoformat(t)
         except ValueError: pass
-    return date.today()
+    n = datetime.now()
+    return (n.date() - timedelta(days=1)) if n.hour < DAY_CUTOFF_H[0] else n.date()
 
 def _data_dir():
     """기본은 exe 옆. 쓰기 불가(Program Files 등)이거나 임시폴더 실행(zip 안에서 더블클릭)이면
@@ -523,6 +545,7 @@ DATA_FILE = _data_dir() / "aim_desk_data.json"
 BACKUP_FILE = DATA_FILE.with_name("aim_desk_data.backup.json")
 LOG_FILE = DATA_FILE.with_name("aim_desk.log")
 LOAD_ERROR: list[str] = []      # 시작 시 사용자에게 보여줄 경고
+MIGRATED = [0]                  # 훈련일 경계로 합쳐 옮긴 판 수 (시작할 때 알림)
 SAVE_ERROR = [None]             # 마지막 저장 실패 사유 (None이면 정상)
 DOWK = ["월","화","수","목","금","토","일"]
 
@@ -569,6 +592,9 @@ def load_data() -> dict:
             elif isinstance(v, dict):
                 for kk, vv in v.items(): day[k].setdefault(kk, vv)
     d.setdefault("win", {}); d.setdefault("seq_compact", False)
+    try: DAY_CUTOFF_H[0] = max(0, min(12, int(d.setdefault("day_cutoff", 5))))
+    except (TypeError, ValueError): DAY_CUTOFF_H[0] = 5; d["day_cutoff"] = 5
+    MIGRATED[0] = migrate_cutoff(d)                       # 자정에 쪼개졌던 옛 기록 합치기 (한 번만)
     trainer_load(d)
     if not d.get("seeded"):
         d["days"].setdefault(SEED_DATE, blank_day())["best"] = dict(SEED)
@@ -592,7 +618,7 @@ def merge_plays(existing, plays):
     for e in list(existing or []) + [list(x) for x in plays]:
         k, t, sc = e[0], e[1], int(round(e[2]))
         m[(k, t)] = [k, t, sc]
-    return [m[kt] for kt in sorted(m, key=lambda kt: (kt[1], kt[0]))]
+    return [m[kt] for kt in sorted(m, key=lambda kt: (t_key(kt[1]), kt[0]))]
 
 def day_plays(data: dict, dkey: str):
     return [tuple(x) for x in data["days"].get(dkey, {}).get("plays", [])]
@@ -605,10 +631,21 @@ def pb_days(data: dict) -> dict:
             if k not in out and v == data["pb"].get(k): out[k] = d
     return out
 
+def _hh(t) -> int:
+    try: return int(str(t).split(".")[0])
+    except (ValueError, IndexError): return 0
+
+def t_key(t: str) -> int:
+    """'HH.MM.SS' → 그 훈련일 안에서의 초. 경계 시각 이전(새벽)은 +24시간으로 쳐서
+    자정을 넘긴 세션도 순서·길이가 맞는다 (01:10 이 23:50 보다 뒤로 간다)"""
+    p = (str(t).split(".") + ["0", "0", "0"])[:3]
+    try: h, m_, s_ = int(p[0]), int(p[1]), int(p[2])
+    except ValueError: return 0
+    return (h + (24 if h < DAY_CUTOFF_H[0] else 0)) * 3600 + m_ * 60 + s_
+
 def t_min(t: str) -> int:
-    """'HH.MM.SS' → 분"""
-    hh, mm = t.split(".")[:2]
-    return int(hh) * 60 + int(mm)
+    """'HH.MM.SS' → 분 (훈련일 기준)"""
+    return t_key(t) // 60
 
 DATA_VER = [0]                  # 기록이 바뀔 때마다 +1 — 계산 캐시(프로브 지수·최근 평균·memo)의 키
 SAVE_COUNT = [0]
@@ -674,10 +711,12 @@ _SCAN_STATE = {"sig": None, "plays": [], "info": {}, "n": 0, "hits": 0}   # 폴�
 
 def scan_day(stats: Path, day: date, force: bool = False):
     """해당 날짜의 (key, 'HH.MM.SS', score) 목록 + 진단 집계. 폴더를 못 읽으면 None(그 턴은 건너뜀).
+    훈련일은 자정이 아니라 DAY_CUTOFF_H 에 바뀌므로 달력 날짜 두 개를 본다 — 당일의 경계 이후 + 다음 날의 경계 이전.
     파일이 생기거나 지워지면 폴더의 mtime이 바뀌므로, 안 바뀌었으면 수만 개 파일을 다시 훑지 않는다.
     force=True(자동 진행 중)면 캐시를 건너뛴다 — 폴더 mtime 이 안 바뀌는 드라이브(exFAT·네트워크)에서도 2초 안에 감지."""
-    tag = day.strftime("%Y.%m.%d")
-    try: sig = (str(stats), stats.stat().st_mtime_ns, tag)
+    cut = DAY_CUTOFF_H[0]
+    tag = day.strftime("%Y.%m.%d"); tag_n = (day + timedelta(days=1)).strftime("%Y.%m.%d")
+    try: sig = (str(stats), stats.stat().st_mtime_ns, tag, cut)
     except OSError: return None
     _SCAN_STATE["n"] += 1
     forced = force or _SCAN_STATE["n"] % SCAN_FORCE_EVERY == 0      # mtime 해상도가 거친 드라이브 대비 안전장치
@@ -690,9 +729,15 @@ def scan_day(stats: Path, day: date, force: bool = False):
         with os.scandir(stats) as it:
             for e in it:
                 name = e.name
-                if tag not in name: continue              # 정규식 전에 싼 문자열 검사 (수만 개 중 오늘 것만)
+                if tag not in name and (cut <= 0 or tag_n not in name): continue   # 정규식 전에 싼 문자열 검사
                 m = FNAME_RE.match(name)
-                if not m or m.group("d") != tag: continue
+                if not m: continue
+                d_ = m.group("d")
+                if d_ == tag:
+                    if _hh(m.group("t")) < cut: continue      # 그 날 경계 이전 = 어제 훈련일 몫
+                elif d_ == tag_n and cut > 0:
+                    if _hh(m.group("t")) >= cut: continue     # 다음 날 경계 이후 = 내일 훈련일 몫
+                else: continue
                 key = NAME2KEY.get(m.group("scen"))
                 if key is None:
                     other += 1; continue                  # 루틴 밖 시나리오 — 인식 실패가 아님
@@ -708,12 +753,53 @@ def scan_day(stats: Path, day: date, force: bool = False):
     else: _SCAN_STATE["sig"] = None
     return out
 
+def _reagg(day: dict):
+    """판별 기록(plays)에서 그날 집계(first/best/count/sess)를 다시 만든다"""
+    ps = sorted((tuple(p) for p in (day.get("plays") or [])), key=lambda x: t_key(x[1]))
+    first, best, count = {}, {}, {}
+    for k, _t, sc in ps:
+        count[k] = count.get(k, 0) + 1
+        if k not in first: first[k] = sc
+        if k not in best or sc > best[k]: best[k] = sc
+    day["first"], day["best"], day["count"] = first, best, count
+    day["sess"] = {"start": ps[0][1] if ps else None, "end": ps[-1][1] if ps else None}
+
+def migrate_cutoff(data: dict) -> int:
+    """자정에서 이틀로 쪼개졌던 옛 기록을 훈련일(경계 시각) 기준으로 합친다 — 한 번만 돈다.
+    판별 기록과 집계가 서로 맞는 날만 건드린다(옛 버전 파일은 그대로 둔다). 옮긴 판 수를 돌려준다."""
+    cut = DAY_CUTOFF_H[0]
+    if cut <= 0 or data.get("cutoff_migrated"): return 0
+    days = data.get("days") or {}
+    moved = 0
+    for dk in sorted(days):
+        if dk == SEED_DATE: continue
+        e = days[dk]; ps = [tuple(p) for p in (e.get("plays") or [])]
+        if not ps or sum((e.get("count") or {}).values()) != len(ps): continue
+        early = [p for p in ps if _hh(p[1]) < cut]
+        if not early: continue
+        prev = (date.fromisoformat(dk) - timedelta(days=1)).isoformat()
+        if prev == SEED_DATE: continue
+        tgt = days.get(prev)
+        if tgt is not None and sum((tgt.get("count") or {}).values()) != len(tgt.get("plays") or []): continue
+        tgt = days.setdefault(prev, blank_day())
+        tgt["plays"] = merge_plays(tgt.get("plays") or [], early); _reagg(tgt)
+        rest = [p for p in ps if _hh(p[1]) >= cut]
+        moved += len(early)
+        if rest: e["plays"] = [list(p) for p in rest]; _reagg(e)
+        else: days.pop(dk, None)
+    if moved:
+        for k, v in list(data.get("pb", {}).items()):      # PB 는 줄이지 않는다 — 합치기는 날짜만 옮긴다
+            data["pb"][k] = v
+        bump_ver()
+    data["cutoff_migrated"] = True
+    return moved
+
 def apply_scan(data: dict, plays, dkey: str):
     """오늘 판들을 반영. (신기록 이벤트 목록, 변경 여부) 반환.
     기존 기록은 절대 줄이지 않는다 — stats 폴더를 정리했거나 스캔이 비어도 오늘 기록이 남는다."""
     day = data["days"].setdefault(dkey, blank_day())
     first, best, count = {}, {}, {}
-    for key, t, s in sorted(plays, key=lambda x: x[1]):
+    for key, t, s in sorted(plays, key=lambda x: t_key(x[1])):
         count[key] = count.get(key, 0) + 1
         if key not in first: first[key] = s
         if key not in best or s > best[key]: best[key] = s
@@ -726,9 +812,9 @@ def apply_scan(data: dict, plays, dkey: str):
     sess = day.setdefault("sess", {"start": None, "end": None})
     ns, ne = sess.get("start"), sess.get("end")
     if plays:                                    # 세션 시각은 넓어지기만 한다 (루틴 시나리오 기준)
-        ts = sorted(t for _, t, _ in plays)
-        ns = ts[0] if ns is None or ts[0] < ns else ns
-        ne = ts[-1] if ne is None or ts[-1] > ne else ne
+        ts = sorted((t for _, t, _ in plays), key=t_key)
+        ns = ts[0] if ns is None or t_key(ts[0]) < t_key(ns) else ns
+        ne = ts[-1] if ne is None or t_key(ts[-1]) > t_key(ne) else ne
     changed = (first != day["first"] or best != day["best"] or count != day["count"]
                or merged != day.get("plays", []) or (ns, ne) != (sess.get("start"), sess.get("end")))
     if changed: bump_ver()
@@ -1029,7 +1115,7 @@ def clamp_pos(pos, w, h, vx, vy, vw, vh):
 def session_summary(plays, rc: dict) -> dict:
     """plays = [(key, 'HH.MM.SS', score)], rc[key] = (최근 평균, 역대 최고)"""
     if not plays: return {"n": 0, "start": None, "end": None, "minutes": None, "n_pb": 0, "rel": None}
-    ts = sorted(t for _, t, _ in plays)
+    ts = sorted((t for _, t, _ in plays), key=t_key)
     best_by, rel = {}, []
     for k, t, sc in plays:
         best_by[k] = max(best_by.get(k, sc), sc)
@@ -1211,7 +1297,7 @@ def block_trend(pts):
 
 def sessions_of(plays, gap_min: int = 20):
     out = []
-    for p in sorted(plays, key=lambda x: x[1]):
+    for p in sorted(plays, key=lambda x: t_key(x[1])):
         if out and t_min(p[1]) - t_min(out[-1][-1][1]) > gap_min: out.append([p])
         elif out: out[-1].append(p)
         else: out.append([p])
@@ -3817,6 +3903,9 @@ def main():
             day_state["chal_lbl"].pack(fill="x", padx=px(8))
         # 섹션 요약(시청자용 몇 줄) → 코치 2줄 → 자세히 토글 → 상세(접힘)
         day_state["summary"] = tk.Frame(body_, bg=C["card"]); day_state["summary"].pack(fill="x", pady=(10, 0))
+        day_state["off_lbl"] = tk.Label(body_, text="", font=FS, bg=C["card"], fg=C["gold"],
+                                        wraplength=px(520), justify="left", anchor="w")
+        day_state["off_lbl"].pack(anchor="w", pady=(4, 0))
         day_state["coach"] = []
         for _i in range(2):
             cl_ = tk.Label(body_, text="", font=FS, bg=C["card"], fg=C["sub"], wraplength=px(520), justify="left")
@@ -4114,6 +4203,35 @@ def main():
     RBtn(trow2, "목표 지우기", clear_trainer, padx=10, pady=5).pack(side="left", padx=(8, 0))
     tk.Label(tcd, text="답장 형식 · 목표 Pasu 850 · 도전 Pasu 850 · 테마 내일 트래킹 · 메모 … · 목표 Pasu 없음",
              font=FS, bg=C["card"], fg=C["dim"], wraplength=px(268), justify="left").pack(anchor="w", pady=(5, 0))
+
+    # ── 훈련일 경계 ──
+    dc = card(tcol1); dc.pack(fill="x", pady=(10, 0))
+    tk.Label(dc, text="훈련일 경계", font=FB, bg=C["card"], fg=C["txt"]).pack(anchor="w", pady=(0, 4))
+    tk.Label(dc, text="하루가 바뀌는 시각입니다. 자정으로 두면 밤 11시에 시작해 새벽에 끝난 세션이 이틀로 쪼개지고, "
+                      "자정을 넘기는 순간 앱은 다음 날 테마로 갈아타는데 코박스는 켤 때 읽은 어제 플레이리스트를 그대로 씁니다.",
+             font=FS, bg=C["card"], fg=C["hint"], wraplength=px(268), justify="left").pack(anchor="w", pady=(0, 7))
+    cut_row = tk.Frame(dc, bg=C["card"]); cut_row.pack(anchor="w")
+    cut_btns = {}
+    def sync_cut_btns():
+        for v, b in cut_btns.items():
+            on = v == DAY_CUTOFF_H[0]
+            b.restyle(bg=C["gold"] if on else C["card2"], fg="#10141A" if on else C["txt"])
+    def set_cutoff(v):
+        if DAY_CUTOFF_H[0] == v: return
+        DAY_CUTOFF_H[0] = v; data["day_cutoff"] = v; save_data(data)
+        sync_cut_btns()
+        _SCAN_STATE["sig"] = None; _SCORE_CACHE.clear(); TODAY_PLAYS.clear()
+        nk = today_date().isoformat()
+        if nk != today_key[0]: on_day_change(nk)
+        else:
+            scan_once(); build_day_ui(); install_playlists(); refresh()
+        show_toast(f"훈련일 경계 {v}시 — 지금부터 {v}시에 날이 바뀝니다" if v else "훈련일 경계 자정")
+    for _v in (0, 4, 5, 6, 7):
+        _b = RBtn(cut_row, ("자정" if _v == 0 else f"{_v}시"), (lambda v=_v: set_cutoff(v)), padx=9, pady=4)
+        _b.pack(side="left", padx=(0, 4)); cut_btns[_v] = _b
+    sync_cut_btns()
+    tk.Label(dc, text="새벽 5시 권장 — 자정 넘겨 치는 날이 있으면 한 세션으로 이어집니다.",
+             font=FS, bg=C["card"], fg=C["dim"], wraplength=px(268), justify="left").pack(anchor="w", pady=(6, 0))
 
     def install_playlists():
         sd = data.get("stats_dir")
@@ -4573,6 +4691,10 @@ def main():
                     fill_ = (C["ok"] if done_ else C["gold"]) if j_ < filled_ else C["card2"]
                     if x2_ - x1_ >= 8: rrect(bar_, x1_, 1, x2_, h_ - 1, min(3, (x2_ - x1_) // 2), fill=fill_, outline="", tags="seg")
                     else: bar_.create_rectangle(x1_, 1, x2_, h_ - 1, fill=fill_, outline="", tags="seg")
+        # 계획 밖 판 — 코박스가 예전 플레이리스트를 들고 있으면 여기에 뜬다
+        if day_state.get("off_lbl") is not None and day_state["off_lbl"].winfo_exists():
+            n_off, ks_off = off_plan_plays(data, dkey, cur_plays(), data["pb"])
+            cfg(day_state["off_lbl"], text=fmt_off_plan(n_off, ks_off))
         # 다음에 칠 판 표시 (순서창이 열려 있으면 그 포인터, 아니면 첫 미완료 줄)
         set_next_marker(next_routine_key([(r[0], r[1], r[2]) for r in routine_rows], day, seq_next))
         # 오늘의 도전
@@ -4756,7 +4878,7 @@ def main():
             if plays is None:
                 scan_err = True
             else:
-                TODAY_PLAYS[:] = sorted(plays, key=lambda x: x[1])
+                TODAY_PLAYS[:] = sorted(plays, key=lambda x: t_key(x[1]))
                 events, changed = apply_scan(data, plays, nk)
                 for line in pb_toast_lines(events, data["pb"]): show_toast(line, "pb")
                 if changed or events: save_data(data)                 # 버전을 먼저 확정해야 아래 계산 캐시가 refresh 에서 그대로 쓰인다
@@ -4831,6 +4953,8 @@ def main():
     show(data["win"].get("tab") if data["win"].get("tab") in frames else "today")
     if LOAD_ERROR:
         root.after(500, lambda: messagebox.showwarning("에임 데스크 — 기록 파일", "\n\n".join(LOAD_ERROR)))
+    if MIGRATED[0]:
+        root.after(900, lambda: show_toast(f"자정에 쪼개져 있던 {MIGRATED[0]}판을 앞 훈련일로 합쳤습니다 (훈련일 경계 {DAY_CUTOFF_H[0]}시)"))
     root.after(300, tick)
     root.after(450, refresh)
     def on_close():
@@ -4847,7 +4971,7 @@ def main():
         root.destroy()
     root.protocol("WM_DELETE_WINDOW", on_close)
     _DBG.update(root=root, pl_lbl=pl_lbl, trainer_txt=trainer_txt, apply_trainer=apply_trainer, clear_trainer=clear_trainer,
-                band_cv=band_cv, verdicts=lambda: verdicts(data, today_key[0], day_state.get("dt"), cur_plays(), day_state.get("hero_state")),
+                band_cv=band_cv, set_cutoff=set_cutoff, cut_btns=cut_btns, verdicts=lambda: verdicts(data, today_key[0], day_state.get("dt"), cur_plays(), day_state.get("hero_state")),
                 set_routine_open=set_routine_open, set_drawer=set_drawer, drawer=drawer, cur_lbl=cur_lbl, cur_score=cur_score, cur_word=cur_word,
                 auto_mini=auto_mini, live=live, show_sequence=show_sequence, tier_var=tier_var, rr_var=rr_var, commit_rank=commit_rank, trainer_mini=trainer_mini,
                 trainer_lbl=trainer_lbl, save_report_today=save_report_today, draw_ribbon=draw_ribbon, today_plan_n=today_plan_n, cv_sess=cv_sess, hdr_lv=hdr_lv, open_card=open_card, card_win=card_win, set_scale=set_scale, scale_btns=scale_btns, set_broadcast=set_broadcast, open_broadcast=open_broadcast, bcast=bcast, data=data, refresh=refresh, refresh_tab=refresh_tab, dirty=dirty, cur_tab=cur_tab, show=show,
@@ -5351,6 +5475,46 @@ if __name__ == "__main__":
         _e = _syn({0: 1.0, 1: 1.0}); _vv = verdicts(_e, "2026-09-15"); assert _vv is verdicts(_e, "2026-09-15") and set(_vv) == {"day", "grow", "recent"}
         assert fmt_verdict_line("오늘", _vv["day"]).startswith("오늘 · 어제와 비슷 ▬ ") and "verdict" in session_card(_e, "2026-09-15", "발로 데이")
         assert "[판정]" in daily_report(_e, "2026-09-15") and "오늘 · 어제와 비슷" in daily_report(_e, "2026-09-15")
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK")
+        # v4.2 훈련일 경계(새벽 5시) — 자정을 넘긴 세션이 한 날로 모인다
+        assert DAY_CUTOFF_H[0] == 5
+        assert t_key("23.50.00") < t_key("00.10.00") and t_key("04.59.59") < t_key("05.00.00") + 24 * 3600
+        assert t_min("19.43.00") == 1183 and t_min("00.30.00") == 24 * 60 + 30 and t_min("05.00.00") == 300
+        assert t_key("bad") == 0 and _hh("23.50.00") == 23 and _hh("") == 0
+        _sp = session_summary([("pasu", "23.50.00", 800), ("w4", "00.20.00", 900)], {})
+        assert _sp["start"] == "23.50.00" and _sp["end"] == "00.20.00" and _sp["minutes"] == 30, _sp   # 자정 넘겨도 30분
+        assert [p[1] for p in merge_plays([], [("a", "00.10.00", 1), ("b", "23.50.00", 2)])] == ["23.50.00", "00.10.00"]
+        DAY_CUTOFF_H[0] = 0; assert t_key("00.10.00") < t_key("23.50.00"); DAY_CUTOFF_H[0] = 5      # 자정 설정이면 옛 동작
+        with _tf.TemporaryDirectory() as _td3:
+            _st3 = Path(_td3); _mk = lambda nm, d_, t_, sc: (_st3 / f"{nm} - Challenge - {d_}-{t_} Stats.csv").write_text(f"Score:,{sc}\n")
+            _mk("VT Pasu Novice S5", "2026.09.15", "23.50.00", 800)      # 15일 훈련일
+            _mk("VT 1w4ts Novice S5", "2026.09.16", "00.20.00", 900)     # 자정 넘김 → 아직 15일 훈련일
+            _mk("VT Popcorn Novice S5", "2026.09.16", "10.00.00", 700)   # 16일 훈련일
+            _SCAN_STATE["sig"] = None; _SCORE_CACHE.clear()
+            _r15 = sorted(scan_day(_st3, date(2026, 9, 15)), key=lambda x: t_key(x[1]))
+            _SCAN_STATE["sig"] = None
+            _r16 = scan_day(_st3, date(2026, 9, 16))
+            assert [k for k, _t, _s in _r15] == ["pasu", "w4"], _r15      # 자정 넘긴 판이 전날에 붙는다
+            assert [k for k, _t, _s in _r16] == ["popcorn"], _r16
+        # 계획 밖 판
+        _op = {"pb": dict(SEED), "days": {"2026-09-16": dict(blank_day(), plays=[["ww5", "00.10.00", 1200], ["dot", "00.12.00", 900]])}}
+        _n_off, _k_off = off_plan_plays(_op, "2026-09-16", pb=SEED)      # 9/16 수 = 스위칭 집중 (ww5t 없음)
+        assert (_n_off, _k_off) == (1, ["ww5"]) and "계획 밖 1판" in fmt_off_plan(_n_off, _k_off) and fmt_off_plan(0, []) == ""
+        assert off_plan_plays({"pb": {}, "days": {}}, "2026-09-13")[0] == 0        # 휴식일은 계획이 없다
+        # 자정에 쪼개진 기록 합치기 — 사용자 사례(워밍업 4판은 전날, 나머지 23판은 자정 뒤)
+        _seq = [k for k, n in dict(playlists_for("2026-09-15", SEED))["AIMDESK Day"] for _ in range(n)]
+        _mg = {"pb": dict(SEED), "days": {
+            "2026-09-15": dict(blank_day(), plays=[[k, f"23.5{i}.00", 900] for i, k in enumerate(_seq[:4])]),
+            "2026-09-16": dict(blank_day(), plays=[[k, f"00.{i:02d}.00", 900] for i, k in enumerate(_seq[4:])])}}
+        for _d in _mg["days"].values(): _reagg(_d)
+        assert len(_mg["days"]["2026-09-15"]["plays"]) == 4 and len(_mg["days"]["2026-09-16"]["plays"]) == 23
+        assert migrate_cutoff(_mg) == 23 and _mg["cutoff_migrated"] is True
+        assert "2026-09-16" not in _mg["days"] and len(_mg["days"]["2026-09-15"]["plays"]) == 27, sorted(_mg["days"])
+        _d15 = _mg["days"]["2026-09-15"]; bump_ver()
+        assert _d15["count"]["w4"] == 5 and _d15["first"]["pasu"] is not None and _d15["sess"] == {"start": "23.50.00", "end": "00.22.00"}   # w4 = 프로브 1 + 본훈련 4
+        assert migrate_cutoff(_mg) == 0                                            # 두 번 돌지 않는다
+        assert migrate_cutoff({"days": {}, "cutoff_migrated": False}) == 0
+        _keep = {"days": {"2026-09-16": dict(blank_day(), plays=[["pasu", "10.00.00", 800]], count={"pasu": 1})}}
+        assert migrate_cutoff(_keep) == 0 and "2026-09-16" in _keep["days"]          # 경계 이후 판만 있으면 그대로
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 훈련일 경계 OK")
         sys.exit(0)
     main()
