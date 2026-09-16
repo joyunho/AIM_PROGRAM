@@ -23,6 +23,12 @@ import json, math, os, re, sys, time, traceback, unicodedata
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+# 윈도우 기본 콘솔 코덱(cp949·cp1252)은 한글·특수문자를 못 찍고 UnicodeEncodeError 로 죽는다.
+# 로그 한 줄 때문에 프로그램이 멈추면 안 되니 출력 스트림을 UTF-8 + 치환 모드로 돌려놓는다.
+for _st in (sys.stdout, sys.stderr):
+    try: _st.reconfigure(encoding="utf-8", errors="replace")   # 3.7+
+    except (AttributeError, ValueError, OSError): pass
+
 # ══════════════════ 시나리오 정의 ══════════════════
 SCEN = {
     "pasu":   ("VT Pasu Novice S5", "v"),      "popcorn": ("VT Popcorn Novice S5", "v"),
@@ -5515,6 +5521,6 @@ if __name__ == "__main__":
         assert migrate_cutoff({"days": {}, "cutoff_migrated": False}) == 0
         _keep = {"days": {"2026-09-16": dict(blank_day(), plays=[["pasu", "10.00.00", 800]], count={"pasu": 1})}}
         assert migrate_cutoff(_keep) == 0 and "2026-09-16" in _keep["days"]          # 경계 이후 판만 있으면 그대로
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 훈련일 경계 OK")
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK")
         sys.exit(0)
     main()
