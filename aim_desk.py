@@ -559,6 +559,14 @@ def derive_baseline(data: dict) -> bool:
         if base_ok(sc): return set_baseline(data, dk, sc)
     return False
 
+def desynth_legacy(data: dict) -> int:
+    """옛(v4 이하) 파일에서 주입돼 있던 가짜 출발선을 걷어낸다.
+    반드시 가짜 날을 먼저 지우고 PB 를 판정해야 한다 — 순서가 바뀌면 그 날이 '근거' 노릇을 해서
+    가짜 PB 가 전부 살아남고 마이그레이션이 통째로 무효가 된다"""
+    if not data.pop("seeded", None): return 0
+    (data.get("days") or {}).pop(SAMPLE_DATE, None)
+    return drop_synthetic_pb(data)
+
 def drop_synthetic_pb(data: dict) -> int:
     """옛 파일 청소: 실제로 친 날이 하나도 없는데 PB 로만 남아 있는 값(=주입된 가짜)을 지운다.
     기록에 근거가 있는 PB 는 절대 건드리지 않는다"""
@@ -784,9 +792,7 @@ def load_data() -> dict:
     BASE_DATE[0] = b.get("date")
     if not base_ok(BASELINE[0]):
         BASELINE[0] = BASE_DATE[0] = None; d.pop("base", None)
-    if d.pop("seeded", None):                             # 옛 파일: 주입돼 있던 가짜 PB 를 걷어낸다
-        DESYNTH[0] = drop_synthetic_pb(d)
-        d["days"].pop(SAMPLE_DATE, None)
+    DESYNTH[0] = desynth_legacy(d)                        # 옛 파일: 주입돼 있던 가짜 PB 를 걷어낸다
     if BASELINE[0] is None: derive_baseline(d)            # 기록은 있는데 기준선만 없으면 뽑아낸다
     return d
 
@@ -4523,6 +4529,7 @@ def main():
                 f"합치기 전 지금 기록은 따로 보관합니다."): return
         try:
             other = json.loads(info["path"].read_bytes().decode("utf-8-sig"))
+            n_fake = desynth_legacy(other)                 # 옛 파일이면 주입된 가짜 PB 를 걷어내고 들여온다
             kept = archive_data(); merge_data(data, other); save_data(data)
         except Exception:
             log_exc("import"); show_toast("합치기 실패 — 기록은 그대로입니다"); return
@@ -4531,7 +4538,7 @@ def main():
         BASELINE[0] = dict(b.get("scores") or {}) or None; BASE_DATE[0] = b.get("date")
         if BASELINE[0] is None: derive_baseline(data)
         scan_once(); build_day_ui(); refresh(); refresh_files()
-        show_toast(f"합쳤습니다 · 훈련 {len(training_days(data))}일 (이전 기록은 {kept.name})")
+        show_toast(f"합쳤습니다 · 훈련 {len(training_days(data))}일" + (f" · 가짜 기본값 {n_fake}개 제외" if n_fake else "") + f" (이전 기록은 {kept.name})")
 
     # ── 기록 새로 시작 ──
     rc = card(tcol1); rc.pack(fill="x", pady=(10, 0))
@@ -4727,7 +4734,10 @@ def main():
             hist_sel[0] = next((r["date"] for r in rows if r["trained"]), None)
         fill_detail()
         e0, e1 = energy_delta(data)
-        cfg(grow_title, text=f"시작 대비 · 총 에너지 {e0} → {e1} ({e1 - e0:+d})", fg=C["gold"] if e1 > e0 else C["dim"])
+        if e1 is None: gt, gold = "시작 대비 · 기준 측정 전", False
+        elif e0 is None: gt, gold = f"시작 대비 · 총 에너지 {e1}", False
+        else: gt, gold = f"시작 대비 · 총 에너지 {e0} → {e1} ({e1 - e0:+d})", e1 > e0
+        cfg(grow_title, text=gt, fg=C["gold"] if gold else C["dim"])
         for r_, g in zip(grow_cells, memo(("growth",), lambda: growth_since_base(data))):
             vals = fmt_growth_row(g)
             col = C["dim"] if g["stalled"] else C["sub"]
@@ -5937,6 +5947,24 @@ if __name__ == "__main__":
         # 옛 파일의 주입된 가짜 PB 걷어내기 — 근거 있는 PB 는 남긴다
         _dp = {"pb": dict(SAMPLE, pasu=900), "days": {"2026-09-16": dict(blank_day(), best={"pasu": 900, "dot": 500})}}
         assert drop_synthetic_pb(_dp) == 17 and _dp["pb"] == {"pasu": 900, "dot": 500}
+        # 순서가 중요하다: 가짜 날을 먼저 지워야 '근거 없는 PB' 판정이 성립한다.
+        # 거꾸로 하면 그 날이 근거 노릇을 해서 하나도 안 걷히고 마이그레이션이 통째로 무효가 된다
+        _lg = {"seeded": True, "pb": dict(SAMPLE), "days": {
+            SAMPLE_DATE: dict(blank_day(), best=dict(SAMPLE)),
+            "2026-09-15": dict(blank_day(), first={"pasu": 500}, best={"pasu": 520}, count={"pasu": 2})}}
+        assert desynth_legacy(_lg) == 18 and _lg["pb"] == {"pasu": 520} and SAMPLE_DATE not in _lg["days"]
+        assert _lg["days"]["2026-09-15"]["best"] == {"pasu": 520} and "seeded" not in _lg   # 실제 기록은 그대로
+        assert desynth_legacy(_lg) == 0                                    # 두 번 돌지 않는다
+        # 합치기로도 되살아나면 안 된다
+        _c1 = {"pb": {"pasu": 600}, "days": {"2026-09-16": dict(blank_day(), best={"pasu": 600}, first={"pasu": 600}, count={"pasu": 1})}}
+        _s1 = {"seeded": True, "pb": dict(SAMPLE), "days": {SAMPLE_DATE: dict(blank_day(), best=dict(SAMPLE))}}
+        desynth_legacy(_s1); merge_data(_c1, _s1)
+        assert _c1["pb"] == {"pasu": 600} and SAMPLE_DATE not in _c1["days"], _c1["pb"]
+        # 기준 측정 전 에너지 줄 — 뺄셈에서 죽지 않는다 (기록 탭 성장 구역이 통째로 안 그려졌다)
+        _fresh()
+        assert energy_delta({"pb": {}}) == (None, None) and _energy_line({"pb": {}}) == "기준 측정 전"
+        assert _energy_line({"pb": dict(SAMPLE)}) == "에너지 339 Silver"
+        _measured()
         # 벤치 풀런 판정: '전체 순회' 날은 9/9 를 덮어도 풀런이 아니다
         _mixk = {k: 500 for k, _n in next(t[3] for t in MAIN_THEMES if t[0] == "mix")}
         assert totalE(_mixk)[1] == 9                                        # 하위분류는 9개를 다 덮는다
