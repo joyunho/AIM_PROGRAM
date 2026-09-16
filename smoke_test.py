@@ -15,8 +15,21 @@ for f in STATS.iterdir(): f.unlink()
 for f in TMP.glob("*.json"): f.unlink()
 for f in TMP.glob("*.log"): f.unlink()
 for f in (TMP / "기록").glob("*.txt") if (TMP / "기록").is_dir() else (): f.unlink()
+# 기준선(출발선)은 v5.0 부터 '사용자가 직접 잰 점수'다. 없으면 무슨 요일이든 기준 측정일이 되므로
+# 평상시 화면을 보려면 측정을 마친 상태로 시작한다. 측정 전 경로는 아래에서 따로 확인한다.
+BASE = {"pasu": 560, "popcorn": 455, "w4": 730, "ww5": 880, "frog": 650, "float": 430,
+        "pgt": 1900, "snake": 2250, "aether": 1730, "ground": 2220, "raw": 1860, "csphere": 1560,
+        "dot": 680, "eddie": 545, "drift": 270, "fly": 365, "cts": 295, "penta": 290}
+BASE_DAY = "2026-08-29"
+_bp = [[k, f"20.{i // 60:02d}.{i % 60:02d}", v] for i, (k, v) in enumerate(sorted(BASE.items()))]
 (TMP / "aim_desk_data.json").write_text(json.dumps({
-    "stats_dir": str(STATS), "auto_delay": 1, "seeded": False, "pb": {}, "days": {}, "next_key": "f10",
+    "stats_dir": str(STATS), "auto_delay": 1, "pb": dict(BASE), "next_key": "f10",
+    "base": {"date": BASE_DAY, "scores": BASE},
+    "days": {BASE_DAY: {"first": dict(BASE), "best": dict(BASE), "count": {k: 1 for k in BASE},
+                        "plays": _bp, "sess": {"start": _bp[0][1], "end": _bp[-1][1]},
+                        "deaths": {"aim": 0, "pos": 0, "dec": 0, "trade": 0},
+                        "cond": {"sleep": None, "caf": 0, "feel": 5}, "rank": {"tier": "", "rr": None},
+                        "checks": {"miyagi": False, "ranked": False}}},
     "win": {"geo": "1000x700+30+40"}, "seq_popup": True}), encoding="utf-8")     # 테스트는 순서창을 띄운 채로 (기본은 숨김)
 
 HERE = Path(__file__).resolve().parent
@@ -220,7 +233,14 @@ check("current scale button highlighted", D["scale_btns"][1.5].bgc == ad.C["gold
 D["set_scale"](None); pump(60)
 check("auto scale restores", data.get("ui_scale") is None and D["scale_btns"][None].bgc == ad.C["gold"])
 coach = [l.cget("text") for l in D["day_state"]["coach"]]; check("coach card has lines", any(coach), str(coach)[:160])
-D["show"]("tools"); pump(200); check("tools tab holds the stats folder and trainer cards", D["pl_lbl"].winfo_ismapped() and D["trainer_txt"].winfo_ismapped()); D["show"]("today"); pump(150)
+D["show"]("tools"); pump(200); check("tools tab holds the stats folder and trainer cards", D["pl_lbl"].winfo_ismapped() and D["trainer_txt"].winfo_ismapped())
+# v5.0 — 기록 파일이 어디에 있는지 화면에 보여야 한다 (안 보여서 기록을 통째로 잃었다)
+fst = D["fstat"].cget("text")
+check("tools tab shows which data file is in use", D["fstat"].winfo_ismapped() and "훈련" in fst and "기준 측정" in fst, fst)
+check("fresh-start button exists", callable(D["do_reset"]))
+check("header no longer shows 미야기", D["hdr_mi"].cget("text") == "", D["hdr_mi"].cget("text"))
+check("header energy pill shows measured PB", D["hdr_e"].cget("text").startswith("PB "), D["hdr_e"].cget("text"))
+D["show"]("today"); pump(150)
 D["set_drawer"](True); pump(80); check("rank feedback drawer opens with steppers", D["steppers"][0].winfo_ismapped())
 D["tier_var"].set("실버 2"); D["rr_var"].set("+18"); D["commit_rank"](); check("rank tier / RR saved", data["days"][TODAY.isoformat()]["rank"] == {"tier": "실버 2", "rr": 18}, str(data["days"][TODAY.isoformat()].get("rank")))
 plus = btn(D["steppers"][0], "＋"); plus.cmd(); pump(50)
