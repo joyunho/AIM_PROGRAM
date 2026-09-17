@@ -9,6 +9,7 @@ from datetime import date
 
 TMP = Path(os.environ.get("AIMDESK_DATA_DIR") or tempfile.mkdtemp(prefix="aimdesk_smoke_"))
 os.environ["AIMDESK_DATA_DIR"] = str(TMP); os.environ["AIMDESK_NO_MAINLOOP"] = "1"
+os.environ.setdefault("AIMDESK_NO_BCAST", "1")                   # v6: 방송창은 시작 시 자동으로 뜬다 — 검사는 직접 연다 (순서창 탐색이 어긋나지 않게)
 os.environ.setdefault("AIMDESK_TODAY", "2026-09-03")          # 목요일(발로 데이)로 고정 — 주말에 돌려도 같은 화면
 STATS = TMP / "FPSAimTrainer" / "stats"; STATS.mkdir(parents=True, exist_ok=True)
 for f in STATS.iterdir(): f.unlink()
@@ -139,7 +140,7 @@ check("start instruction gone after first play", "코박스에서 시작하세�
 check("tab guide hidden after first play", not D["seq_win"]["guide"].winfo_manager())
 check("status bar counts 1판 ok", "1판" in D["status_lbl"].cget("text") and D["status_dot"].itemcget(1, "fill") == ad.C["ok"], D["status_lbl"].cget("text"))
 tx = texts(top); check("row shows the score, no misleading ▲▼ delta", "3000" in tx and not any(x.startswith(("▲", "▼")) for x in tx), str([x for x in tx if x.startswith(("▲", "▼"))]))
-csv("VT Raw Control Novice S5", "10.01.00", 3300); scan(); wait_fired(2)      # v4 웜업: ground → raw → frog → float
+csv("VT Floating Heads Novice S5", "10.01.00", 600); scan(); wait_fired(2)      # v6 웜업: ground → float (출발선 430 → 600 신기록)
 check("after CSV#2: NEXT pressed again", fired == ["KEY:F10"] * 2, str(fired))
 check("new personal best labelled 최고", "최고" in texts(top))
 check("PB toast rendered with bench context", D["toast"].winfo_ismapped() and any("Control" in t or "Gold" in t or "Silver" in t for t in texts(D["toast"])), str(texts(D["toast"]))[:160])
@@ -155,7 +156,7 @@ check("skip → NEXT pressed immediately", len(fired) == 3)
 check("skipped row labelled 건너뜀", any(r[5].cget("text") == "건너뜀" for r in D["seq_win"]["rows"]))
 pump(6500)
 check("stall → 프리 플레이 warning", any("⚠" in t and "도전 과제" in t for t in texts(top)))
-csv("VT Floating Heads Novice S5", "10.03.00", 600); scan(); wait_fired(4)
+csv("VT Popcorn Novice S5", "10.03.00", 500); scan(); wait_fired(4)
 check("CSV → NEXT (4), warning cleared", len(fired) == 4 and not any("⚠" in t for t in texts(top)))
 # 게임 창이 앞에 없을 때: 건너뛰기 → 전송 실패 → 안내, 창을 되찾으면(focus 성공) 다시 시도해서 보냄. 그 사이 토글을 껐다 켜도 재시도가 살아 있어야 한다
 ad.kovaaks_foreground = lambda: False; ad.focus_kovaaks = lambda: False
@@ -169,13 +170,13 @@ check("retry after focus regained → key sent, pending cleared", len(fired) == 
 ad.kovaaks_foreground = lambda: True
 btn(top, "자동 진행").cmd(); csv("VT 1w4ts Novice S5", "10.05.00", 900); scan(); pump(1300); scan()
 check("auto OFF: no key", len(fired) == 5)
-check("skipped 1w4ts row revived by its own CSV (Frogtagon stays skipped)", D["seq_win"]["skipped"] == {2}, str(D["seq_win"]["skipped"]))
-D["seq_win"]["rows"][2][3].event_generate("<Button-1>"); pump(50)
+check("skipped 1w4ts row revived by its own CSV (Pasu stays skipped)", D["seq_win"]["skipped"] == {3}, str(D["seq_win"]["skipped"]))
+D["seq_win"]["rows"][3][3].event_generate("<Button-1>"); pump(50)
 check("click on '–' un-skips the row", D["seq_win"]["skipped"] == set() and "건너뜀" not in D["seq_win"]["prog"].cget("text"), D["seq_win"]["prog"].cget("text"))
-D["seq_win"]["skipped"].add(2); D["update_sequence"]()          # 아래 검사들은 Frogtagon 이 건너뛴 상태를 전제로 한다
+D["seq_win"]["skipped"].add(3); D["update_sequence"]()          # 아래 검사들은 Pasu 가 건너뛴 상태를 전제로 한다
 btn(top, "자동 진행").cmd(); check("auto ON (key) presses nothing", len(fired) == 5)
 btn(top, "딥링크 방식").cmd(); csv("VT Pasu Novice S5", "10.06.00", 700); scan(); wait_fired(6)
-check("link mode → deeplink for Popcorn (next probe)", len(fired) == 6 and fired[-1] == ad.scenario_uri("VT Popcorn Novice S5"), str(fired[-1:]))
+check("link mode → deeplink for EddieTS (Pasu revived by its CSV, next probe)", len(fired) == 6 and fired[-1] == ad.scenario_uri("VT EddieTS Novice S5"), str(fired[-1:]))
 top.geometry("+1180+60"); pump(100)          # 스크린샷에서 본창을 가리지 않게 오른쪽으로
 
 # ── v3: 정보·코치·기록 탭·단축키 ──
@@ -187,12 +188,12 @@ def shot(name):
 D["show"]("today"); root.geometry("1100x780"); pump(300)
 check("streak label", "연속" in D["hdr_streak"].cget("text"), D["hdr_streak"].cget("text"))
 check("week strip drawn (7 cells)", len([i for i in D["wk_cv"].find_all() if D["wk_cv"].type(i) == "polygon"]) == 7)
-sec0 = D["section_labels"][0][0].cget("text"); check("warmup section shows progress 3/4", sec0.endswith("3/4"), sec0)
+sec0 = D["section_labels"][0][0].cget("text"); check("warmup section shows progress 2/2", sec0.endswith("2/2"), sec0)
 hi = [r for r in D["routine_rows"] if r[9].cget("bg") == ad.C["card2"]]
 check("exactly one routine row highlighted as next", len(hi) == 1, str(len(hi)))
 sess = D["day_state"]["sess_lbl"].cget("text"); check("session line shows the session time", "분 (" in sess and "–" in sess, sess)
 rib = D["day_state"]["rib_lbl"].cget("text"); check("ribbon line counts today's plays", rib.startswith("오늘 5/") and ("최고" in rib or "평소" in rib), rib)
-check("ribbon cells match the plan", len(D["day_state"]["rib_cells"]) == D["today_plan_n"]() == 27, str(len(D["day_state"]["rib_cells"])))
+check("ribbon cells match the plan", len(D["day_state"]["rib_cells"]) == D["today_plan_n"]() == 20, str(len(D["day_state"]["rib_cells"])))
 check("training level shown in header", D["hdr_lv"].cget("text").startswith("Lv."), D["hdr_lv"].cget("text"))
 _tt = texts(root)
 check("week theme line lists five weekday themes", any(x.startswith("이번 주 · 월 ") and x.count("·") == 5 for x in _tt), str([x for x in _tt if x.startswith("이번 주")])[:120])
@@ -206,7 +207,9 @@ cw = D["card_win"]["win"]
 check("session card opens with real content", cw is not None and cw.winfo_exists() and len(D["card_win"]["cv"].find_all()) > 5, str(len(D["card_win"]["cv"].find_all())))
 _ct = [D["card_win"]["cv"].itemcget(i, "text") for i in D["card_win"]["cv"].find_all() if D["card_win"]["cv"].type(i) == "text"]
 check("card names the day, theme and play count", any("발로 데이" in x for x in _ct) and any(x.startswith("5판") for x in _ct), str(_ct[:4]))
-cw.destroy(); pump(80)
+_cvw, _cvh = int(D["card_win"]["cv"].cget("width")), int(D["card_win"]["cv"].cget("height"))
+check("card is 16:9 with the story line first", abs(_cvw * 9 / 16 - _cvh) <= 1 and any(x.startswith("DAY ") for x in _ct) and any(x.startswith("관문 노비스 졸업") for x in _ct), f"{_cvw}x{_cvh} {_ct[:3]}")
+shot("0_card"); cw.destroy(); pump(80)
 # ── 방송 화면: 창을 키우면 글씨도 커져야 한다 (시청자 쪽에서 읽히도록) ──
 import tkinter.font as _tkfont
 def big_px(cv):
@@ -224,7 +227,7 @@ bw.geometry("900x420"); pump(350); large = big_px(bcv)
 check("broadcast text grows with the window", large > small * 1.5 > 0, f"{small} -> {large}")
 _bt = [bcv.itemcget(i, "text") for i in bcv.find_all() if bcv.type(i) == "text"]
 check("broadcast shows theme and play count", any(ad.main_theme(TODAY.isoformat(), data["pb"])[1] in x for x in _bt) and any(x.endswith("판") for x in _bt), str(_bt[:4]))
-check("broadcast carries the three verdicts", (any(x == "오늘" for x in _bt) and any(x.startswith("요즘") for x in _bt) and any(x.startswith("성장") for x in _bt)) or any("요즘" in x and "성장" in x for x in _bt), str(_bt)[:200])   # 좁은 창(<620px)은 한 줄 요약
+check("broadcast carries 오늘 hero + 요즘 + 관문(졸업) tiles", any(x.startswith(("요즘", "판정까지")) for x in _bt) and any("졸업" in x for x in _bt) and any(x.startswith("DAY ") for x in _bt) and any(x.startswith("볼테익 ") for x in _bt), str(_bt)[:200])   # v6: 3번째 칸은 관문 미터, 첫 줄은 주인공 줄 (요즘은 대기 중이면 '판정까지 N일')
 bw.destroy(); pump(80)
 # 글씨 크기 설정은 저장되고 다시 켤 때 쓰인다 (테스트에선 프로세스를 띄우지 않는다)
 D["set_scale"](1.5); pump(60)
@@ -239,15 +242,31 @@ fst = D["fstat"].cget("text")
 check("tools tab shows which data file is in use", D["fstat"].winfo_ismapped() and "훈련" in fst and "기준 측정" in fst, fst)
 check("fresh-start button exists", callable(D["do_reset"]))
 check("header no longer shows 미야기", D["hdr_mi"].cget("text") == "", D["hdr_mi"].cget("text"))
-check("header energy pill shows measured PB", D["hdr_e"].cget("text").startswith("PB "), D["hdr_e"].cget("text"))
+check("header energy pill: 볼테익 N · 출발선 ±N (no rank word)", D["hdr_e"].cget("text").startswith("볼테익 ") and "출발선" in D["hdr_e"].cget("text") and not any(w in D["hdr_e"].cget("text") for w in ("Gold", "Silver", "Bronze", "Iron")), D["hdr_e"].cget("text"))
+check("header story line: DAY N · tier → goal", D["hdr_story"].cget("text").startswith("DAY ") and "→" in D["hdr_story"].cget("text"), D["hdr_story"].cget("text"))
+check("header stage chip: 단계 0 · 관문 n/4", D["hdr_stage"].cget("text").startswith("단계 0 · 관문 ") and D["hdr_stage"].cget("text").endswith("/4"), D["hdr_stage"].cget("text"))
+D["save_week_now"](); pump(150)
+_wkf = TMP / "기록" / f"WEEK_{ad.iso_week_id(TODAY.isoformat())}_결산.txt"
+check("week pack button writes 기록/WEEK_YYYY-Www_결산.txt", _wkf.exists() and "[관문]" in _wkf.read_text(encoding="utf-8-sig") and data.get("weeks", {}).get(ad.iso_week_id(TODAY.isoformat()), {}).get("pack") == TODAY.isoformat(), str(_wkf))
+# v6.0 — 녹화 시작 버튼은 오늘 기록에 시각을 남기고, 발로란트 연동은 키가 없으면 조용히 실패한다 (크래시 없이)
+D["rec_now"](); pump(100)
+rec = data["days"][TODAY.isoformat()].get("rec") or {}
+check("rec_now stamps today's recording start", rec.get("src") == "manual" and len(rec.get("start") or "") == 8, str(rec))
+D["rid_var"].set("YouKnowJo#YK1"); D["val_sync_now"](); pump(1500)
+check("valo sync without a key fails softly", "키" in D["val_lbl"].cget("text") or "불러온 적 없음" in D["val_lbl"].cget("text") or "실패" in D["val_lbl"].cget("text"), D["val_lbl"].cget("text"))
+check("valo config persisted", data["valo_cfg"]["rid"] == "YouKnowJo#YK1" and data["valo_cfg"]["region"] in ("ap", "kr", "na", "eu"))
 D["show"]("today"); pump(150)
 D["set_drawer"](True); pump(80); check("rank feedback drawer opens with steppers", D["steppers"][0].winfo_ismapped())
-D["tier_var"].set("실버 2"); D["rr_var"].set("+18"); D["commit_rank"](); check("rank tier / RR saved", data["days"][TODAY.isoformat()]["rank"] == {"tier": "실버 2", "rr": 18}, str(data["days"][TODAY.isoformat()].get("rank")))
+D["tier_var"].set("실버 2"); D["rr_var"].set("+18"); D["commit_rank"](); check("rank tier / RR saved", data["days"][TODAY.isoformat()]["rank"].get("tier") == "실버 2" and data["days"][TODAY.isoformat()]["rank"].get("rr") == 18, str(data["days"][TODAY.isoformat()]["rank"]))
+D["set_why"]("pos"); D["games_var"].set(2); D["commit_rank"](); pump(50)
+check("rank games / why saved", data["days"][TODAY.isoformat()]["rank"].get("why") == "pos" and data["days"][TODAY.isoformat()]["rank"].get("games") == 2, str(data["days"][TODAY.isoformat()]["rank"]))
 plus = btn(D["steppers"][0], "＋"); plus.cmd(); pump(50)
 check("deaths trend after +1", "1회" in D["dth_lbl"].cget("text"), D["dth_lbl"].cget("text"))
 shot("1_today")
 D["show"]("bench"); pump(200)
 check("bench advice names the weakest link", D["advice_lbl"].cget("text").startswith("약한 고리"), D["advice_lbl"].cget("text")[:120])
+check("bench gate card: 노비스 졸업 n/9 + graduation rule, no button before 9/9", D["grad_title"].cget("text").startswith("노비스 졸업 ") and "졸업 버튼" in D["grad_lbl"].cget("text") and not D["grad_btn"].winfo_ismapped(), D["grad_title"].cget("text") + " | " + D["grad_lbl"].cget("text")[:90])
+check("graduation refused before 9/9 (tier stays 노비스)", D["do_graduate"](confirm=False, restart=False) is False and data.get("tier", "n") == "n" and ad.CUR_TIER[0] == "n")
 wk = [k for k, (_, _, cardf) in D["ben_rows"].items() if cardf.cget("highlightbackground") == ad.C["gold"]]
 check("weakest card highlighted (one)", len(wk) == 1, str(wk))
 gaps = [c[3].cget("text") for c in D["ben_rows"]["react"][1]]; check("gap label for today's Ground", any(g.startswith("Gold") for g in gaps), str(gaps))
@@ -274,7 +293,7 @@ done_, nxt_, _ = None, None, None
 mapped_before = sum(1 for r in rows_ if r[1].master.winfo_ismapped())
 D["set_compact"](True); pump(150)
 mapped_after = sum(1 for r in rows_ if r[1].master.winfo_ismapped())
-check("compact mode hides rows", mapped_before == 27 and 4 <= mapped_after <= 8, f"{mapped_before}->{mapped_after}")
+check("compact mode hides rows", mapped_before == 20 and 4 <= mapped_after <= 8, f"{mapped_before}->{mapped_after}")
 cur = D["seq_win"]["cur_row"]; check("current row emphasized (bold, card2)", cur is not None and rows_[cur][2].cget("font") != rows_[0][2].cget("font") and rows_[cur][2].cget("bg") == ad.C["card2"])
 check("skip/resend buttons enabled while rows remain", D["seq_win"]["skip_btn"].enabled)
 shot("6_seq_compact")
@@ -302,23 +321,23 @@ D["on_key"](ke4); pump(50); check("'2' typed in the paste box does not switch ta
 _rp = D["save_report_today"](True); pump(100)
 check("report saved as 기록/에임데스크_<date>.txt", _rp is not None and _rp.exists() and _rp == TMP / "기록" / "에임데스크_2026-09-03.txt", str(_rp))
 _rt = _rp.read_text(encoding="utf-8-sig") if _rp else ""
-check("report has every section and today's numbers", all(x in _rt for x in ("[요약]", "[판정]", "[판별 기록]", "[시나리오별]", "[트레이너 목표 현황]", "[트레이너에게]", "[데이터]")) and "판 5/27" in _rt and "랭크 실버 2 RR +18" in _rt and "Ground" in _rt and "목표  3000 · 오늘  3000  ✓ 넘음" in _rt and "메모: 첫 판 전에 손 풀기" in _rt, _rt[:300])
+check("report has every section and today's numbers", all(x in _rt for x in ("[요약]", "[판정]", "[판별 기록]", "[시나리오별]", "[트레이너 목표 현황]", "[트레이너에게]", "[데이터]")) and "판 5/20" in _rt and "랭크 실버 2 RR +18" in _rt and "Ground" in _rt and "목표  3000 · 오늘  3000  ✓ 넘음" in _rt and "메모: 첫 판 전에 손 풀기" in _rt, _rt[:300])
 check("status line shows today's report saved", "에임데스크_2026-09-03.txt ✓" in D["trainer_lbl"].cget("text"), D["trainer_lbl"].cget("text")[-80:])
 shot("9_trainer")
 # 오늘 테마를 바꾸는 답장 → 열려 있는 순서창도 새 계획으로 다시 열린다 (자동 진행 상태는 유지)
 _nf = len(fired); _old_seq = list(D["seq_win"]["seq"])
 D["trainer_txt"].insert("1.0", "테마 오늘 트래킹"); D["apply_trainer"](); pump(500)
 top = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel) and w.title().startswith("오늘 순서")][0]
-check("today's theme override rebuilds the plan and reopens the sequence window", data["trainer"]["themes"].get("2026-09-03") == "trk" and D["seq_win"]["seq"] != _old_seq and D["seq_win"]["seq"].count("raw") >= 5 and len(D["seq_win"]["rows"]) == 27 and top.winfo_exists(), str(D["seq_win"]["seq"][10:16]))
+check("today's theme override rebuilds the plan and reopens the sequence window", data["trainer"]["themes"].get("2026-09-03") == "trk" and D["seq_win"]["seq"] != _old_seq and D["seq_win"]["seq"].count("raw") >= 3 and len(D["seq_win"]["rows"]) == 20 and top.winfo_exists(), str(D["seq_win"]["seq"][10:16]))
 check("theme override keeps auto mode and sends nothing by itself", D["auto"]["on"] and len(fired) == _nf, f"{D['auto']['on']} {len(fired) - _nf}")
 _pl = json.loads((TMP / "FPSAimTrainer" / "Saved" / "SaveGames" / "Playlists" / "AIMDESK Day.json").read_bytes().decode("utf-16"))
-check("installed AIMDESK Day.json follows the new theme", sum(1 for x in _pl["scenarioList"] if x["scenario_Name"] == "VT Raw Control Novice S5") >= 1 and len(_pl["scenarioList"]) == len(D["seq_win"]["rows"]) or sum(x.get("play_Count", 1) for x in _pl["scenarioList"]) == 27, str([x["scenario_Name"] for x in _pl["scenarioList"]][-4:]))
+check("installed AIMDESK Day.json follows the new theme", sum(1 for x in _pl["scenarioList"] if x["scenario_Name"] == "VT Raw Control Novice S5") >= 1 and len(_pl["scenarioList"]) == len(D["seq_win"]["rows"]) or sum(x.get("play_Count", 1) for x in _pl["scenarioList"]) == 20, str([x["scenario_Name"] for x in _pl["scenarioList"]][-4:]))
 (TMP / "기록" / "에임데스크_2026-09-03.txt").unlink()          # 아래 자정 통과 검사: 켜 둔 채 날이 바뀌면 어제 기록이 다시 저장돼야 한다
 # ── 토요일(벤치 데이)로 날짜가 넘어감 → AIMDESK Bench 플레이리스트 · 줄 18개 ──
 btn(top, "딥링크 방식").cmd(); pump(50)
 os.environ["AIMDESK_TODAY"] = "2026-09-05"; scan(); pump(700)
 check("day change → bench day with AIMDESK Bench", D["day_state"]["dt"] == "b" and D["day_state"]["pl"] == "AIMDESK Bench", str(D["day_state"]["dt"]))
-check("day change wrote yesterday's report first", (TMP / "기록" / "에임데스크_2026-09-03.txt").exists() and "판 5/27" in (TMP / "기록" / "에임데스크_2026-09-03.txt").read_text(encoding="utf-8-sig"))
+check("day change wrote yesterday's report first", (TMP / "기록" / "에임데스크_2026-09-03.txt").exists() and "판 5/20" in (TMP / "기록" / "에임데스크_2026-09-03.txt").read_text(encoding="utf-8-sig"))
 check("day change resets auto engine", D["auto"]["on"] is False and D["auto"]["pending"] is None and D["auto"]["fired_at"] is None)
 bb = btn(root, "▶ 벤치 18개 실행"); check("bench run button exists", bb is not None)
 check("bench rows: 18 in Voltaic order", [r[1] for r in D["routine_rows"]] == [k for s_ in ad.SUBS for k, _ in s_[3]], str([r[1] for r in D["routine_rows"]])[:120])
