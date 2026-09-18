@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v7.2 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
+에임 데스크 v7.3 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
@@ -35,6 +35,8 @@
 · v7.1: 아이콘 — 금색 A 모노그램 + 조준점 (app.ico 6장 · 창 아이콘 ICON_B64 도 같은 그림. 32·16px 은 단순화한 그림)
 · v7.2: 저장 위치 — 설정 탭 '기록 파일' 카드에서 기록·업로드 팩·썸네일·주간 결산이 갈 폴더를 고른다 (data["out_dir"], 기본은 기록 파일 옆 '기록')
 · v7.2: 쉬는 날은 월요일 (REST_WD) — 화~금·일 훈련, 토 벤치. 주간 결산은 월요일에 지난 주(월~일)를 마감. 10일 테마 주기는 화~일 5일 × 2주
+· v7.3: AI 코치 노트 — 오늘 한 줄 · 잘된 것 · 아쉬운 것 · 내일 이렇게 · 발로란트로 연결 · 이번 주 흐름 · 한마디 (COACH_SECTIONS) + === 앱 적용 === 줄.
+  지난 노트·이번 주 결산·'코치에게' 를 같이 보내 이어서 코칭. 노트는 data["coach"]["notes"] 와 기록/EP###_날짜_코치.txt · 오늘 탭 '코치 노트' 링크 · 노트 창
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
 from __future__ import annotations
@@ -420,7 +422,7 @@ def suggest_target(target, today_best, band, pb=None):
     return int(math.ceil(max(target * 1.02, hi or 0)))
 
 OUT_DIR = [None]                       # 설정 탭에서 고른 저장 폴더 (None = 기록 파일 옆 '기록'). load_data 가 채운다
-OUT_PATTERNS = ("에임데스크_*.txt", "EP*_업로드.txt", "EP*_썸네일.html", "WEEK_*_결산.txt")   # 앱이 만드는 파일만 — 폴더의 다른 파일은 건드리지 않는다
+OUT_PATTERNS = ("에임데스크_*.txt", "EP*_업로드.txt", "EP*_썸네일.html", "EP*_코치.txt", "WEEK_*_결산.txt")   # 앱이 만드는 파일만 — 폴더의 다른 파일은 건드리지 않는다
 def default_report_dir() -> Path: return DATA_FILE.parent / "기록"
 def report_dir() -> Path:
     """기록 · 업로드 팩 · 썸네일 · 주간 결산이 저장되는 폴더 — 설정 탭 '저장 위치' 로 바꿀 수 있다 (data["out_dir"])"""
@@ -628,7 +630,7 @@ def daily_report(data: dict, dkey: str, plays=None, dt: str = None) -> str:
     if TRAINER["note"]: L.append(f"  메모: {TRAINER['note']}")
     # ── 트레이너에게 ──
     L += ["", "[트레이너에게]",
-          "이 파일을 그대로 보내면 됩니다. 답장 중 아래 형식의 줄만 앱 '트레이너' 카드에 붙여넣으면 바로 적용됩니다 (다른 문장은 무시).",
+          "이 파일을 그대로 보내면 됩니다. 답장 중 아래 형식의 줄만 앱 '트레이너' 카드에 붙여넣으면 바로 적용됩니다 (다른 문장은 무시 — 코칭 글은 얼마든지 길게 써도 됩니다).",
           "  목표 Pasu 870            ← 그 시나리오의 목표 점수 (여러 줄 가능, 같은 이름은 새 값이 이김)",
           "  도전 Pasu 870            ← '오늘의 도전' 칸에 올릴 하나 (목표도 함께 잡힘)",
           "  테마 내일 트래킹         ← 본훈련 테마 지정: 클리킹 · 트래킹 · 스위칭 · 전체 · 약점 (내일 / 오늘 / 모레 / 2026-09-14)",
@@ -3279,12 +3281,59 @@ def week_close(data: dict, dkey: str, dir_=None):
 #  ② AI 코치(선택): 오늘 기록 파일을 그대로 Claude 에 보내 답장을 받아 적용. API 키가 있어야 하고 요청마다 요금이 든다.
 CLAUDE_API = "https://api.anthropic.com/v1/messages"
 CLAUDE_MODEL = "claude-opus-5"
-COACH_SYSTEM = ("당신은 발로란트 에임 코치다. 아래는 훈련 앱이 만든 오늘 기록이다. 기록에 있는 숫자만 근거로 내일을 정하라.\n"
-                "답은 아래 형식의 줄만 쓴다. 다른 문장은 쓰지 않는다 (설명은 '메모' 한 줄에).\n"
+COACH_MARK = "=== 앱 적용 ==="                         # 답장에서 이 줄 뒤가 앱이 읽는 줄 (앞은 사람이 읽는 코치 노트)
+COACH_SECTIONS = ("[오늘 한 줄]", "[잘된 것]", "[아쉬운 것]", "[내일 이렇게]", "[발로란트로 연결]", "[이번 주 흐름]", "[한마디]")
+COACH_SYSTEM = ("당신은 발로란트 에임 코치다. 선수는 골드 2에서 불멸을 목표로 매일 코박스(KovaaK's) 20판 + 발로란트 15분을 치고 그 과정을 유튜브에 매일 올린다. "
+                "아래 [오늘 기록]은 훈련 앱이 만든 것이다. 기록에 있는 숫자만 근거로 쓰고 없는 숫자는 지어내지 않는다. 앱이 계산한 판정·범위는 다시 판정하지 말고 근거로만 쓴다.\n"
+                "선수에게 직접 말하듯 존댓말로. 빈말·과장 없이 구체적으로 — 시나리오 이름과 숫자를 인용한다. 판 수·순서·요일 계획은 앱이 정하니 바꾸라고 하지 않는다.\n\n"
+                "답은 두 부분이다.\n"
+                "1) 코치 노트 — 아래 제목 7개를 이 순서로 그대로 쓰고, 제목마다 2~4문장 (전체 700~1200자):\n"
+                "[오늘 한 줄]  오늘 세션을 한 문장으로 (판 수 · 판정 · 가장 눈에 띈 숫자). 지난 코치 노트가 있으면 그 조언대로 됐는지 먼저 짚는다\n"
+                "[잘된 것]  2~3개 — 어떤 시나리오가 왜 좋았는지, 평소 범위·PB 대비 숫자로\n"
+                "[아쉬운 것]  2~3개 — 원인 가설까지 (첫 판이 낮으면 손 풀기 부족, 후반 하락은 피로, 특정 갈래만 낮으면 그 손놀림)\n"
+                "[내일 이렇게]  3~5개 — 시나리오별로 '무엇을 의식할지' (크로스헤어 배치 · 오버플릭 · 감도 · 호흡 · 판 사이 쉬기 · 첫 판 루틴)\n"
+                "[발로란트로 연결]  1~2개 — 사격장 /30 · 데스매치 K/D · 헤드샷 % 와 코박스 숫자를 잇는 조언. 발로 블록 숫자가 없으면 그렇다고 말한다\n"
+                "[이번 주 흐름]  주간 결산·관문(단계) 대비 어디쯤인지, 이번 주 남은 날에 집중할 것\n"
+                "[한마디]  격려 한 줄\n"
+                "선수가 [선수가 코치에게] 에 쓴 말이 있으면 해당 제목 안에서 반드시 답한다.\n\n"
+                f"2) 그 다음 줄에 {COACH_MARK} 를 쓰고, 그 뒤에는 앱이 읽는 줄만 쓴다 (다른 문장 금지):\n"
                 "목표 <시나리오> <점수>   ← 측정 6개(1w4ts·Pasu·Popcorn·EddieTS·DriftTS·ControlTS) 중 바꿀 것만. 한 번에 3% 넘게 올리지 말고, 못 넘은 목표는 유지\n"
                 "도전 <시나리오> <점수>   ← 오늘의 도전 하나 (선택)\n"
                 "테마 내일 <클리킹|트래킹|스위칭|전체|약점>   ← 바꿀 이유가 있을 때만\n"
                 "메모 <한 줄>   ← 내일 가장 중요한 한 가지, 30자 안팎")
+
+def ai_coach_context(data: dict, dkey: str, ask: str = "") -> str:
+    """보고서 뒤에 붙이는 맥락 — 지난 코치 노트(이어서 코칭) · 이번 주 결산(지금까지) · 선수가 코치에게 쓴 말"""
+    parts = []
+    notes = (data.get("coach") or {}).get("notes") or {}
+    prev = [k for k in sorted(notes) if k < dkey and (notes[k] or {}).get("text")]
+    if prev:
+        k = prev[-1]; parts += ["", f"[지난 코치 노트 · {k}]", str(notes[k].get("text") or "")[:1500]]
+    try: parts += ["", "[이번 주 결산 (지금까지)]", week_pack(data, dkey)]
+    except Exception: pass
+    if (ask or "").strip(): parts += ["", "[선수가 코치에게]", ask.strip()[:1500]]
+    return "\n".join(parts)
+
+def ai_coach_split(text: str):
+    """답장 → (코치 노트, 앱 적용 줄). 표식이 없으면(옛 형식) 전체를 둘 다로 쓴다 — parse_trainer 는 모르는 줄을 그냥 넘긴다"""
+    text = text or ""
+    for m in (COACH_MARK, "=== 앱 적용", "[앱 적용]", "앱 적용 ==="):
+        i = text.find(m)
+        if i >= 0:
+            j = text.find("\n", i)
+            return text[:i].strip(), (text[j + 1:] if j >= 0 else "").strip()
+    return text.strip(), text.strip()
+
+def coach_note_path(data: dict, dkey: str, dir_=None) -> Path:
+    return (Path(dir_) if dir_ else report_dir()) / f"EP{episode_no(data, dkey):03d}_{dkey}_코치.txt"
+
+def save_coach_note(data: dict, dkey: str, note: str, apply: str = "", dir_=None) -> Path:
+    """코치 노트를 기록 폴더에 한 파일로 (업로드 팩·썸네일과 같은 자리)"""
+    p = coach_note_path(data, dkey, dir_); p.parent.mkdir(parents=True, exist_ok=True)
+    body = f"AI 코치 노트 · {dkey} · {story_line(data, dkey)}\n\n{note.rstrip()}\n"
+    if apply.strip() and apply.strip() != note.strip(): body += f"\n{COACH_MARK}\n{apply.strip()}\n"
+    tmp = p.with_name(p.name + ".tmp"); tmp.write_text(body, encoding="utf-8-sig"); os.replace(tmp, p)
+    return p
 
 def _cycle_theme_id(dkey: str) -> str:
     d = date.fromisoformat(dkey)
@@ -3329,7 +3378,7 @@ def auto_coach(data: dict, dkey: str, plays=None, dt: str = None) -> str:
 
 def ai_coach_request(report: str, key: str):
     """(url, headers, body) — Messages API 원형 HTTP. 거절 시 서버가 다른 모델로 이어 답하게(fallbacks) 둔다"""
-    body = {"model": CLAUDE_MODEL, "max_tokens": 4000, "system": COACH_SYSTEM, "fallbacks": "default",
+    body = {"model": CLAUDE_MODEL, "max_tokens": 8000, "system": COACH_SYSTEM, "fallbacks": "default",
             "messages": [{"role": "user", "content": report}]}
     hdr = {"content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01",
            "anthropic-beta": "server-side-fallback-2026-07-01", "User-Agent": "AimDesk"}
@@ -3342,11 +3391,11 @@ def ai_coach_parse(j: dict):
     text = "\n".join((b.get("text") or "") for b in (j.get("content") or []) if b.get("type") == "text").strip()
     return (text, None) if text else (None, "빈 답장")
 
-def ai_coach(data: dict, dkey: str, plays=None, dt: str = None, key: str = None, timeout: float = 90.0):
-    """오늘 기록을 보내고 답장을 받는다 → (성공, 답장 또는 오류 문구, usage). 네트워크를 타므로 GUI 는 스레드로 부른다"""
+def ai_coach(data: dict, dkey: str, plays=None, dt: str = None, key: str = None, timeout: float = 180.0, ask: str = ""):
+    """오늘 기록 + 맥락(지난 노트 · 이번 주 · 코치에게)을 보내고 답장을 받는다 → (성공, 답장 또는 오류 문구, usage). 네트워크를 타므로 GUI 는 스레드로 부른다"""
     key = (key or "").strip()
     if not key: return False, "API 키 없음", None
-    url, hdr, body = ai_coach_request(daily_report(data, dkey, plays, dt), key)
+    url, hdr, body = ai_coach_request("[오늘 기록]\n" + daily_report(data, dkey, plays, dt) + "\n" + ai_coach_context(data, dkey, ask), key)
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=hdr, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r: j = json.loads(r.read().decode("utf-8"))
@@ -4482,6 +4531,7 @@ def main():
     rec_lnk = _link("● 녹화 시작", rec_now)
     seq_lnk = _link("순서 보기", lambda: (day_state.get("pl") and show_sequence(day_state["pl"])))
     card_lnk = _link("오늘 한 장", lambda: open_card())
+    note_lnk = _link("코치 노트", lambda: open_coach_note()); note_lnk.pack_forget()      # 오늘 AI 코치 노트가 있을 때만 (sync_live)
     auto_mini = tk.Label(hero, text="", font=FS, bg=C["card"], fg=C["hint"], anchor="w", justify="left", wraplength=px(900))   # 내용이 있을 때만 pack
     # 발밑 줄 — 왼쪽 자세히 · 오른쪽 컨디션
     foot = tk.Frame(page, bg=C["bg"]); foot.pack(fill="x", pady=(px(8), 0))
@@ -5855,7 +5905,7 @@ def main():
                        "① 자동 코치(앱 규칙) ② AI 코치(Claude) ③ 사람 트레이너 답장 붙여넣기.",
              font=FS, bg=C["card"], fg=C["hint"], wraplength=px(268), justify="left").pack(anchor="w", pady=(0, 7))
     coach_cfg = data.setdefault("coach", {})
-    for _k, _v in (("auto", True), ("ai_key", ""), ("ai_auto", False), ("last", ""), ("last_ai", "")): coach_cfg.setdefault(_k, _v)
+    for _k, _v in (("auto", True), ("ai_key", ""), ("ai_auto", False), ("last", ""), ("last_ai", ""), ("ask", ""), ("notes", {})): coach_cfg.setdefault(_k, _v)
     crow = tk.Frame(tcd, bg=C["card"]); crow.pack(anchor="w")
     Toggle(crow, "자동 코치", lambda: bool(coach_cfg.get("auto", True)), lambda v: (coach_cfg.__setitem__("auto", bool(v)), save_data(data))).pack(side="left")
     tk.Label(crow, text="앱이 매일 기록을 보고 목표 · 내일 테마 · 메모를 정합니다 (인터넷 없음)", font=FS, bg=C["card"], fg=C["hint"], wraplength=px(170), justify="left").pack(side="left", padx=(8, 0))
@@ -5874,7 +5924,7 @@ def main():
         cfg(coach_lbl, text="자동 코치 · " + txt.replace("\n", " · "), fg=C["ok"])
         if reason != "start": show_toast("자동 코치 적용 ✓ " + txt.split("\n")[0] + (" …" if "\n" in txt else ""))
         return True
-    tk.Label(tcd, text="AI 코치 (선택) — 오늘 기록 파일을 Claude 에 보내 답장을 받아 그대로 적용합니다. API 키는 console.anthropic.com 에서 (유료 · 한 번에 몇 십 원)",
+    tk.Label(tcd, text="AI 코치 (선택) — 오늘 기록 · 지난 코치 노트 · 이번 주 결산을 Claude 에 보내 코치 노트(오늘 한 줄 · 잘된 것 · 아쉬운 것 · 내일 이렇게 · 발로란트로 연결 · 이번 주 흐름)를 받고, 목표·테마·메모는 그대로 적용합니다. API 키는 console.anthropic.com 에서 (유료 · 한 번에 몇 십~백 원)",
              font=FS, bg=C["card"], fg=C["hint"], wraplength=px(268), justify="left").pack(anchor="w", pady=(10, 0))
     akrow = tk.Frame(tcd, bg=C["card"]); akrow.pack(fill="x", pady=(4, 0))
     tk.Label(akrow, text="API 키", font=FS, bg=C["card"], fg=C["sub"]).pack(side="left")
@@ -5883,9 +5933,53 @@ def main():
     ai_key_ent.pack(side="left", fill="x", expand=True, padx=(6, 0), ipady=3)
     def _save_ai_key(*_): coach_cfg["ai_key"] = ai_key_var.get().strip(); save_data(data)
     ai_key_ent.bind("<FocusOut>", _save_ai_key); ai_key_ent.bind("<Return>", _save_ai_key)
-    arow = tk.Frame(tcd, bg=C["card"]); arow.pack(anchor="w", pady=(4, 0))
+    tk.Label(tcd, text="코치에게 (선택) — 내 사정·질문. 매번 같이 보내고 코치가 노트 안에서 답합니다 (예: 감도 0.35 · 800dpi / 손목이 뻐근함 / 플릭이 자꾸 넘어감)",
+             font=FS, bg=C["card"], fg=C["hint"], wraplength=px(268), justify="left").pack(anchor="w", pady=(6, 0))
+    ask_txt = tk.Text(tcd, height=3, width=28, font=FS, bg=C["card2"], fg=C["txt"], insertbackground=C["txt"], bd=0, wrap="word", padx=6, pady=4, undo=True)
+    ask_txt.insert("1.0", coach_cfg.get("ask") or ""); ask_txt.pack(fill="x", pady=(3, 0))
+    def _save_ask(*_):
+        v_ = ask_txt.get("1.0", "end").strip()
+        if v_ != (coach_cfg.get("ask") or ""): coach_cfg["ask"] = v_; save_data(data)
+    ask_txt.bind("<FocusOut>", _save_ask)
+    arow = tk.Frame(tcd, bg=C["card"]); arow.pack(anchor="w", pady=(6, 0))
     Toggle(arow, "루틴 끝나면 자동으로", lambda: bool(coach_cfg.get("ai_auto")), lambda v: (coach_cfg.__setitem__("ai_auto", bool(v)), save_data(data))).pack(side="left")
     ai_lbl = tk.Label(tcd, text="", font=FS, bg=C["card"], fg=C["hint"], wraplength=px(268), justify="left"); ai_lbl.pack(anchor="w", pady=(3, 0))
+    note_win = {"win": None, "txt": None, "title": None, "dkey": None}
+    def open_coach_note(dkey=None):
+        """AI 코치 노트 창 — 오늘 것이 없으면 마지막 것. 제목 줄은 금색, 앱 적용 줄은 흐리게"""
+        notes = coach_cfg.get("notes") or {}
+        dkey = dkey or today_key[0]
+        if not notes.get(dkey):
+            if not notes: show_toast("아직 코치 노트가 없습니다 — 설정 탭 트레이너 카드에서 '지금 답장 받기'", "warn"); return False
+            dkey = sorted(notes)[-1]
+        n_ = notes[dkey]
+        w = note_win["win"]
+        if w is None or not w.winfo_exists():
+            w = tk.Toplevel(root); note_win["win"] = w; w.title("AI 코치 노트"); w.configure(bg=C["bg"])
+            W_, H_ = px(640), px(680)
+            w.geometry(clamp_pos(f"{W_}x{H_}+{root.winfo_x() + px(80)}+{root.winfo_y() + px(50)}", W_, H_, *vroot) or f"{W_}x{H_}")
+            hd_ = tk.Frame(w, bg=C["bg"], padx=px(14), pady=px(10)); hd_.pack(fill="x")
+            note_win["title"] = tk.Label(hd_, text="", font=FB, bg=C["bg"], fg=C["txt"]); note_win["title"].pack(side="left")
+            RBtn(hd_, "닫기", w.destroy, padx=10, pady=4).pack(side="right")
+            RBtn(hd_, "파일 열기", lambda: open_uri(str(coach_note_path(data, note_win["dkey"]))), padx=10, pady=4).pack(side="right", padx=(0, 8))
+            RBtn(hd_, "복사", lambda: (root.clipboard_clear(), root.clipboard_append(note_win["txt"].get("1.0", "end").strip()), show_toast("코치 노트 복사 ✓")), padx=10, pady=4).pack(side="right", padx=(0, 8))
+            bd_ = tk.Frame(w, bg=C["card"], highlightbackground=C["line"], highlightthickness=1); bd_.pack(fill="both", expand=True, padx=px(14), pady=(0, px(14)))
+            txt_ = tk.Text(bd_, font=F, bg=C["card"], fg=C["txt"], wrap="word", bd=0, padx=px(16), pady=px(12), spacing1=2, spacing3=3, cursor="arrow")
+            sb_ = tk.Scrollbar(bd_, command=txt_.yview); sb_.pack(side="right", fill="y"); txt_.pack(side="left", fill="both", expand=True); txt_.configure(yscrollcommand=sb_.set)
+            txt_.tag_configure("h", font=FB, foreground=C["gold"], spacing1=px(12)); txt_.tag_configure("app", foreground=C["hint"], font=FS); txt_.tag_configure("meta", foreground=C["dim"], font=FS)
+            note_win["txt"] = txt_; w.bind("<Escape>", lambda e: w.destroy())
+        else: w.lift()
+        note_win["dkey"] = dkey; txt_ = note_win["txt"]
+        cfg(note_win["title"], text=f"AI 코치 노트 · {dkey}" + (f" · {n_.get('at')}" if n_.get("at") else ""))
+        txt_.configure(state="normal"); txt_.delete("1.0", "end")
+        for ln in str(n_.get("text") or "").splitlines():
+            st_ = ln.strip()
+            if st_.startswith("[") and st_.endswith("]"): txt_.insert("end", st_ + "\n", "h")
+            elif st_: txt_.insert("end", st_ + "\n")
+        ap_ = str(n_.get("apply") or "").strip()
+        if ap_ and ap_ != str(n_.get("text") or "").strip():
+            txt_.insert("end", "\n앱에 적용한 줄\n", "meta"); txt_.insert("end", ap_ + "\n", "app")
+        txt_.configure(state="disabled"); return True
     import queue, threading                                   # (발로란트 연동 카드가 뒤에서 다시 들여오지만, 이 카드가 먼저 만들어진다)
     ai_q = queue.Queue(); ai_busy = [False]
     def _ai_poll():
@@ -5893,29 +5987,41 @@ def main():
         except queue.Empty: root.after(200, _ai_poll); return
         ai_busy[0] = False
         if ok:
-            p = trainer_apply(data, msg, today_key[0]); save_data(data); replan_today(); set_trainer_status(p)
+            note_, apply_ = ai_coach_split(msg)
+            p = trainer_apply(data, apply_, today_key[0])
+            at_ = datetime.now().strftime("%H:%M")
+            notes = coach_cfg.setdefault("notes", {}); notes[today_key[0]] = {"text": note_, "apply": apply_, "at": at_}
+            for k_ in sorted(notes)[:-30]: notes.pop(k_, None)                     # 30일치만
+            try: save_coach_note(data, today_key[0], note_, apply_)
+            except Exception: log_exc("save_coach_note")
+            save_data(data); replan_today(); set_trainer_status(p)
             n_ = len(p["targets"]) + len(p["themes"]) + (1 if p["note"] else 0) + (1 if p["challenge"] else 0)
-            cfg(ai_lbl, text=("AI 코치 답장 · " + msg.replace("\n", " · "))[:400], fg=C["ok"] if n_ else C["val"])
-            show_toast((f"AI 코치 적용 ✓ 목표 {len(p['targets'])}개" + (" · 테마" if p["themes"] else "") + (" · 메모" if p["note"] else "")) if n_ else "AI 코치 답장에 읽을 수 있는 줄이 없습니다", "ok" if n_ else "warn")
+            has_note = any(h_ in note_ for h_ in COACH_SECTIONS)
+            cfg(ai_lbl, text=f"AI 코치 노트 ✓ {at_} · " + (f"목표 {len(p['targets'])}개" + (" · 테마" if p["themes"] else "") + (" · 메모" if p["note"] else "") if n_ else "적용할 줄 없음") + " — '코치 노트 보기'", fg=C["ok"] if (n_ or has_note) else C["val"])
+            dirty["today"] = True; root.after(60, lambda: refresh_tab("today"))
+            if ai_reason[0] == "manual": open_coach_note()
+            else: show_toast("AI 코치 노트 도착 ✓ — 오늘 탭 '코치 노트' 에서 읽으세요" + (f" · 목표 {len(p['targets'])}개 적용" if p["targets"] else ""), "ok")
         else:
             cfg(ai_lbl, text="AI 코치 실패 — " + msg, fg=C["val"]); show_toast("AI 코치 실패 — " + msg, "warn")
+    ai_reason = ["manual"]
     def ai_coach_now(reason="manual"):
         if ai_busy[0]: return False
-        _save_ai_key()
+        _save_ai_key(); _save_ask(); ai_reason[0] = reason
         if not coach_cfg.get("ai_key"):
             if reason == "manual": show_toast("API 키를 먼저 넣으세요 (console.anthropic.com)", "warn")
             return False
         tag = f"{today_key[0]}:{reason}"
         if reason != "manual" and coach_cfg.get("last_ai") == tag: return False
         coach_cfg["last_ai"] = tag; save_data(data)
-        cfg(ai_lbl, text="AI 코치에게 보내는 중… (30초 안팎)", fg=C["hint"]); ai_busy[0] = True
-        dk_, cp_, dt_, key_ = today_key[0], cur_plays(), day_state.get("dt"), coach_cfg["ai_key"]
+        cfg(ai_lbl, text="AI 코치에게 보내는 중… (1분 안팎)", fg=C["hint"]); ai_busy[0] = True
+        dk_, cp_, dt_, key_, ask_ = today_key[0], cur_plays(), day_state.get("dt"), coach_cfg["ai_key"], coach_cfg.get("ask") or ""
         def work():
-            try: ai_q.put(ai_coach(data, dk_, cp_, dt_, key_))
+            try: ai_q.put(ai_coach(data, dk_, cp_, dt_, key_, ask=ask_))
             except Exception as e: log_exc("ai_coach"); ai_q.put((False, f"{type(e).__name__}: {e}", None))
         threading.Thread(target=work, daemon=True).start(); root.after(200, _ai_poll)
         return True
     RBtn(arow, "지금 답장 받기", lambda: ai_coach_now("manual"), padx=10, pady=4).pack(side="left", padx=(8, 0))
+    RBtn(arow, "코치 노트 보기", lambda: open_coach_note(), padx=10, pady=4).pack(side="left", padx=(8, 0))
     trow = tk.Frame(tcd, bg=C["card"]); trow.pack(anchor="w", pady=(10, 0))
 
     def save_report_today(show=False):
@@ -6667,6 +6773,9 @@ def main():
             if not day_state["rib_cv"].winfo_ismapped(): day_state["rib_cv"].pack(fill="x", pady=(px(12), 0), after=est_lbl)
             if not todo_host.winfo_ismapped(): todo_host.pack(fill="x", pady=(px(10), 0), after=day_state["rib_cv"])
         cfg(seq_lnk, text="한 번 더" if complete else "순서 보기")
+        if ((data.get("coach") or {}).get("notes") or {}).get(dkey):
+            if not note_lnk.winfo_ismapped(): note_lnk.pack(side="left", padx=(0, px(14)))
+        else: note_lnk.pack_forget()
         ca = cond_adjust(day.get("cond") or {})
         if ca:
             cfg(cond_chip, text=ca.split(" — ")[0])
@@ -7048,7 +7157,7 @@ def main():
         elif act == "run" and day_state["pl"]: run_playlist(day_state["pl"])
         return "break"
     root.bind("<Key>", on_key)
-    for _k in ("o", "b"): trainer_txt.bind(f"<Control-{_k}>", on_key)   # Text 클래스의 Ctrl+O(줄 열기)·Ctrl+B(커서) 보다 먼저 — 앱 단축키만 한 번
+    for _k in ("o", "b"): trainer_txt.bind(f"<Control-{_k}>", on_key); ask_txt.bind(f"<Control-{_k}>", on_key)   # Text 클래스의 Ctrl+O(줄 열기)·Ctrl+B(커서) 보다 먼저 — 앱 단축키만 한 번
     legend_lbl.configure(text="F5 다시 읽기 · Ctrl+R 실행 · Ctrl+B 방송 · 1~5 탭 · 6 계획")
 
     if data.get("out_dir") and not OUT_DIR[0]:
@@ -7112,7 +7221,8 @@ def main():
                 hdr_streak=hdr_streak, wk_cv=wk_cv, section_labels=section_labels, advice_lbl=advice_lbl, ben_rows=ben_rows,
                 dth_lbl=dth_lbl, steppers=steppers, on_key=on_key, pick_stats=pick_stats,
                 detail=detail, open_detail=open_detail, spark_cvs=spark_cvs, daych=daych, set_compact=set_compact,
-                apply_out_dir=apply_out_dir, out_lbl=out_lbl, out_reset_btn=out_reset_btn)
+                apply_out_dir=apply_out_dir, out_lbl=out_lbl, out_reset_btn=out_reset_btn,
+                open_coach_note=open_coach_note, note_lnk=note_lnk, note_win=note_win, ask_txt=ask_txt, refresh_today=refresh_today)
     _DBG.setdefault("counters", {}).setdefault("refresh_tab", 0)
     if os.environ.get("AIMDESK_NO_MAINLOOP"): return
     root.mainloop()
@@ -7978,7 +8088,20 @@ if __name__ == "__main__":
         assert ai_coach_parse({"stop_reason": "end_turn", "content": [{"type": "text", "text": "목표 Pasu 850\n메모 ok"}]}) == ("목표 Pasu 850\n메모 ok", None)
         assert ai_coach_parse({"stop_reason": "refusal", "stop_details": {"category": "x"}, "content": []})[0] is None and ai_coach_parse({"content": []})[1] == "빈 답장"
         assert ai_coach(_ac, _lk, key="") == (False, "API 키 없음", None)
+        # ── v7.3: 코치 노트 ──
+        assert COACH_MARK in COACH_SYSTEM and all(h_ in COACH_SYSTEM for h_ in COACH_SECTIONS) and ai_coach_request("x", "k")[2]["max_tokens"] >= 8000
+        _nt, _ap = ai_coach_split("[오늘 한 줄]\n좋아요\n[한마디]\n화이팅\n" + COACH_MARK + "\n목표 Pasu 850\n메모 ok\n")
+        assert _nt == "[오늘 한 줄]\n좋아요\n[한마디]\n화이팅" and _ap == "목표 Pasu 850\n메모 ok" and parse_trainer(_ap, _lk)["targets"] == {"pasu": 850}
+        assert ai_coach_split("목표 Pasu 850") == ("목표 Pasu 850", "목표 Pasu 850") and ai_coach_split("") == ("", "")
+        _cxd = dict(_ac, coach={"notes": {"2026-09-01": {"text": "지난 노트 본문"}, _lk: {"text": "오늘 것은 안 보냄"}}}, series={"ep_offset": 0})
+        _cx = ai_coach_context(_cxd, _lk, ask="손목이 뻐근합니다")
+        assert "[지난 코치 노트 · 2026-09-01]" in _cx and "지난 노트 본문" in _cx and "오늘 것은 안 보냄" not in _cx and "[이번 주 결산" in _cx and "[선수가 코치에게]" in _cx and "손목이 뻐근합니다" in _cx, _cx[:300]
+        assert "[선수가 코치에게]" not in ai_coach_context(_ac, _lk) and "[지난 코치 노트" not in ai_coach_context(_ac, _lk)
+        with _tf.TemporaryDirectory() as _cd:
+            _cp = save_coach_note(_cxd, _lk, "[오늘 한 줄]\n좋아요", "목표 Pasu 850", dir_=_cd); _ct = _cp.read_text(encoding="utf-8-sig")
+            assert _cp.name.startswith("EP") and _cp.name.endswith(f"_{_lk}_코치.txt") and "[오늘 한 줄]" in _ct and COACH_MARK in _ct and "목표 Pasu 850" in _ct, _cp.name
+            assert "EP*_코치.txt" in OUT_PATTERNS and out_dir_files(Path(_cd)) == [_cp]
         trainer_clear(_ac); bump_ver()
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK")
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK · v7.3 coach-note OK")
         sys.exit(0)
     main()

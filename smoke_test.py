@@ -260,6 +260,16 @@ _want_theme = os.environ.get("AIMDESK_THEME") or "light"
 check("theme buttons exist; default theme is light (env can force dark)", set(D["theme_btns"]) == {"light", "dark"} and data.get("theme") == "light" and ad.THEME[0] == _want_theme and (ad.C["card"] == "#FFFFFF") == (_want_theme == "light"), f"{ad.THEME[0]} {ad.C['card']}")
 check("auto coach stays silent without a usual range (no invented targets)", D["auto_coach_now"]("manual") is False and not ad.TRAINER["targets"] and "아직" in D["coach_lbl"].cget("text"), D["coach_lbl"].cget("text"))
 check("AI coach without a key refuses softly", D["ai_coach_now"]("manual") is False and data["coach"].get("ai_key") == "")
+# v7.3 — 코치 노트: 노트가 있으면 오늘 탭 링크 · 노트 창 (제목 줄 금색) · '코치에게' 글은 저장된다
+check("v7.3: no note yet → link hidden, window refuses softly", not D["note_lnk"].winfo_ismapped() and D["open_coach_note"]() is False)
+data["coach"]["notes"][TODAY.isoformat()] = {"text": "[오늘 한 줄]\n오늘 5판 · 어제와 비슷\n[한마디]\n내일도 봅시다", "apply": "메모 첫 판 전에 손 풀기", "at": "10:07"}
+D["show"]("today"); pump(100); D["refresh_today"](); pump(200)
+check("v7.3: today's note shows the 코치 노트 link in the hero", D["note_lnk"].winfo_ismapped())
+check("v7.3: note window opens with the note text and the applied lines", D["open_coach_note"]() is True and D["note_win"]["win"].winfo_exists() and "AI 코치 노트" in D["note_win"]["title"].cget("text") and "내일도 봅시다" in D["note_win"]["txt"].get("1.0", "end") and "메모 첫 판 전에 손 풀기" in D["note_win"]["txt"].get("1.0", "end") and D["note_win"]["txt"].tag_ranges("h"), D["note_win"]["title"].cget("text"))
+D["note_win"]["win"].destroy(); pump(100)
+D["ask_txt"].insert("1.0", "손목이 뻐근합니다"); D["ask_txt"].event_generate("<FocusOut>"); pump(100)
+check("v7.3: '코치에게' text is saved", data["coach"].get("ask") == "손목이 뻐근합니다", str(data["coach"].get("ask")))
+D["show"]("tools"); pump(100)
 check("header no longer shows 미야기", D["hdr_mi"].cget("text") == "", D["hdr_mi"].cget("text"))
 check("header energy pill: 볼테익 N · 출발선 ±N (no rank word)", D["hdr_e"].cget("text").startswith("볼테익 ") and "출발선" in D["hdr_e"].cget("text") and not any(w in D["hdr_e"].cget("text") for w in ("Gold", "Silver", "Bronze", "Iron")), D["hdr_e"].cget("text"))
 check("header story line: DAY N · tier → goal", D["hdr_story"].cget("text").startswith("DAY ") and "→" in D["hdr_story"].cget("text"), D["hdr_story"].cget("text"))
