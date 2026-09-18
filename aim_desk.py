@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v7.3 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
+에임 데스크 v7.4 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
@@ -37,6 +37,7 @@
 · v7.2: 쉬는 날은 월요일 (REST_WD) — 화~금·일 훈련, 토 벤치. 주간 결산은 월요일에 지난 주(월~일)를 마감. 10일 테마 주기는 화~일 5일 × 2주
 · v7.3: AI 코치 노트 — 오늘 한 줄 · 잘된 것 · 아쉬운 것 · 내일 이렇게 · 발로란트로 연결 · 이번 주 흐름 · 한마디 (COACH_SECTIONS) + === 앱 적용 === 줄.
   지난 노트·이번 주 결산·'코치에게' 를 같이 보내 이어서 코칭. 노트는 data["coach"]["notes"] 와 기록/EP###_날짜_코치.txt · 오늘 탭 '코치 노트' 링크 · 노트 창
+· v7.4: 계획 탭에 코칭 — 달력 칸·이번 주 줄에 그날 코치 한 줄([오늘 한 줄] / 다음 계획일엔 [내일 이렇게] 첫 항목 / 오늘 메모), '이번 주' 아래 코치 노트 카드(내일 이렇게 · 이번 주 흐름)
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
 from __future__ import annotations
@@ -3324,6 +3325,61 @@ def ai_coach_split(text: str):
             return text[:i].strip(), (text[j + 1:] if j >= 0 else "").strip()
     return text.strip(), text.strip()
 
+def note_section(text: str, title: str) -> str:
+    """코치 노트에서 [제목] 절의 본문 (다음 [제목] 전까지)"""
+    out = []; on = False
+    for ln in (text or "").splitlines():
+        s_ = ln.strip()
+        if s_.startswith("[") and s_.endswith("]"):
+            if on: break
+            on = (s_ == title); continue
+        if on and s_: out.append(s_)
+    return "\n".join(out).strip()
+
+def note_items(section: str) -> list:
+    """'1) … 2) …' 또는 줄 단위를 항목으로 (번호·불릿 제거)"""
+    txt = (section or "").strip()
+    if not txt: return []
+    parts = re.split(r"(?:^|\s)(?:\d+[)\.]|[-•·▸])\s+", txt)
+    items = [p_.strip(" .") for p_ in parts if p_.strip(" .")]
+    if len(items) <= 1: items = [l_.strip(" -•·") for l_ in txt.splitlines() if l_.strip(" -•·")]
+    return items
+
+def first_sentence(text: str, n: int = 44) -> str:
+    """첫 문장 하나 (…다. / …요. 까지), n자에서 자름"""
+    t = (text or "").strip().replace("\n", " ")
+    m = re.search(r"^(.+?(?:다|요|죠|니다|습니다|세요|네요)\.)", t)
+    return _cut((m.group(1) if m else t).strip(), n)
+
+def _next_plan_day(dkey: str):
+    """다음 '계획이 있는 날' (쉬는 날만 건너뜀 — 벤치 날도 코칭 대상)"""
+    d = date.fromisoformat(dkey)
+    for i in range(1, 8):
+        nd = (d + timedelta(days=i)).isoformat()
+        if day_type_of(nd) != "r": return nd
+    return None
+
+def coach_for_day(data: dict, dkey: str, today: str = None):
+    """달력 칸·이번 주 줄에 적을 코치 한 줄 → (표식, 글) 또는 None.
+    그날 노트가 있으면 [오늘 한 줄], 직전 노트의 다음 계획일이 그날이면 [내일 이렇게] 첫 항목, 오늘이면 트레이너 메모"""
+    notes = (data.get("coach") or {}).get("notes") or {}
+    n = notes.get(dkey)
+    if n and n.get("text"):
+        s_ = first_sentence(note_section(n["text"], "[오늘 한 줄]") or n["text"])
+        if s_: return ("코치", s_)
+    prev = [k for k in sorted(notes) if k < dkey and (notes[k] or {}).get("text")]
+    if prev and _next_plan_day(prev[-1]) == dkey:
+        its = note_items(note_section(notes[prev[-1]]["text"], "[내일 이렇게]"))
+        if its: return ("내일 이렇게", _cut(its[0], 44))
+    if today and dkey == today and TRAINER.get("note"): return ("메모", _cut(TRAINER["note"], 44))
+    return None
+
+def latest_note(data: dict, upto: str = None):
+    """가장 최근 코치 노트 → (날짜, 노트) 또는 (None, None)"""
+    notes = (data.get("coach") or {}).get("notes") or {}
+    ks = [k for k in sorted(notes) if (notes[k] or {}).get("text") and (upto is None or k <= upto)]
+    return (ks[-1], notes[ks[-1]]) if ks else (None, None)
+
 def coach_note_path(data: dict, dkey: str, dir_=None) -> Path:
     return (Path(dir_) if dir_ else report_dir()) / f"EP{episode_no(data, dkey):03d}_{dkey}_코치.txt"
 
@@ -4447,9 +4503,12 @@ def main():
                 else: st, sc = ("안 침" if dk < today and BASE_DATE[0] and dk > BASE_DATE[0] else ""), C["dim"]
                 if kind == "train" and dk < today and dk not in tdays and BASE_DATE[0] and dk > BASE_DATE[0]: st, sc = "안 침", C["val"]
                 tk.Label(cell, text=st, font=FS, bg=bg_, fg=sc, anchor="w").pack(fill="x")
+                cl_ = coach_for_day(data, dk, today) if in_m and kind != "before" else None
+                if cl_: tk.Label(cell, text=f"{cl_[0]} · {cl_[1]}", font=FS, bg=bg_, fg=C["gold"] if cl_[0] == "내일 이렇게" else C["txt"], anchor="w", wraplength=px(150), justify="left").pack(fill="x", pady=(px(3), 0))
         # 아래: 이번 주 · 다섯 단계 · 이 앱이 하는 일
         cols_ = tk.Frame(cbody, bg=C["bg"]); cols_.pack(fill="x", pady=(px(12), 0))
-        wk = card(cols_); wk.pack(side="left", fill="both", expand=True)
+        left_ = tk.Frame(cols_, bg=C["bg"]); left_.pack(side="left", fill="both", expand=True, anchor="n")
+        wk = card(left_); wk.pack(fill="x")
         tk.Label(wk, text="이번 주", font=FH, bg=C["card"], fg=C["txt"]).pack(anchor="w")
         mon = td - timedelta(days=td.weekday())
         for i in range(7):
@@ -4459,9 +4518,30 @@ def main():
             row = tk.Frame(wk, bg=C["card"]); row.pack(fill="x", pady=(px(5), 0))
             tk.Label(row, text=f"{'월화수목금토일'[i]} {d.month}/{d.day}", font=FB, bg=C["card"], fg=C["gold"] if dk == today else C["sub"], width=8, anchor="w").pack(side="left")
             tk.Label(row, text=chip, font=FB, bg=C["card"], fg=col, width=14, anchor="w").pack(side="left")
-            tk.Label(row, text=(f"✓ {sum((data['days'][dk].get('count') or {}).values())}판 · " if dk in tdays else "") + what, font=FS, bg=C["card"], fg=C["sub"], anchor="w").pack(side="left", fill="x", expand=True)
+            cl_ = coach_for_day(data, dk, today) if kind != "before" else None
+            done_ = f"✓ {sum((data['days'][dk].get('count') or {}).values())}판 · " if dk in tdays else ""
+            tk.Label(row, text=done_ + (f"{cl_[0]} · {cl_[1]}" if cl_ else what), font=FS, bg=C["card"], fg=(C["gold"] if cl_ and cl_[0] == "내일 이렇게" else C["txt"]) if cl_ else C["sub"], anchor="w").pack(side="left", fill="x", expand=True)
+        # 코치 노트 — 내일 이렇게 · 이번 주 흐름 (계획 탭에서 바로 읽는다)
+        cc = card(left_); cc.pack(fill="x", pady=(px(12), 0))
+        nk_, nn_ = latest_note(data)
+        tk.Label(cc, text="코치 노트" + (f" · {nk_[5:].replace('-', '/')}" + (f" {nn_.get('at')}" if nn_.get("at") else "") if nk_ else ""), font=FH, bg=C["card"], fg=C["txt"]).pack(anchor="w")
+        if not nk_:
+            tk.Label(cc, text="AI 코치 노트를 받으면 여기에 '내일 이렇게'와 '이번 주 흐름'이 적히고, 달력 칸마다 코치 한 줄이 붙습니다 — 설정 탭 → 트레이너 → 지금 답장 받기",
+                     font=FS, bg=C["card"], fg=C["hint"], wraplength=px(560), justify="left").pack(anchor="w", pady=(px(4), 0))
+        else:
+            _nt = nn_.get("text") or ""
+            for _ttl, _key in (("오늘 한 줄", "[오늘 한 줄]"), ("내일 이렇게", "[내일 이렇게]"), ("이번 주 흐름", "[이번 주 흐름]")):
+                _sec = note_section(_nt, _key)
+                if not _sec: continue
+                if _ttl == "오늘 한 줄" and nk_ != today: _ttl = f"{nk_[5:].replace('-', '/')} 한 줄"
+                tk.Label(cc, text=_ttl, font=FB, bg=C["card"], fg=C["gold"]).pack(anchor="w", pady=(px(8), px(2)))
+                _lines = note_items(_sec) if _key == "[내일 이렇게]" else [_sec.replace("\n", " ")]
+                for _it in _lines[:6]:
+                    tk.Label(cc, text=("• " if _key == "[내일 이렇게]" else "") + _it, font=FS, bg=C["card"], fg=C["txt"], wraplength=px(560), justify="left", anchor="w").pack(fill="x", pady=(0, px(2)))
+            if TRAINER.get("note"): tk.Label(cc, text=f"메모 · {TRAINER['note']}", font=FS, bg=C["card"], fg=C["sub"], wraplength=px(560), justify="left", anchor="w").pack(fill="x", pady=(px(6), 0))
+            _more = tk.Label(cc, text="전체 노트 보기 →", font=FLINK, bg=C["card"], fg=C["hint"], cursor="hand2"); _more.pack(anchor="w", pady=(px(6), 0))
+            _more.bind("<Button-1>", lambda e, k_=nk_: open_coach_note(k_))
         rt = tk.Frame(cols_, bg=C["bg"]); rt.pack(side="left", anchor="n", padx=(px(12), 0))
-        wk.pack_configure(anchor="n")
         sg = card(rt); sg.pack(fill="x")
         ss = stage_status(data, today)
         tk.Label(sg, text="골드 2 → 불멸 · 다섯 단계", font=FH, bg=C["card"], fg=C["txt"]).pack(anchor="w")
@@ -5998,7 +6078,7 @@ def main():
             n_ = len(p["targets"]) + len(p["themes"]) + (1 if p["note"] else 0) + (1 if p["challenge"] else 0)
             has_note = any(h_ in note_ for h_ in COACH_SECTIONS)
             cfg(ai_lbl, text=f"AI 코치 노트 ✓ {at_} · " + (f"목표 {len(p['targets'])}개" + (" · 테마" if p["themes"] else "") + (" · 메모" if p["note"] else "") if n_ else "적용할 줄 없음") + " — '코치 노트 보기'", fg=C["ok"] if (n_ or has_note) else C["val"])
-            dirty["today"] = True; root.after(60, lambda: refresh_tab("today"))
+            dirty["today"] = True; dirty["cal"] = True; root.after(60, lambda: refresh_tab("today"))
             if ai_reason[0] == "manual": open_coach_note()
             else: show_toast("AI 코치 노트 도착 ✓ — 오늘 탭 '코치 노트' 에서 읽으세요" + (f" · 목표 {len(p['targets'])}개 적용" if p["targets"] else ""), "ok")
         else:
@@ -8101,7 +8181,17 @@ if __name__ == "__main__":
             _cp = save_coach_note(_cxd, _lk, "[오늘 한 줄]\n좋아요", "목표 Pasu 850", dir_=_cd); _ct = _cp.read_text(encoding="utf-8-sig")
             assert _cp.name.startswith("EP") and _cp.name.endswith(f"_{_lk}_코치.txt") and "[오늘 한 줄]" in _ct and COACH_MARK in _ct and "목표 Pasu 850" in _ct, _cp.name
             assert "EP*_코치.txt" in OUT_PATTERNS and out_dir_files(Path(_cd)) == [_cp]
+        # ── v7.4: 계획 탭 코칭 줄 ──
+        _nb = "[오늘 한 줄]\n오늘 20판, 어제와 비슷한 하루였습니다. 둘째 문장은 안 나옵니다.\n[잘된 것]\nPasu 610.\n[내일 이렇게]\n1) Popcorn 첫 판은 팔로 붙이기. 2) EddieTS 12판째부터 손 털기. 3) Pasu는 그대로.\n[이번 주 흐름]\n관문 3/10.\n[한마디]\n화이팅"
+        assert note_section(_nb, "[내일 이렇게]").startswith("1) Popcorn") and note_section(_nb, "[한마디]") == "화이팅" and note_section(_nb, "[없음]") == ""
+        assert note_items(note_section(_nb, "[내일 이렇게]")) == ["Popcorn 첫 판은 팔로 붙이기", "EddieTS 12판째부터 손 털기", "Pasu는 그대로"] and note_items("가\n나") == ["가", "나"] and note_items("") == []
+        assert first_sentence(note_section(_nb, "[오늘 한 줄]")) == "오늘 20판, 어제와 비슷한 하루였습니다." and first_sentence("가" * 60, 10).endswith("…") and len(first_sentence("가" * 60, 10)) == 10
+        _cdn = {"pb": {}, "days": {}, "coach": {"notes": {"2026-09-18": {"text": _nb, "at": "21:40"}}}}
+        assert coach_for_day(_cdn, "2026-09-18") == ("코치", "오늘 20판, 어제와 비슷한 하루였습니다.") and coach_for_day(_cdn, "2026-09-19") == ("내일 이렇게", "Popcorn 첫 판은 팔로 붙이기")   # 9/19 토(벤치)도 다음 계획일
+        assert coach_for_day(_cdn, "2026-09-20") is None and coach_for_day(_cdn, "2026-09-17") is None and _next_plan_day("2026-09-20") == "2026-09-22"   # 월요일은 건너뛴다
+        assert latest_note(_cdn)[0] == "2026-09-18" and latest_note(_cdn, "2026-09-17") == (None, None) and latest_note({"coach": {}}) == (None, None)
+        TRAINER["note"] = "첫 판 전에 손 풀기"; assert coach_for_day({"coach": {}}, "2026-09-22", today="2026-09-22") == ("메모", "첫 판 전에 손 풀기") and coach_for_day({"coach": {}}, "2026-09-23", today="2026-09-22") is None; TRAINER["note"] = ""
         trainer_clear(_ac); bump_ver()
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK · v7.3 coach-note OK")
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK · v7.3 coach-note OK · v7.4 cal-coach OK")
         sys.exit(0)
     main()

@@ -262,13 +262,18 @@ check("auto coach stays silent without a usual range (no invented targets)", D["
 check("AI coach without a key refuses softly", D["ai_coach_now"]("manual") is False and data["coach"].get("ai_key") == "")
 # v7.3 — 코치 노트: 노트가 있으면 오늘 탭 링크 · 노트 창 (제목 줄 금색) · '코치에게' 글은 저장된다
 check("v7.3: no note yet → link hidden, window refuses softly", not D["note_lnk"].winfo_ismapped() and D["open_coach_note"]() is False)
-data["coach"]["notes"][TODAY.isoformat()] = {"text": "[오늘 한 줄]\n오늘 5판 · 어제와 비슷\n[한마디]\n내일도 봅시다", "apply": "메모 첫 판 전에 손 풀기", "at": "10:07"}
+data["coach"]["notes"][TODAY.isoformat()] = {"text": "[오늘 한 줄]\n오늘 5판 어제와 비슷한 하루였습니다. 둘째 문장.\n[내일 이렇게]\n1) Popcorn 첫 판은 팔로 붙이기. 2) 판 사이 손 털기.\n[이번 주 흐름]\n관문 3/10 페이스입니다.\n[한마디]\n내일도 봅시다", "apply": "메모 첫 판 전에 손 풀기", "at": "10:07"}
 D["show"]("today"); pump(100); D["refresh_today"](); pump(200)
 check("v7.3: today's note shows the 코치 노트 link in the hero", D["note_lnk"].winfo_ismapped())
 check("v7.3: note window opens with the note text and the applied lines", D["open_coach_note"]() is True and D["note_win"]["win"].winfo_exists() and "AI 코치 노트" in D["note_win"]["title"].cget("text") and "내일도 봅시다" in D["note_win"]["txt"].get("1.0", "end") and "메모 첫 판 전에 손 풀기" in D["note_win"]["txt"].get("1.0", "end") and D["note_win"]["txt"].tag_ranges("h"), D["note_win"]["title"].cget("text"))
 D["note_win"]["win"].destroy(); pump(100)
 D["ask_txt"].insert("1.0", "손목이 뻐근합니다"); D["ask_txt"].event_generate("<FocusOut>"); pump(100)
 check("v7.3: '코치에게' text is saved", data["coach"].get("ask") == "손목이 뻐근합니다", str(data["coach"].get("ask")))
+# v7.4 — 계획 탭: 달력 칸·이번 주 줄에 코치 한 줄, 코치 노트 카드
+D["show"]("cal"); pump(400)
+_cal_txt = [w.cget("text") for w in walk(D["cbody"]) if isinstance(w, tk.Label)]
+check("v7.4: calendar shows today's 코치 one-liner and tomorrow's 내일 이렇게", sum(1 for x in _cal_txt if "코치 · 오늘 5판" in x) >= 2 and sum(1 for x in _cal_txt if "내일 이렇게 · Popcorn" in x) >= 2, str([x for x in _cal_txt if "코치" in x or "내일 이렇게" in x])[:200])
+check("v7.4: 코치 노트 card lists 내일 이렇게 items and the full-note link", any(x.startswith("코치 노트 · ") for x in _cal_txt) and "• Popcorn 첫 판은 팔로 붙이기" in _cal_txt and "전체 노트 보기 →" in _cal_txt and any("관문 3/10" in x for x in _cal_txt), str([x for x in _cal_txt if x.startswith("•")]))
 D["show"]("tools"); pump(100)
 check("header no longer shows 미야기", D["hdr_mi"].cget("text") == "", D["hdr_mi"].cget("text"))
 check("header energy pill: 볼테익 N · 출발선 ±N (no rank word)", D["hdr_e"].cget("text").startswith("볼테익 ") and "출발선" in D["hdr_e"].cget("text") and not any(w in D["hdr_e"].cget("text") for w in ("Gold", "Silver", "Bronze", "Iron")), D["hdr_e"].cget("text"))
