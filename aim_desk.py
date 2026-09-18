@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v6.0 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
+에임 데스크 v6.1 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
@@ -26,6 +26,8 @@
 · v6.0: 매일 올리는 시리즈 — DAY N · 녹화 시작 시각 → 명장면·챕터(mm:ss) · 업로드 팩(제목·설명·태그·고정 댓글) · 썸네일 HTML · 16:9 오늘 한 장
 · v6.0: 방송창(AimDesk Broadcast) — 원시 픽셀 프리셋 · 글자 하한 28px · 크로마 · 보스전/주간 보드 · 관문 미터 · 주인공 줄
 · v6.0: 골드 2 → 불멸 다섯 단계 — 에임·게임·랭크 관문을 전부 숫자로, 두 일요일 연속 다 차야 다음 단계 · 발로란트 전적 연동(선택)
+· v6.1: 눈에 들어오는 화면 — 회색 글씨 세 단계를 밝히고(dim 3.3:1 → 5.0:1) 기본 글꼴 한 단계 키움, 미룬 판정도 밝은 글씨('프로브 0/6'),
+  라이브 줄에 큰 실행 버튼 하나, 루틴 줄은 굵은 막대, 발로 블록 설명은 접음, 옛 죽음 스텝퍼 제거, 방송창 좁은 타일은 두 줄(겹침 버그)
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
 from __future__ import annotations
@@ -3760,14 +3762,16 @@ ICON_B64 = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAACkUlEQVR4nO1bwWrDMAxN
 # 판정 색 — up/flat/down 은 히어로 '면'에 깔리고 글자는 onfill. 빨강(val)과 온도를 달리해 '발로 그룹색 ≠ 별로'.
 VERDICT_C = {"up": "#4ED490", "flat": "#8CA0B3", "down": "#F0654F", "onfill": "#0B0E11", "up_bg": "#122A1E", "flat_bg": "#1D242C", "down_bg": "#2A1512"}
 VERDICT_C_BROADCAST = {"up": "#63E6A6", "flat": "#B7C6D3", "down": "#FF8A70", "onfill": "#0B0E11", "up_bg": "#17392A", "flat_bg": "#252E38", "down_bg": "#3A1E1A"}
-C = {"bg":"#0B0E11","card":"#14191F","card2":"#1D242C","c3":"#242C35","line":"#28313B",
-     "txt":"#EDF1F5","sub":"#8CA0B3","dim":"#5C6C7C","hint":"#7A8B9C",
+# v6.1 — 회색 글씨 세 단계를 전부 밝혔다 (sub 4.9:1 → 7.4:1, dim 3.3:1 → 5.0:1). 어두운 회색은 1080p 모니터에서 '없는 글씨'였다.
+# wait = 판정을 미루는 동안의 큰 글씨 — 판정색은 아니지만 '비어 있음'이 아니라 '읽으라는 글'이라 밝게
+C = {"bg":"#0B0E11","card":"#14191F","card2":"#1D242C","c3":"#242C35","line":"#2B3540",
+     "txt":"#EDF1F5","sub":"#A7B6C6","dim":"#7A8A9A","hint":"#93A3B3","wait":"#C9D3DD",
      "val":"#E8453A","ow":"#3B87F7","ok":"#4ED490","gold":"#F5C24B"}
 RANKC = ["#98A2AC", "#E08A3C", "#C9D6E2", "#F5C24B"]
 
 # 방송 모드 팔레트 — 녹화·스트리밍에서 가장 먼저 사라지는 것은 어두운 회색 글씨(dim 3.27:1)와
 # 진한 빨강이다(4:2:0 색 서브샘플링이 채도 높은 빨강 테두리를 뭉갠다). 밝기를 올리고 빨강을 연하게 한다.
-C_BROADCAST = {"txt": "#FFFFFF", "sub": "#C2D0DC", "hint": "#A9BACA", "dim": "#93A4B4",
+C_BROADCAST = {"txt": "#FFFFFF", "sub": "#C2D0DC", "hint": "#A9BACA", "dim": "#93A4B4", "wait": "#E1E8EF",
                "line": "#3D4B59", "card2": "#252E38", "c3": "#2F3A46",
                "val": "#FF7A6E", "ow": "#6FAEFF", "ok": "#63E6A6", "gold": "#FFD36B"}
 RANKC_BROADCAST = ["#B6C0CA", "#F0A257", "#DCE6F0", "#FFD36B"]
@@ -3845,12 +3849,13 @@ def main():
     fams = set(tkfont.families())                      # 한 번만 (수백 개 폰트 나열이 느림)
     FAM = "Malgun Gothic" if "Malgun Gothic" in fams else "TkDefaultFont"
     MONO = "Consolas" if "Consolas" in fams else "TkFixedFont"
-    F   = (FAM, 10);  FS  = (FAM, 9);   FB = (FAM, 10, "bold")
-    FH  = (FAM, 12, "bold"); FCAP = (FAM, 9, "bold")
-    FN  = (MONO, 11, "bold"); FNS = (MONO, 9, "bold"); FBIG = (MONO, 26, "bold")
+    # v6.1 — 기본 글꼴을 한 단계 키웠다 (본문 10 → 11, 캡션 9 → 10). 1080p 100% 에서 9pt 는 12px — 읽는 게 아니라 알아보는 크기였다
+    F   = (FAM, 11);  FS  = (FAM, 10);   FB = (FAM, 11, "bold")
+    FH  = (FAM, 14, "bold"); FCAP = (FAM, 10, "bold")
+    FN  = (MONO, 12, "bold"); FNS = (MONO, 10, "bold"); FBIG = (MONO, 30, "bold")
     # 판정 밴드·라이브 스트립 (시청자용 크기: T0~T2). 배율은 tk scaling 이 같이 키운다
-    FV0 = (MONO, 44, "bold"); FV1 = (FAM, 30, "bold"); FV2 = (FAM, 18, "bold"); FVN2 = (MONO, 24, "bold")
-    FLIVE = (FAM, 14, "bold"); FSCORE = (MONO, 22, "bold")
+    FV0 = (MONO, 44, "bold"); FV1 = (FAM, 30, "bold"); FV2 = (FAM, 20, "bold"); FVN2 = (MONO, 26, "bold")
+    FLIVE = (FAM, 20, "bold"); FSCORE = (MONO, 30, "bold")
 
     def win_dark():
         try:
@@ -4015,7 +4020,7 @@ def main():
     head = tk.Frame(root, bg=C["bg"]); head.pack(fill="x", padx=18, pady=(14, 2))
     lf = tk.Frame(head, bg=C["bg"]); lf.pack(side="left")
     ttl = tk.Frame(lf, bg=C["bg"]); ttl.pack(anchor="w")                 # 제목 줄: 에임 데스크 · 레벨 링 · 연속일 (오른쪽 묶음을 가볍게 — 1100px 창에서도 다 보이게)
-    tk.Label(ttl, text="에임 데스크", font=(FAM, 14, "bold"), bg=C["bg"], fg=C["txt"]).pack(side="left")
+    tk.Label(ttl, text="에임 데스크", font=(FAM, 16, "bold"), bg=C["bg"], fg=C["txt"]).pack(side="left")
     sub = tk.Frame(lf, bg=C["bg"]); sub.pack(anchor="w")
     date_lbl = tk.Label(sub, text="", font=FS, bg=C["bg"], fg=C["sub"]); date_lbl.pack(side="left")
     daych = tk.Canvas(sub, width=px(70), height=px(18), bg=C["bg"], highlightthickness=0); daych.pack(side="left", padx=8)
@@ -4036,7 +4041,7 @@ def main():
     hdr_idx = tk.Label(rf, text="", font=FN, bg=C["bg"], fg=C["txt"])          # v4: 화면에 안 보임 (순서창 요약이 HDR_STATE 를 읽는다)
     hdr_mi = tk.Label(rf, text="", font=FNS, bg=C["bg"], fg=C["sub"])          # v4 에서 미야기 제거 — 자리만 남긴 빈 라벨
     # 주인공 줄 + 단계 칩은 왼쪽 상태 줄(날짜 · 요일 · 이번 주 옆)에 — 오른쪽 묶음에 넣으면 1100px 창에서 레벨 링·연속일이 밀려난다
-    hdr_story = tk.Label(sub, text="", font=FB, bg=C["bg"], fg=C["gold"]); hdr_story.pack(side="left", padx=(px(14), 0))   # 주인공 줄: DAY N · 골드 2 → 불멸 · 연속 N일
+    hdr_story = tk.Label(sub, text="", font=FH, bg=C["bg"], fg=C["gold"]); hdr_story.pack(side="left", padx=(px(14), 0))   # 주인공 줄: DAY N · 골드 2 → 불멸 · 연속 N일
     hdr_stage = tk.Label(sub, text="", font=FNS, bg=C["card2"], fg=C["sub"], padx=px(8), pady=px(1), cursor="hand2")   # 단계 칩: '단계 1 · 관문 3/7' — 누르면 벤치 탭(관문 카드)
     hdr_stage.pack(side="left", padx=(px(8), 0)); hdr_stage.bind("<Button-1>", lambda e: show("bench"))
     RBtn(rf, "도구", lambda: show("tools"), padx=10, pady=4).pack(side="right", padx=(0, 10))
@@ -4106,14 +4111,14 @@ def main():
         for f in frames.values(): f.pack_forget()
         frames[tab].pack(fill="both", expand=True)
         for n, b in tabbtns.items():
-            b.configure(fg=C["txt"] if n == tab else C["dim"])
+            b.configure(fg=C["txt"] if n == tab else C["sub"])
             underls[n].configure(bg=C["val"] if n == tab else C["bg"])
         cur_tab[0] = tab
         refresh_tab(tab)
     for name, label in (("today","오늘"),("grow","성장"),("bench","벤치"),("log","기록"),("tools","도구")):
         holder = tk.Frame(tabbar, bg=C["bg"]); holder.pack(side="left", padx=(0, 22))
-        b = tk.Label(holder, text=label, font=(FAM, 11, "bold"), bg=C["bg"],
-                     fg=C["dim"], cursor="hand2")
+        b = tk.Label(holder, text=label, font=(FAM, 13, "bold"), bg=C["bg"],
+                     fg=C["sub"], cursor="hand2")
         b.pack(); b.bind("<Button-1>", lambda e, n=name: show(n))
         u = tk.Frame(holder, bg=C["bg"], height=3, width=30); u.pack(fill="x", pady=(3, 0))
         tabbtns[name], underls[name] = b, u
@@ -4128,7 +4133,7 @@ def main():
     cols = tk.Frame(ft, bg=C["bg"]); cols.pack(fill="both", expand=True, pady=(px(10), 0))
     left = card(cols); left.pack(side="left", fill="both", expand=True)
     left_scroll = VScroll(left); left_scroll.pack(fill="both", expand=True)
-    right = tk.Frame(cols, bg=C["bg"], width=px(330)); right.pack(side="left", fill="y", padx=(14, 0))
+    right = tk.Frame(cols, bg=C["bg"], width=px(360)); right.pack(side="left", fill="y", padx=(14, 0))
     right.pack_propagate(False)
     right_scroll = VScroll(right); right_scroll.pack(fill="both", expand=True)
     rbody = right_scroll.body
@@ -4145,16 +4150,21 @@ def main():
     routine_rows = []; section_labels = []; routine_next = [None]
     if (data.get("hero") or {}).get("date") == today_key[0]: day_state["hero_state"] = data["hero"].get("state")   # 히스테리시스 상태 복원
     # 라이브 스트립 내용 (고정 위젯 — 날이 바뀌어도 내용만 바뀐다)
-    lv_l = tk.Frame(live, bg=C["card"], width=px(300)); lv_l.pack(side="left", fill="y", padx=(px(14), 0), pady=px(8)); lv_l.pack_propagate(False)
+    lv_l = tk.Frame(live, bg=C["card"], width=px(380)); lv_l.pack(side="left", fill="y", padx=(px(14), 0), pady=px(8)); lv_l.pack_propagate(False)
     cur_lbl = tk.Label(lv_l, text="오늘 루틴", font=FLIVE, bg=C["card"], fg=C["sub"], anchor="w"); cur_lbl.pack(anchor="w")
     lv_l2 = tk.Frame(lv_l, bg=C["card"]); lv_l2.pack(anchor="w")
     cur_score = tk.Label(lv_l2, text="—", font=FSCORE, bg=C["card"], fg=C["dim"]); cur_score.pack(side="left")
     cur_word = tk.Label(lv_l2, text="첫 판을 치면 여기에", font=FB, bg=C["card"], fg=C["hint"]); cur_word.pack(side="left", padx=(px(8), 0))
     cond_chip = tk.Label(lv_l2, text="", font=FCAP, bg=C["down_bg"], fg=C["down"], padx=px(6))
-    lv_r = tk.Frame(live, bg=C["card"], width=px(232)); lv_r.pack(side="right", fill="y", padx=(0, px(14)), pady=px(8)); lv_r.pack_propagate(False)
-    day_state["sess_lbl"] = tk.Label(lv_r, text="", font=FNS, bg=C["card"], fg=C["sub"], anchor="e", justify="right"); day_state["sess_lbl"].pack(anchor="e")
-    est_lbl = tk.Label(lv_r, text="", font=FS, bg=C["card"], fg=C["dim"], anchor="e"); est_lbl.pack(anchor="e")
-    lv_btns = tk.Frame(lv_r, bg=C["card"]); lv_btns.pack(anchor="e", pady=(px(2), 0))     # 오늘 한 장 · 녹화 시작 — 나란히 (세로로 쌓으면 둘째가 잘린다)
+    lv_r = tk.Frame(live, bg=C["card"], width=px(300)); lv_r.pack(side="right", fill="y", padx=(0, px(14)), pady=px(8)); lv_r.pack_propagate(False)
+    def run_cta():
+        """스트립의 큰 버튼 — 안 돌고 있으면 실행, 돌고 있으면 순서창"""
+        pl_ = day_state.get("pl")
+        if not pl_: return
+        if seq_alive(): show_sequence(pl_)
+        else: run_playlist(pl_)
+    run_btn = RBtn(lv_r, "▶ 오늘 루틴 실행", run_cta, bg=C["gold"], fg="#10141A", padx=16, pady=7, w=px(250)); run_btn.pack(anchor="e")   # 화면에서 가장 먼저 눌러야 할 것 하나
+    lv_btns = tk.Frame(lv_r, bg=C["card"]); lv_btns.pack(anchor="e", pady=(px(8), 0))     # 오늘 한 장 · 녹화 시작 — 나란히 (세로로 쌓으면 둘째가 잘린다)
     card_btn = RBtn(lv_btns, "오늘 한 장", lambda: open_card(), padx=10, pady=3); card_btn.pack(side="right")
     def rec_now():
         """OBS 녹화를 누른 순간에 같이 누른다 — 명장면·챕터의 0:00 이 정확해진다 (루틴 실행 시각을 덮어쓴다)"""
@@ -4164,7 +4174,10 @@ def main():
     rec_btn = RBtn(lv_btns, "● 녹화 시작", rec_now, padx=10, pady=3); rec_btn.pack(side="right", padx=(0, px(6)))
     lv_m = tk.Frame(live, bg=C["card"]); lv_m.pack(side="left", fill="both", expand=True, padx=px(12), pady=px(8))
     day_state["rib_cv"] = tk.Canvas(lv_m, height=px(36), bg=C["card"], highlightthickness=0); day_state["rib_cv"].pack(fill="x")
-    day_state["rib_lbl"] = tk.Label(lv_m, text="", font=FNS, bg=C["card"], fg=C["sub"], anchor="w"); day_state["rib_lbl"].pack(anchor="w", pady=(px(3), 0))
+    lv_m1 = tk.Frame(lv_m, bg=C["card"]); lv_m1.pack(anchor="w", pady=(px(3), 0))
+    day_state["rib_lbl"] = tk.Label(lv_m1, text="", font=FNS, bg=C["card"], fg=C["sub"], anchor="w"); day_state["rib_lbl"].pack(side="left")
+    day_state["sess_lbl"] = tk.Label(lv_m1, text="", font=FNS, bg=C["card"], fg=C["sub"], anchor="w"); day_state["sess_lbl"].pack(side="left", padx=(px(12), 0))
+    est_lbl = tk.Label(lv_m1, text="", font=FS, bg=C["card"], fg=C["dim"], anchor="w"); est_lbl.pack(side="left", padx=(px(12), 0))
     auto_mini = tk.Label(lv_m, text="", font=FS, bg=C["card"], fg=C["hint"], anchor="w", justify="left", wraplength=px(560)); auto_mini.pack(anchor="w")
     day_state["rib_cells"] = []
     _fcache = {}
@@ -4201,18 +4214,20 @@ def main():
             cv.create_text(W - px(16), int(H * 0.52), text=num, anchor="e", fill=C["gold"], font=f0, tags="hero")
             cv.create_text(px(16), H - px(18), text="오늘 18판이 앞으로의 0점입니다 — 못 쳐도 다시 치지 않습니다. 내일부터 주기 루틴", anchor="w", fill=C["sub"], font=FS, tags="hero")
             return
-        gap = px(12); hw = int(W * 0.53); sw = (W - hw - 2 * gap) // 2
+        gap = px(12); hw = int(W * 0.50); sw = (W - hw - 2 * gap) // 2
         # 히어로 【오늘】
         Vd = V["day"]; fc, isv = vcol(Vd)
         if Vd["fill"] == "solid": bg, fg, ol = fc, C["onfill"], ""
         elif Vd["fill"] == "hollow": bg, fg, ol = C["card2"], fc, fc
-        else: bg, fg, ol = C["card2"], (fc if isv else C["dim"]), C["line"]
+        else: bg, fg, ol = C["card2"], (fc if isv else C["wait"]), C["line"]
         if flash: bg = flash
         rrect(cv, 0, 0, hw, H, px(14), fill=bg, outline=ol, width=px(3) if ol else 0, tags="hero")
         capc = fg if bg not in (C["card2"],) else C["sub"]
         cv.create_text(px(14), px(20), text=Vd.get("cap", ""), anchor="w", fill=capc, font=FCAP, tags="hero")
         if Vd.get("n_pb"): cv.create_text(hw - px(14), px(20), text=f"★ 신기록 {Vd['n_pb']}", anchor="e", fill=(C["onfill"] if bg not in (C["card2"],) else C["gold"]), font=FCAP, tags="hero")
         word = f"{Vd['word']} {Vd['glyph']}".strip(); num = Vd.get("num", "")
+        if Vd.get("state") == "wait":                                             # '0/4쌍' 은 앱 말 — 사람 말로: 프로브 n/6
+            _pd = len({k_ for k_, _t_, _s_ in cur_plays() if k_ in PROBE}); num = f"프로브 {_pd}/{len(PROBE)}"
         f0 = fit_font(FV0, num, int(hw * 0.42)); f1 = fit_font(FV1, word, hw - px(48) - f0.measure(num))
         cv.create_text(px(16), int(H * 0.52), text=word, anchor="w", fill=fg, font=f1, tags="hero")
         cv.create_text(hw - px(16), int(H * 0.52), text=num, anchor="e", fill=fg, font=f0, tags="hero")
@@ -4226,12 +4241,13 @@ def main():
             bgk = Vt["colk"] + "_bg" if Vt["colk"] in ("up", "flat", "down") else None
             rrect(cv, x, 0, x + sw, H, px(14), fill=C[bgk] if bgk else C["card2"], outline=fc if isv else C["line"], width=1)
             if isv: rrect(cv, x, 0, x + sw, px(7), px(3), fill=fc, outline="")
-            fg2 = fc if isv else C["dim"]
+            fg2 = fc if isv else C["wait"]
             top_r, bottom = (Vt.get("cap2", ""), Vt.get("cap", "")) if key == "recent" else (Vt.get("cap", ""), Vt.get("cap2", ""))
-            cv.create_text(x + px(12), px(24), text=title, anchor="w", fill=C["txt"], font=FCAP)
+            cv.create_text(x + px(12), px(24), text=title, anchor="w", fill=C["txt"], font=FB)
             capf = fit_font(FS, top_r, sw - px(64)); cv.create_text(x + sw - px(12), px(24), text=top_r, anchor="e", fill=C["dim"], font=capf)
-            wf = fit_font(FV2, f"{Vt['word']} {Vt['glyph']}", sw - px(24)); cv.create_text(x + px(12), int(H * 0.40), text=f"{Vt['word']} {Vt['glyph']}", anchor="w", fill=fg2, font=wf)
-            nf = fit_font(FVN2, Vt.get("num", ""), sw - px(24)); cv.create_text(x + px(12), int(H * 0.585), text=Vt.get("num", ""), anchor="w", fill=fg2, font=nf)
+            _low = H < px(170)                                                     # 낮은 밴드: 글꼴 한 단계 작게, 두 줄 간격 넓게 (겹침 방지)
+            wf = fit_font(FV2 if not _low else (FAM, 16, "bold"), f"{Vt['word']} {Vt['glyph']}", sw - px(24)); cv.create_text(x + px(12), int(H * (0.40 if not _low else 0.37)), text=f"{Vt['word']} {Vt['glyph']}", anchor="w", fill=fg2, font=wf)
+            nf = fit_font(FVN2 if not _low else (MONO, 20, "bold"), Vt.get("num", ""), sw - px(24)); cv.create_text(x + px(12), int(H * (0.585 if not _low else 0.60)), text=Vt.get("num", ""), anchor="w", fill=fg2, font=nf)
             ev = Vt.get("ev") or {}; y1, y2 = int(H * 0.67), int(H * 0.80)
             if key == "recent":
                 dots = ev.get("dots") or []
@@ -4911,7 +4927,7 @@ def main():
         V = verdicts(data, dkey, dt, cp, day_state.get("hero_state"))
         strip = H < 300
         # ── 첫 줄: 주인공 · 티어 · 볼테익 ──
-        y0 = int(H * (0.14 if strip else 0.08))
+        y0 = int(H * (0.17 if strip else 0.08))
         sl = story_line(data, dkey); f_sl = fit(fam(0.11 if strip else 0.06), sl, int(W * 0.55))
         plate(pad - 8, y0 - int(H * 0.07), pad + f_sl.measure(sl) + 8, y0 + int(H * 0.07))
         cv.create_text(pad, y0, text=sl, anchor="w", fill=C["gold"], font=f_sl)
@@ -4967,20 +4983,30 @@ def main():
         # ── 발로 데이: 판정 셋 (오늘 히어로 · 요즘 · 관문) ──
         Vd = V["day"]; fc, isv = vcol(Vd)
         gw_, gn_, gc_ = fmt_gate(gate_status(data.get("pb") or {})) if BASELINE[0] else ("기준 측정 전", "", "")
-        tiles = [("hero", Vd["word"] + (" " + Vd["glyph"] if Vd.get("glyph") else ""), Vd["num"], fc if isv else C["dim"], Vd["fill"]),
-                 ("recent", V["recent"]["word"] + (" " + V["recent"]["glyph"] if V["recent"].get("glyph") else ""), V["recent"]["num"], vcol(V["recent"])[0] if vcol(V["recent"])[1] else C["dim"], "chip"),
-                 ("gate", gw_, gn_, C["gold"], "chip")]
-        y2 = int(H * (0.62 if strip else 0.44)); hw = int(W * 0.46); cw = int((W - 2 * pad - hw - 2 * int(W * 0.012)) / 2); x = pad
-        for kind, word, num, col, fill_ in tiles:
-            w_ = hw if kind == "hero" else cw
+        hero_num = Vd["num"]
+        if Vd.get("state") == "wait": hero_num = f"프로브 {len({k_ for k_, _t_, _s_ in cp if k_ in PROBE})}/{len(PROBE)}"
+        rc_ = vcol(V["recent"])
+        tiles = [("hero", Vd["word"] + (" " + Vd["glyph"] if Vd.get("glyph") else ""), hero_num, fc if isv else C["wait"], Vd["fill"], not isv),
+                 ("recent", V["recent"]["word"] + (" " + V["recent"]["glyph"] if V["recent"].get("glyph") else ""), V["recent"]["num"], rc_[0] if rc_[1] else C["wait"], "chip", not rc_[1]),
+                 ("gate", gw_, gn_, C["gold"], "chip", False)]
+        y2 = int(H * (0.70 if strip else 0.44)); hw = int(W * 0.46); cw = int((W - 2 * pad - hw - 2 * int(W * 0.012)) / 2); x = pad
+        for kind, word, num, col, fill_, hold_ in tiles:
+            w_ = hw if kind == "hero" else cw; ol = C["line"] if hold_ else col
             if kind == "hero":
                 bg = col if fill_ == "solid" else (C["card2"] if not chroma else C["card"]); fg = C["onfill"] if fill_ == "solid" else col
-                rrect(cv, x, y1, x + w_, y2, int(H * 0.04), fill=bg, outline=col if fill_ != "solid" else "", width=2)
+                rrect(cv, x, y1, x + w_, y2, int(H * 0.04), fill=bg, outline=ol if fill_ != "solid" else "", width=2)
             else:
-                rrect(cv, x, y1, x + w_, y2, int(H * 0.04), fill=C["card2"] if not chroma else C["card"], outline=col, width=2); fg = col
-            f_n = fit(mon(0.16 if not strip else 0.30), num, int(w_ * 0.40)); f_w = fit(fam(0.11 if not strip else 0.22), word, w_ - int(W * 0.03) - f_n.measure(num))
-            cv.create_text(x + int(W * 0.012), (y1 + y2) // 2, text=word, anchor="w", fill=fg, font=f_w)
-            cv.create_text(x + w_ - int(W * 0.012), (y1 + y2) // 2, text=num, anchor="e", fill=fg, font=f_n)
+                rrect(cv, x, y1, x + w_, y2, int(H * 0.04), fill=C["card2"] if not chroma else C["card"], outline=ol, width=2); fg = col
+            inner = w_ - 2 * int(W * 0.012); cy = (y1 + y2) // 2
+            f_n = fit(mon(0.16 if not strip else 0.30), num, int(w_ * 0.40)); f_w = fit(fam(0.11 if not strip else 0.22), word, inner - f_n.measure(num) - int(W * 0.01))
+            if f_w.measure(word) + f_n.measure(num) + int(W * 0.01) <= inner:          # 한 줄에 들어가면 말 왼쪽 · 숫자 오른쪽
+                cv.create_text(x + int(W * 0.012), cy, text=word, anchor="w", fill=fg, font=f_w)
+                cv.create_text(x + w_ - int(W * 0.012), cy, text=num, anchor="e", fill=fg, font=f_n)
+            else:                                                                        # 좁은 타일: 말 위 · 숫자 아래 (겹치지 않게)
+                f_w2 = fit(fam(0.085 if not strip else 0.16), word, inner); f_n2 = fit(mon(0.11 if not strip else 0.20), num, inner)
+                dy = int((y2 - y1) * 0.24)
+                cv.create_text(x + int(W * 0.012), cy - dy, text=word, anchor="w", fill=fg, font=f_w2)
+                cv.create_text(x + int(W * 0.012), cy + dy, text=num, anchor="w", fill=fg, font=f_n2)
             x += w_ + int(W * 0.012)
         if strip:                                              # 띠 프리셋은 여기까지 (아래 줄은 카드/전체에서만)
             return
@@ -5140,10 +5166,10 @@ def main():
     def add_section(title, extra=None):
         """섹션 하나 = 요약 행(시청자용, 항상 보임) + 상세 머리글(접힘). section_labels[i] = (요약 라벨, 제목, 시작 줄, extra, 요약 바, 개수 라벨, 상세 머리글)"""
         sm = day_state["summary"]; det = day_state["detail"]
-        row = tk.Frame(sm, bg=C["card"]); row.pack(fill="x", pady=(0, px(4)))
-        lb = tk.Label(row, text=title, font=FCAP, bg=C["card"], fg=C["gold"], width=26, anchor="w"); lb.pack(side="left")
-        bar = tk.Canvas(row, width=px(60), height=px(10), bg=C["card"], highlightthickness=0); bar.pack(side="left", fill="x", expand=True, padx=(6, 10))
-        cnt = tk.Label(row, text="", font=FNS, bg=C["card"], fg=C["sub"], width=7, anchor="e"); cnt.pack(side="left")
+        row = tk.Frame(sm, bg=C["card"]); row.pack(fill="x", pady=(0, px(7)))
+        lb = tk.Label(row, text=title, font=FB, bg=C["card"], fg=C["txt"], width=30, anchor="w"); lb.pack(side="left")
+        bar = tk.Canvas(row, width=px(60), height=px(14), bg=C["card"], highlightthickness=0); bar.pack(side="left", fill="x", expand=True, padx=(6, 10))
+        cnt = tk.Label(row, text="", font=FN, bg=C["card"], fg=C["sub"], width=7, anchor="e"); cnt.pack(side="left")
         f = tk.Frame(det, bg=C["card"]); f.pack(fill="x", pady=(10, 3))
         lb2 = tk.Label(f, text=title, font=FCAP, bg=C["card"], fg=C["gold"]); lb2.pack(side="left")
         tk.Frame(f, bg=C["line"], height=1).pack(side="left", fill="x", expand=True, padx=(10, 0), pady=1)
@@ -5213,7 +5239,7 @@ def main():
             tk.Label(lt, text="오늘은 휴식 — 컨디션만 적어도 됩니다", font=FS, bg=C["card"], fg=C["hint"]).pack(anchor="w", pady=(2, 0))
         else:
             RBtn(lh, "▶ 벤치 18개 실행" if dt == "b" else "▶ 오늘 루틴 실행", lambda: run_playlist(pl),
-                 bg="#2A1512", fg=C["val"], padx=14, pady=8).pack(side="right", padx=(8, 0))
+                 padx=14, pady=8).pack(side="right", padx=(8, 0))
             if dt != "b":
                 RBtn(lh, "프로브만", lambda: run_playlist("AIMDESK Probe"), padx=12, pady=8).pack(side="right", padx=(8, 0))
             RBtn(lh, "순서 보기", lambda: show_sequence(pl), padx=12, pady=8).pack(side="right")
@@ -5228,16 +5254,24 @@ def main():
         # 섹션 요약(시청자용 몇 줄) → 코치 2줄 → 자세히 토글 → 상세(접힘)
         day_state["summary"] = tk.Frame(body_, bg=C["card"]); day_state["summary"].pack(fill="x", pady=(10, 0))
         if dt == "v":
-            vb = tk.Frame(body_, bg=C["card"]); vb.pack(fill="x", pady=(px(8), 0))
-            tk.Label(vb, text="④ 발로란트 블록 · 15분", font=FB, bg=C["card"], fg=C["txt"]).pack(anchor="w")
+            vb = tk.Frame(body_, bg=C["card"]); vb.pack(fill="x", pady=(px(10), 0))
+            vh = tk.Frame(vb, bg=C["card"]); vh.pack(fill="x")
+            tk.Label(vh, text="④ 발로란트 블록 · 15분", font=FB, bg=C["card"], fg=C["txt"]).pack(side="left")
+            tk.Label(vh, text="사격장 3분 → 카운터 스트레이프 3분 → 데스매치 9분", font=FS, bg=C["card"], fg=C["sub"]).pack(side="left", padx=(12, 0))
+            help_lbl = tk.Label(vh, text="방법 ▾", font=FS, bg=C["card"], fg=C["hint"], cursor="hand2"); help_lbl.pack(side="left", padx=(10, 0))
+            vhelp = tk.Frame(vb, bg=C["card"])                                       # 설명 3줄은 접어 둔다 — 사흘이면 외운다
             for _ln in ("사격장 · 하드 · 스트레이핑 켬 · 30개 ×2회 → 맞힌 수 (3분)",
                         "카운터 스트레이프 3분 — A/D 이동 → 반대키 탭 → 정지 → 헤드 1발, 봇 무한",
                         "데스매치 1판 · 밴달 고정 · 크로스헤어 머리 높이 · 3발 초과 금지 → K · D · HS% (9분)"):
-                tk.Label(vb, text=_ln, font=FS, bg=C["card"], fg=C["hint"], wraplength=px(430), justify="left").pack(anchor="w")
-            vrow = tk.Frame(vb, bg=C["card"]); vrow.pack(anchor="w", pady=(4, 0))
+                tk.Label(vhelp, text=_ln, font=FS, bg=C["card"], fg=C["hint"], wraplength=px(700), justify="left").pack(anchor="w")
+            vrow = tk.Frame(vb, bg=C["card"]); vrow.pack(anchor="w", pady=(6, 0))
+            def toggle_help(*_):
+                if vhelp.winfo_ismapped(): vhelp.pack_forget(); cfg(help_lbl, text="방법 ▾")
+                else: vhelp.pack(fill="x", before=vrow, pady=(4, 0)); cfg(help_lbl, text="방법 ▴")
+            help_lbl.bind("<Button-1>", toggle_help)
             val_vars = {}
             for _k, _lbl, _w in (("range", "사격 /30", 3), ("dm_k", "DM K", 3), ("dm_d", "D", 3), ("dm_hs", "HS%", 4)):
-                tk.Label(vrow, text=_lbl, font=FS, bg=C["card"], fg=C["sub"]).pack(side="left", padx=(0 if _k == "range" else 8, 0))
+                tk.Label(vrow, text=_lbl, font=F, bg=C["card"], fg=C["sub"]).pack(side="left", padx=(0 if _k == "range" else 12, 0))
                 _v = tk.StringVar(); val_vars[_k] = _v
                 _e = tk.Entry(vrow, textvariable=_v, width=_w, font=FN, bg=C["card2"], fg=C["txt"], insertbackground=C["txt"], bd=0, justify="center")
                 _e.pack(side="left", padx=(4, 0), ipady=3); _e.bind("<Return>", lambda e: commit_val()); _e.bind("<FocusOut>", lambda e: commit_val())
@@ -5273,7 +5307,7 @@ def main():
         tg_.bind("<Button-1>", lambda e: set_routine_open(not data["win"].get("routine_open")))
         day_state["toggle"] = tg_
         det = tk.Frame(body_, bg=C["card"]); day_state["detail"] = det
-        day_state["sess_cv"] = tk.Canvas(body_, height=px(214), bg=C["card"], highlightthickness=0)     # 오늘 세션 곡선 (성장 탭과 같은 그림)
+        day_state["sess_cv"] = tk.Canvas(body_, height=px(170), bg=C["card"], highlightthickness=0)     # 오늘 세션 곡선 (성장 탭과 같은 그림)
         day_state["sess_cv"].pack(fill="x", pady=(10, 0)); tab_of[day_state["sess_cv"]] = "today"; day_state["sess_cv"].bind("<Configure>", on_resize)
         _tl = theme_line(dkey, data["pb"])
         if _tl: tk.Label(det, text=_tl, font=FB, bg=C["card"], fg=C["gold"], wraplength=px(520), justify="left").pack(anchor="w", pady=(4, 0))
@@ -5344,12 +5378,9 @@ def main():
         rk_body.pack(fill="x", pady=(6, 0))
         cfg(rk_head, text="발로란트 오늘")
     rk_head.bind("<Button-1>", lambda e: set_drawer(not drawer["open"]))
-    tk.Label(rk_body, text="랭크를 돌린 날 — 티어 · RR 변화 · 판 수 · 가장 많이 죽은 이유 하나. 에임이 올라도 랭크가 안 오르는 구간을 숫자로 보이게",
-             font=FS, bg=C["card"], fg=C["hint"], wraplength=px(268), justify="left").pack(anchor="w")
-    tr = tk.Frame(rk_body, bg=C["card"]); tr.pack(anchor="w", pady=(6, 2))
-    tg2 = Toggle(tr, "랭크 2판", lambda: dget()["checks"].get("ranked", False),
-                 lambda v: (dget()["checks"].__setitem__("ranked", v), save_data(data), refresh()))
-    tg2.pack(side="left")
+    tk.Label(rk_body, text="랭크 돌린 날만 — 티어 · RR · 판 수 · 가장 많이 죽은 이유 하나",
+             font=FS, bg=C["card"], fg=C["hint"], wraplength=px(300), justify="left").pack(anchor="w")
+    tg2 = None                                                # v6.1: '랭크 2판' 토글 제거 — 판 수 칸이 그 자리
     rrow = tk.Frame(rk_body, bg=C["card"]); rrow.pack(fill="x", pady=(4, 2))
     tk.Label(rrow, text="티어", font=FS, bg=C["card"], fg=C["sub"]).pack(side="left")
     tier_var = tk.StringVar(); rr_var = tk.StringVar()
@@ -5394,19 +5425,8 @@ def main():
             rr_ent.configure(fg=C["val"])
     for _e in (tier_ent, rr_ent): _e.bind("<Return>", commit_rank); _e.bind("<FocusOut>", commit_rank)
     sync_rank_entry(); set_drawer(True)
-    tk.Label(rk_body, text="오늘 죽은 이유 · 랭크 리뷰하며 + 누르기", font=FS, bg=C["card"], fg=C["dim"]).pack(anchor="w", pady=(8, 2))
-    steppers = []
-    for key, name in (("aim","에임"),("pos","위치"),("dec","판단"),("trade","트레이드")):
-        row = tk.Frame(rk_body, bg=C["card"]); row.pack(fill="x", pady=2)
-        tk.Label(row, text=name, font=F, width=8, anchor="w", bg=C["card"], fg=C["txt"]).pack(side="left")
-        st_ = Stepper(row,
-                      lambda k=key: dget()["deaths"][k],
-                      lambda v, k=key: (dget()["deaths"].__setitem__(k, v), save_data(data), sync_deaths_lbl(), dirty.__setitem__("log", True)))
-        st_.pack(side="right"); steppers.append(st_)
-    dth_lbl = tk.Label(rk_body, text="", font=FS, bg=C["card"], fg=C["hint"], wraplength=px(270), justify="left")
-    dth_lbl.pack(anchor="w", pady=(6, 0))
-    def sync_deaths_lbl():
-        t_, c_ = fmt_deaths_trend(deaths_trend(data, today_key[0])); cfg(dth_lbl, text=t_, fg=c_)
+    steppers = []; dth_lbl = None                          # v6.1: 죽음 4칸 스텝퍼 제거 — '가장 많이 죽은 이유' 칩 하나가 그 자리 (옛 기록의 deaths 는 그대로 읽는다)
+    def sync_deaths_lbl(): pass
     set_drawer(False)
 
     # ── 트레이너 미니 — 오늘 목표 요약 한 줄 + 도구 탭으로 ──
@@ -6184,6 +6204,13 @@ def main():
         _eta = (datetime.now() + timedelta(minutes=_est)).strftime("%H:%M") if _est else None
         cfg(est_lbl, text=(f"남은 {rem}판" + (f" ≈ {_est}분 · {_eta}쯤 끝" if _est else "") if rem else ("오늘 계획 끝" if pn else "")))
         card_btn.restyle(bg=C["gold"] if (pn and not rem) else C["card2"], fg="#10141A" if (pn and not rem) else C["txt"])
+        pl_ = day_state.get("pl")
+        if not pl_: run_btn.pack_forget()
+        else:
+            if not run_btn.winfo_ismapped(): run_btn.pack(anchor="e", before=lv_btns)
+            if routine_complete(day, dt_, dkey, data["pb"]): run_btn.restyle(bg=C["card2"], fg=C["ok"], text="오늘 끝 ✓ · 한 번 더")
+            elif seq_alive(): run_btn.restyle(bg=C["card2"], fg=C["txt"], text="자동 진행 중 · 순서 보기")
+            else: run_btn.restyle(bg=C["gold"], fg="#10141A", text=("▶ 벤치 18개 실행" if dt_ == "b" else "▶ 오늘 루틴 실행"))
         sync_auto_mini()
 
     def refresh_today():
@@ -6319,7 +6346,6 @@ def main():
             for i, lb_ in enumerate(day_state["coach"]):
                 if i < len(lines): cfg(lb_, text=lines[i][0], fg=C[lines[i][1]])
                 else: cfg(lb_, text="")
-        tg2.sync()
         for st_ in steppers: st_.sync()
         seg.draw()
 
@@ -6678,7 +6704,7 @@ if __name__ == "__main__":
         assert apply_broadcast(True) is True and C["dim"] != _c0["dim"] and RANKC != _r0
         for _k in ("txt", "sub", "hint", "dim", "val", "ow", "ok", "gold"):     # 카드 위에서 전부 4.5:1 이상
             assert contrast_ratio(C[_k], C["card"]) >= 4.5, (_k, contrast_ratio(C[_k], C["card"]))
-        assert contrast_ratio(_c0["dim"], _c0["card"]) < 4.5                    # 원래 팔레트는 dim 이 부족했다
+        assert contrast_ratio(_c0["dim"], _c0["card"]) >= 4.5                   # v6.1: 기본 팔레트의 dim 도 4.5:1 이상 (예전 3.3:1 은 1080p 에서 '없는 글씨'였다)
         C.update(_c0); RANKC[:] = _r0
         assert contrast_ratio(C["hint"], C["card"]) >= 4.5 and contrast_ratio(C["txt"], C["card"]) >= 7 and contrast_ratio(C["dim"], C["card"]) >= 3.0
         assert shade("#14191F", 16) == "#24292f" and shade("#000000", -10) == "#000000"
@@ -6972,7 +6998,7 @@ if __name__ == "__main__":
             _raw = (_d / "AIMDESK Day.json").read_bytes(); assert _raw[:1] == b"{" and b"\r\n" not in _raw            # 코박스 파일 형식(UTF-8, LF)을 따라간다
             _obj = json.loads(_raw.decode("utf-8")); assert _obj["version"] == 3 and _obj["playlistName"] == "AIMDESK Day" and len(_obj["scenarioList"]) == len(dict(playlists_for(today_date().isoformat()))["AIMDESK Day"])
         os.environ["AIMDESK_TODAY"] = "2026-09-05"; assert today_date().weekday() == 5
-        os.environ["AIMDESK_TODAY"] = "bad"; assert today_date() == date.today(); del os.environ["AIMDESK_TODAY"]
+        os.environ["AIMDESK_TODAY"] = "bad"; assert today_date() in (date.today(), date.today() - timedelta(days=1)); del os.environ["AIMDESK_TODAY"]   # 새벽 5시 경계 전이면 어제
         # v3.2 성장 가시화
         assert robust_band([100, 100, 100]) is None                      # n<4 판단 보류
         b_ = robust_band([90, 95, 100, 105, 110]); assert b_["mid"] == 100 and b_["n"] == 5 and b_["lo"] < 100 < b_["hi"]
