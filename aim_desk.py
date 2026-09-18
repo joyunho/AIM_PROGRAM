@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v7.4 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
+에임 데스크 v7.5 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
@@ -38,6 +38,8 @@
 · v7.3: AI 코치 노트 — 오늘 한 줄 · 잘된 것 · 아쉬운 것 · 내일 이렇게 · 발로란트로 연결 · 이번 주 흐름 · 한마디 (COACH_SECTIONS) + === 앱 적용 === 줄.
   지난 노트·이번 주 결산·'코치에게' 를 같이 보내 이어서 코칭. 노트는 data["coach"]["notes"] 와 기록/EP###_날짜_코치.txt · 오늘 탭 '코치 노트' 링크 · 노트 창
 · v7.4: 계획 탭에 코칭 — 달력 칸·이번 주 줄에 그날 코치 한 줄([오늘 한 줄] / 다음 계획일엔 [내일 이렇게] 첫 항목 / 오늘 메모), '이번 주' 아래 코치 노트 카드(내일 이렇게 · 이번 주 흐름)
+· v7.5: 적응형 루틴 — 본훈련 12판을 다음 등급까지 먼 순으로 4·3·3·2 배분, 풀런 2회 연속 골드인 갈래는 본훈련만 다음 단계 시나리오로(부분 졸업),
+  '요즘 부진' 이면 손 풀기 4·본훈련 10, 3일 연속 20판 미완이면 손 풀기 2 + 측정 6 만(짧은 날). 하루 한 번 확정(day["adapt"]) · 설정 탭 토글 · 이유 한 줄
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
 from __future__ import annotations
@@ -223,7 +225,7 @@ def daily_challenge(data: dict, dkey: str, pb: dict = None):
     tset = TRAINER["targets"]
     if tset:                                           # 트레이너가 준 목표가 오늘 칠 시나리오에 있으면 그것이 도전 — 앱 임계값보다 먼저
         _pi = plan_items(dkey, pb)
-        plan = [k for k, _n in (_pi[len(WARMUP):] if dt == "v" else _pi)]     # 오늘 실제로 칠 것(프로브 포함, 웜업 4판은 자리로 제외) — 여기 없는 목표는 오늘 도전이 아니다
+        plan = [k for k, _n in (_pi[len(plan_parts(dkey, pb)[0]):] if dt == "v" else _pi)]     # 오늘 실제로 칠 것(프로브 포함, 손 풀기는 자리로 제외) — 여기 없는 목표는 오늘 도전이 아니다
         cands = [TRAINER["challenge"]] if (TRAINER["challenge"] in tset and TRAINER["challenge"] in plan) else [k for k in dict.fromkeys(plan) if k in tset]
         best = None
         for k in cands:
@@ -558,6 +560,7 @@ def daily_report(data: dict, dkey: str, plays=None, dt: str = None) -> str:
         if any(dth.values()): line += " · 죽음 " + " ".join(f"{n} {dth.get(k, 0)}" for k, n in (("aim", "에임"), ("pos", "위치"), ("dec", "판단"), ("trade", "트레이드")))
     L.append(line)
     V = verdicts(data, dkey, dt, plays)
+    if adapt_why(dkey): L += [f"적응형 루틴 · {adapt_why(dkey)}"]
     L += ["", "[판정]  (앱이 계산한 판정 — 다시 판정하지 말고 근거로만)",
           "  " + fmt_verdict_line("오늘", V["day"]) + (f" · {V['day']['cap2']}" if V["day"].get("cap2") else ""),
           "  " + fmt_verdict_line("성장", V["grow"]) + (f" · {V['grow']['cap2']}" if V["grow"].get("cap2") else ""),
@@ -1002,6 +1005,7 @@ def load_data() -> dict:
     except (TypeError, ValueError): DAY_CUTOFF_H[0] = 5; d["day_cutoff"] = 5
     MIGRATED[0] = migrate_cutoff(d)                       # 자정에 쪼개졌던 옛 기록 합치기 (한 번만)
     trainer_load(d); load_out_dir(d)
+    ADAPT["on"] = bool(d.setdefault("adapt", {"on": True}).get("on", True))
     set_tier(d.setdefault("tier", "n"))                  # 지금 훈련 중인 벤치 단계 (n/i/a)
     d.setdefault("series", {}).setdefault("ep_offset", 0)   # DAY N 시작 오프셋 (새로 시작할 때 이어 셀 수 있게)
     d.setdefault("valo_cfg", {"rid": "", "region": "ap", "key": ""})
@@ -2768,7 +2772,7 @@ def chapters(data, dkey, plays):
         if o < 10: ch[0] = (0, ch[0][1] + " · " + title)              # 녹화 직후 시작한 구간은 첫 챕터 제목에 붙인다
         else: ch.append((o, title))
     if dt == "v":
-        first(lambda k: k in WARM_KEYS, f"워밍업 {len(WARMUP)}판")
+        first(lambda k: k in WARM_KEYS, f"워밍업 {sum(n for _, n in plan_parts(dkey, data.get('pb'))[0])}판")
         first(lambda k: k in PROBE, f"프로브 {len(PROBE)}판 — 오늘의 측정")
         first(lambda k: k not in WARM_KEYS and k not in PROBE, f"본훈련 — {theme}")   # 계획 밖 판이어도 본훈련 구간
     else:
@@ -3426,7 +3430,7 @@ def auto_coach(data: dict, dkey: str, plays=None, dt: str = None) -> str:
     V = verdicts(data, dkey, dt, plays)
     if V["recent"]["state"] == "down": memo.append("요즘 부진 신호 — 내일은 워밍업을 두 배로, 본훈련은 점수를 보지 말고 감각만")
     tds = sorted(d for d in training_days(data) if d < dkey and day_type_of(d) == "v")[-3:]
-    if len(tds) == 3 and all(len((data["days"][d].get("plays") or [])) < 20 for d in tds): memo.append("3일 연속 20판을 못 채웠습니다 — 오늘은 측정 6판만이라도")
+    if len(tds) == 3 and all(len((data["days"][d].get("plays") or [])) < day_plan_n(data, d) for d in tds): memo.append("3일 연속 20판을 못 채웠습니다 — 오늘은 측정 6판만이라도")
     cur_st, _b = streak(training_days(data), date.fromisoformat(dkey))
     if cur_st >= 12: memo.append(f"{cur_st}일 연속 — 이번 {DOWK[REST_WD]}요일은 꼭 쉬기")
     if memo: L.append("메모 " + " · ".join(memo))
@@ -3488,9 +3492,10 @@ def verdict_sentence(V: dict, pd: int = None):
 def routine_complete(day: dict, dt: str, dkey: str = None, pb: dict = None) -> bool:
     if dt == "b": return all(day.get("best", {}).get(k) is not None for k in tier_keys())
     if dt != "v": return False
-    main = main_theme(dkey, pb)[3] if dkey else MAIN
+    if dkey: warm, _pr, main = plan_parts(dkey, pb)
+    else: warm, main = WARMUP, MAIN
     need = {}
-    for k, n in WARMUP + list(main): need[k] = need.get(k, 0) + n
+    for k, n in list(warm) + list(main): need[k] = need.get(k, 0) + n
     return (all(day.get("count", {}).get(k, 0) >= n for k, n in need.items())
             and all(day.get("first", {}).get(k) is not None for k in PROBE))
 
@@ -3700,10 +3705,113 @@ def _pl_bytes(obj, enc="utf-16", crlf=True) -> bytes:
 PL_STATE = {"n": 0, "dir": None, "wrote": 0, "tpl": None, "enc": "utf-16"}
 
 BENCH = [(k, 1) for s in SUBS for k, _ in s[3]]          # 토요일 벤치 18개 — 볼테익 표 순서 그대로
+# ══════════════════ 적응형 루틴 (v7.5) ══════════════════
+# "내 훈련 성과에 맞게 트레이닝도 바뀌게" — 앱 안의 규칙 세 가지, 하루 한 번 확정해 day["adapt"] 에 적는다 (하루 중에 판이 섞이지 않게).
+#  ① 배분: 테마 안 시나리오에 본훈련 12판을 '다음 등급까지 먼 순' 으로 4·3·3·2 (같은 판 3연속 없음, 순서는 테마 순서 그대로)
+#  ② 부분 졸업: 어느 갈래가 보스전 풀런 2회 연속 최상위(노비스면 골드)면 그 갈래의 본훈련만 다음 단계 시나리오로. 측정 6판·워밍업은 그대로
+#  ③ 컨디션: '요즘 부진' 이면 손 풀기 4 · 본훈련 10, 훈련일 3일 연속 20판 미완이면 손 풀기 2 + 측정 6 만 (짧은 날)
+ADAPT = {"on": True}                      # data["adapt"]["on"]
+ADAPT_PLAN = {}                           # dkey → 확정한 계획 {"warm","main","short","why","promoted","theme"}
+
+def scen_energy(k: str, pb: dict):
+    th = th_of(k)
+    return scenE(pb[k], th) if pb.get(k) is not None and th else None
+
+def allocate_plays(keys, weak_rank, total: int = MAIN_PLAYS) -> dict:
+    """판 배분 — 고르게 나눈 뒤 나머지는 약한 순으로 +1, 그리고 가장 잘하는 것 1판을 가장 약한 것으로 (시나리오 3개 이상일 때)"""
+    m = len(keys)
+    if m == 0: return {}
+    base = total // m; rem = total - base * m
+    alloc = {k: base for k in keys}
+    for k in weak_rank[:rem]: alloc[k] += 1
+    if m >= 3 and alloc[weak_rank[-1]] >= 2:
+        alloc[weak_rank[-1]] -= 1; alloc[weak_rank[0]] += 1
+    return alloc
+
+def order_items(keys_in_order, alloc: dict):
+    """(키, ≤2) 라운드 로빈 — 같은 시나리오가 3판 연속 오지 않는다"""
+    rem = {k: int(alloc.get(k, 0)) for k in keys_in_order}; out = []
+    while any(v > 0 for v in rem.values()):
+        for k in keys_in_order:
+            if rem[k] > 0:
+                n = min(2, rem[k]); out.append((k, n)); rem[k] -= n
+    return out
+
+def promoted_subs(data: dict) -> list:
+    """보스전 풀런 2회 연속 최상위인 갈래 id 목록 — 그 갈래의 본훈련만 다음 단계로 (마지막 단계면 없음)"""
+    t = CUR_TIER[0]
+    if TIER_ORDER.index(t) + 1 >= len(TIER_ORDER): return []
+    bd = [dk for dk, _e in bench_days(data) if tier_of_scores(data["days"][dk].get("best") or {}) == t][-2:]
+    if len(bd) < 2: return []
+    top = TIERS[t][1] + 400
+    return [sub[0] for sub in SUBS_T[t] if all((subE(sub, data["days"][dk].get("best") or {}) or 0) >= top for dk in bd)]
+
+def cond_signal(data: dict, dkey: str):
+    """컨디션 신호 → ('short' | 'easy' | None, 설명)"""
+    tds = sorted(d for d in training_days(data) if d < dkey and day_type_of(d) == "v")[-3:]
+    if len(tds) == 3 and all(len((data["days"][d].get("plays") or [])) < day_plan_n(data, d) for d in tds):   # 짧은 날을 다 친 날은 미완이 아니다
+        return "short", "3일 연속 20판 미완 → 오늘은 손 풀기 2 + 점수 재기 6 만 (짧은 날)"
+    try: rs = verdict_recent(data, dkey)["state"]
+    except Exception: rs = None
+    if rs == "down": return "easy", "요즘 부진 → 손 풀기 4 · 본훈련 10 (점수 말고 감각)"
+    return None, ""
+
+def adapt_plan(data: dict, dkey: str, pb: dict = None):
+    """오늘의 적응형 계획 — {"warm", "main", "short", "why", "promoted", "theme"}. 꺼져 있거나 훈련일이 아니면 None"""
+    if not ADAPT["on"] or day_type_of(dkey) != "v": return None
+    pb = pb if pb is not None else (data.get("pb") or {})
+    mt = main_theme(dkey, pb); why = []
+    sig, stxt = cond_signal(data, dkey)
+    warm = [(k, n) for k, n in WARMUP]; total = MAIN_PLAYS
+    if sig == "short": return {"warm": warm, "main": [], "short": True, "why": [stxt], "promoted": [], "theme": mt[0]}
+    if sig == "easy": warm = [(k, n * 2) for k, n in WARMUP]; total = MAIN_PLAYS - 2; why.append(stxt)
+    keys = list(dict.fromkeys(k for k, _n in mt[3]))
+    t = CUR_TIER[0]; nxt_t = TIER_ORDER[TIER_ORDER.index(t) + 1] if TIER_ORDER.index(t) + 1 < len(TIER_ORDER) else None
+    prom = promoted_subs(data) if nxt_t else []
+    sub_of_key = {k: sub[0] for sub in SUBS_T[t] for k, _th in sub[3]}
+    up = {k: tk(base_of(k), nxt_t) for k in keys if prom and sub_of_key.get(k) in prom}
+    if up: why.append("부분 졸업 · " + " · ".join(f"{sname(k)} → {TIER_KO[nxt_t][:2]}" for k in up))
+    def _e(k):
+        e = scen_energy(k, pb); return -1 if e is None else e
+    weak = sorted(keys, key=_e)
+    alloc = allocate_plays(keys, weak, total)
+    items = [(up.get(k, k), n) for k, n in order_items(keys, alloc)]
+    if len(keys) >= 3 and len(set(alloc.values())) > 1:
+        why.append("배분 · " + " · ".join(f"{sname(up.get(k, k), True)} {alloc[k]}" for k in weak) + " — 다음 등급까지 먼 순")
+    return {"warm": warm, "main": items, "short": False, "why": why, "promoted": prom, "theme": mt[0]}
+
+def set_adapt_plan(data: dict, dkey: str, force: bool = False):
+    """오늘 계획을 확정해 day["adapt"] 와 ADAPT_PLAN 에 둔다. 이미 확정한 날은 테마가 같으면 그대로 (하루 중에 판이 섞이지 않게)"""
+    if not ADAPT["on"] or day_type_of(dkey) != "v": ADAPT_PLAN.pop(dkey, None); return None
+    cur = ((data.get("days") or {}).get(dkey) or {}).get("adapt")
+    if cur and not force and cur.get("theme") == main_theme(dkey, data.get("pb"))[0]:
+        ADAPT_PLAN[dkey] = cur; return cur
+    p = adapt_plan(data, dkey)
+    if p is None: ADAPT_PLAN.pop(dkey, None); return None
+    data.setdefault("days", {}).setdefault(dkey, blank_day())["adapt"] = p
+    ADAPT_PLAN[dkey] = p; return p
+
+def plan_parts(dkey: str, pb: dict = None):
+    """오늘 루틴의 세 부분 (손 풀기, 측정, 본훈련) — 확정된 적응형 계획이 있으면 그것, 아니면 테마 기본"""
+    p = ADAPT_PLAN.get(dkey) if ADAPT["on"] else None
+    if p: return [(k, int(n)) for k, n in p["warm"]], [(k, 1) for k in PROBE], [(k, int(n)) for k, n in p["main"]]
+    return list(WARMUP), [(k, 1) for k in PROBE], list(main_theme(dkey, pb)[3])
+
+def day_plan_n(data: dict, dkey: str) -> int:
+    """그날 계획 판 수 — 확정된 적응형 계획(day["adapt"])이 있으면 그것 (짧은 날 8판), 아니면 테마 기본"""
+    a = ((data.get("days") or {}).get(dkey) or {}).get("adapt")
+    if a and ADAPT["on"]: return sum(int(n) for _k, n in a.get("warm") or []) + len(PROBE) + sum(int(n) for _k, n in a.get("main") or [])
+    return plan_count(dkey, data.get("pb"))
+
+def adapt_why(dkey: str) -> str:
+    p = ADAPT_PLAN.get(dkey) if ADAPT["on"] else None
+    return " · ".join(p.get("why") or []) if p else ""
+
 def playlists_for(dkey: str, pb: dict = None):
-    """그날 설치할 플레이리스트 3개. 'AIMDESK Day' 의 본훈련만 날마다 달라진다."""
-    return [("AIMDESK Day",    WARMUP + [(k, 1) for k in PROBE] + list(main_theme(dkey, pb)[3])),
-            ("AIMDESK Probe",  [(k, 1) for k in PROBE]),
+    """그날 설치할 플레이리스트 3개. 'AIMDESK Day' 의 본훈련만 날마다 달라진다 (적응형 계획이 있으면 그 배분)."""
+    w_, pr_, m_ = plan_parts(dkey, pb)
+    return [("AIMDESK Day",    w_ + pr_ + m_),
+            ("AIMDESK Probe",  pr_),
             ("AIMDESK Bench",  BENCH)]
 
 def playlists_dir(stats_dir):
@@ -5702,14 +5810,20 @@ def main():
         # 히어로 안의 ①②③④ — 상세(시나리오별 줄)는 자세히 안
         det = tk.Frame(body_, bg=C["card"]); day_state["detail"] = det
         if dt == "v":
-            add_section("① 손 풀기 · 2판 (점수 안 봄)")
-            for k, n in WARMUP: add_row("warm", k, n)
+            _w, _pr, _m = plan_parts(dkey, data["pb"]); _pl = ADAPT_PLAN.get(dkey) if ADAPT["on"] else None
+            add_section(f"① 손 풀기 · {sum(n for _, n in _w)}판 (점수 안 봄)")
+            for k, n in _w: add_row("warm", k, n)
             add_section("② 오늘 점수 재기 · 6판")
             tk.Label(todo_host, text="오늘 점수 재기 = 손 푼 뒤 처음 6판의 첫 점수가 오늘 점수예요", font=FS11, bg=C["card"], fg=C["hint"], anchor="w").pack(fill="x", padx=(px(18), 0), pady=(0, px(6)))
             for k in PROBE: add_row("probe", k, 1)
             mt = main_theme(dkey, data["pb"])
-            add_section(f"③ 본훈련 · 12판 · {mt[1]}" + (" (트레이너 지정)" if TRAINER["themes"].get(dkey) else ""))
-            for k, n in mt[3]: add_row("main", k, n)
+            if _pl and _pl.get("short"):
+                add_section("③ 본훈련 · 오늘은 건너뜀 (짧은 날)")
+            else:
+                add_section(f"③ 본훈련 · {sum(n for _, n in _m)}판 · {mt[1]}" + (" (트레이너 지정)" if TRAINER["themes"].get(dkey) else ""))
+                for k, n in _m: add_row("main", k, n)
+            if adapt_why(dkey):                                                       # 적응형 루틴이 오늘 바꾼 것 — 왜 바뀌었는지 한 줄 (③ 줄 밑)
+                tk.Label(todo_host, text="적응 · " + adapt_why(dkey), font=FS11, bg=C["card"], fg=C["hint"], anchor="w", wraplength=px(900), justify="left").pack(fill="x", padx=(px(18), 0), pady=(0, px(6)))
             # ④ 발로란트 — 헤더 한 줄 + '적기 ▾' 를 열면 숫자 4칸
             val_row = tk.Frame(todo_host, bg=C["card"]); val_row.pack(fill="x", pady=(px(2), 0)); day_state["val_row"] = val_row
             vh = tk.Frame(val_row, bg=C["card"]); vh.pack(fill="x")
@@ -5990,6 +6104,16 @@ def main():
     Toggle(crow, "자동 코치", lambda: bool(coach_cfg.get("auto", True)), lambda v: (coach_cfg.__setitem__("auto", bool(v)), save_data(data))).pack(side="left")
     tk.Label(crow, text="앱이 매일 기록을 보고 목표 · 내일 테마 · 메모를 정합니다 (인터넷 없음)", font=FS, bg=C["card"], fg=C["hint"], wraplength=px(170), justify="left").pack(side="left", padx=(8, 0))
     coach_lbl = tk.Label(tcd, text="", font=FS, bg=C["card"], fg=C["ok"], wraplength=px(268), justify="left"); coach_lbl.pack(anchor="w", pady=(2, 0))
+    def set_adapt(v):
+        """적응형 루틴 켜기/끄기 — 오늘 계획을 다시 확정하고 루틴 카드·플레이리스트를 같은 계획으로"""
+        ADAPT["on"] = bool(v); data.setdefault("adapt", {})["on"] = bool(v)
+        set_adapt_plan(data, today_key[0], force=True); save_data(data); replan_today()
+        show_toast("적응형 루틴 켬 — " + (adapt_why(today_key[0]) or "오늘은 조정할 게 없음 (테마 기본 배분)") if v else "적응형 루틴 끔 — 테마 기본 배분 2·2·2·2 로", "ok" if v else "info")
+    arow0 = tk.Frame(tcd, bg=C["card"]); arow0.pack(anchor="w", pady=(6, 0))
+    Toggle(arow0, "적응형 루틴", lambda: bool(ADAPT["on"]), set_adapt).pack(side="left")
+    tk.Label(arow0, text="성과에 맞게 본훈련 배분(약한 것 4판) · 갈래별 부분 졸업 · 컨디션 대응(짧은 날)을 자동으로", font=FS, bg=C["card"], fg=C["hint"], wraplength=px(170), justify="left").pack(side="left", padx=(8, 0))
+    adapt_lbl = tk.Label(tcd, text="", font=FS, bg=C["card"], fg=C["sub"], wraplength=px(268), justify="left"); adapt_lbl.pack(anchor="w", pady=(2, 0))
+    def sync_adapt_lbl(): cfg(adapt_lbl, text=("오늘 · " + adapt_why(today_key[0])) if ADAPT["on"] and adapt_why(today_key[0]) else ("오늘은 조정 없음 — 테마 기본 배분" if ADAPT["on"] else ""))
     def auto_coach_now(reason="manual"):
         """규칙 코치 — 시작 때 한 번 · 루틴이 끝나면 한 번 (같은 날 같은 이유로는 다시 돌지 않는다)"""
         if not coach_cfg.get("auto", True): return False
@@ -6167,11 +6291,11 @@ def main():
         목표·메모·내일 테마만 온 답장이면 순서창은 그대로 둔다"""
         old = list(seq_win["seq"]) if seq_alive() else None
         hidden = old is not None and seq_win["win"].state() == "withdrawn"
-        build_day_ui(); install_playlists()
+        set_adapt_plan(data, today_key[0]); build_day_ui(); install_playlists()
         if old is not None and old != sequence_for(day_state["pl"]):
             open_sequence(day_state["pl"])          # 옛 테마 스냅샷을 버리고 새 계획으로 다시 연다 (자동 진행 상태는 그대로)
             if hidden and seq_alive(): seq_win["win"].withdraw()   # 숨긴 채 돌고 있었으면 새 창도 숨긴 채로
-        refresh()
+        refresh(); sync_adapt_lbl()
         root.after(300, lambda: (dirty.__setitem__("today", True), refresh_tab("today")))
 
     def apply_trainer():
@@ -6218,7 +6342,7 @@ def main():
         nk = today_date().isoformat()
         if nk != today_key[0]: on_day_change(nk)
         else:
-            scan_once(); build_day_ui(); install_playlists(); refresh()
+            scan_once(); set_adapt_plan(data, today_key[0]); build_day_ui(); install_playlists(); refresh()
         show_toast(f"훈련일 경계 {v}시 — 지금부터 {v}시에 날이 바뀝니다" if v else "훈련일 경계 자정")
     for _v in (0, 4, 5, 6, 7):
         _b = RBtn(cut_row, ("자정" if _v == 0 else f"{_v}시"), (lambda v=_v: set_cutoff(v)), padx=9, pady=4)
@@ -6314,14 +6438,14 @@ def main():
         try: kept = archive_data()
         except OSError:
             log_exc("reset"); show_toast("보관에 실패해 새로 시작하지 않았습니다"); return
-        keep = {k: data.get(k) for k in ("stats_dir", "next_key", "win", "seq_popup", "theme", "ui_scale", "coach", "bcast", "valo_cfg", "out_dir") if data.get(k) is not None}
+        keep = {k: data.get(k) for k in ("stats_dir", "next_key", "win", "seq_popup", "theme", "ui_scale", "coach", "bcast", "valo_cfg", "out_dir", "adapt") if data.get(k) is not None}
         keep["day_cutoff"] = data.get("day_cutoff", 5)
         data.clear()
         data.update(keep); data.update({"pb": {}, "days": {}})
         BASELINE[0] = BASE_DATE[0] = None; trainer_clear(data)
         bump_ver(); save_data(data)
         _SCAN_STATE["sig"] = None; _SCORE_CACHE.clear(); TODAY_PLAYS.clear()
-        scan_once(); build_day_ui(); install_playlists(); refresh(); refresh_files()
+        scan_once(); set_adapt_plan(data, today_key[0], force=True); build_day_ui(); install_playlists(); refresh(); refresh_files()
         show_toast(f"새로 시작합니다 — 오늘은 기준 측정일 (이전 기록은 {kept.name})")
     RBtn(rc, "기록 새로 시작", do_reset, padx=10, pady=5).pack(anchor="w")
 
@@ -6831,7 +6955,10 @@ def main():
             else: _btn("▶ 벤치 18개 실행" if dt_ == "b" else "▶ 오늘 루틴 실행", C["gold"], C["onfill"], lambda: run_playlist(pl_))
         else:
             if dt_ == "b": cfg(cur_lbl, text="실력 재는 날 · 18판"); cfg(est_lbl, text="18개를 한 판씩 · 약 27분 · 출발선과 비교합니다")
-            else: cfg(cur_lbl, text="오늘 할 일 · 코박스 20판"); cfg(est_lbl, text="손 풀기 2 → 오늘 점수 재기 6 → 본훈련 12 → 발로란트 15분 · 약 48분")
+            else:
+                _w, _pr, _m = plan_parts(dkey, data["pb"]); _nw, _nm = sum(n for _, n in _w), sum(n for _, n in _m); _pl = ADAPT_PLAN.get(dkey) if ADAPT["on"] else None
+                if _pl and _pl.get("short"): cfg(cur_lbl, text=f"오늘 할 일 · 코박스 {pn}판 (짧은 날)"); cfg(est_lbl, text=f"손 풀기 {_nw} → 오늘 점수 재기 6 · 약 {int(round(pn * 33 / 20))}분 — 3일 연속 미완이라 오늘은 여기까지")
+                else: cfg(cur_lbl, text=f"오늘 할 일 · 코박스 {pn}판"); cfg(est_lbl, text=f"손 풀기 {_nw} → 오늘 점수 재기 6 → 본훈련 {_nm} → 발로란트 15분 · 약 {int(round(pn * 33 / 20)) + 15}분")
             _btn("▶ 벤치 18개 실행" if dt_ == "b" else "▶ 오늘 루틴 실행", C["gold"], C["onfill"], lambda: run_playlist(pl_))
         # 숫자 · 버튼 줄 · 방금 판 · 띠 — 있을 때만
         if show_cnt:
@@ -7157,6 +7284,7 @@ def main():
         if detail["win"] is not None and detail["win"].winfo_exists(): detail["win"].destroy()
         if card_win["win"] is not None and card_win["win"].winfo_exists(): card_win["win"].destroy()
         if seq_alive(): remember_seq_pos(); seq_win["win"].destroy()
+        set_adapt_plan(data, nk); save_data(data)
         build_day_ui()
         install_playlists()                     # 오늘 테마로 다시 설치 — 코박스 목록이 어제 구성으로 남지 않게
         sync_sleep_entry(); sync_rank_entry(); set_trainer_status()
@@ -7212,7 +7340,8 @@ def main():
         save_data(data)
     sync_stats_lbl()
     root.after(1200, install_playlists)                 # 시작을 빠르게 — 플레이리스트 설치는 1.2초 뒤
-    build_day_ui(); set_trainer_status()
+    set_adapt_plan(data, today_key[0]); save_data(data)          # 오늘 계획을 먼저 확정 (적응형 루틴) — 루틴 카드·플레이리스트·순서창이 같은 계획을 읽는다
+    build_day_ui(); set_trainer_status(); sync_adapt_lbl()
 
     # 마우스 휠: 포인터 아래의 스크롤 컨테이너로
     def on_wheel(e):
@@ -7302,7 +7431,8 @@ def main():
                 dth_lbl=dth_lbl, steppers=steppers, on_key=on_key, pick_stats=pick_stats,
                 detail=detail, open_detail=open_detail, spark_cvs=spark_cvs, daych=daych, set_compact=set_compact,
                 apply_out_dir=apply_out_dir, out_lbl=out_lbl, out_reset_btn=out_reset_btn,
-                open_coach_note=open_coach_note, note_lnk=note_lnk, note_win=note_win, ask_txt=ask_txt, refresh_today=refresh_today)
+                open_coach_note=open_coach_note, note_lnk=note_lnk, note_win=note_win, ask_txt=ask_txt, refresh_today=refresh_today,
+                set_adapt=set_adapt, adapt_lbl=adapt_lbl, set_adapt_plan=lambda **kw: set_adapt_plan(data, today_key[0], **kw))
     _DBG.setdefault("counters", {}).setdefault("refresh_tab", 0)
     if os.environ.get("AIMDESK_NO_MAINLOOP"): return
     root.mainloop()
@@ -8181,6 +8311,43 @@ if __name__ == "__main__":
             _cp = save_coach_note(_cxd, _lk, "[오늘 한 줄]\n좋아요", "목표 Pasu 850", dir_=_cd); _ct = _cp.read_text(encoding="utf-8-sig")
             assert _cp.name.startswith("EP") and _cp.name.endswith(f"_{_lk}_코치.txt") and "[오늘 한 줄]" in _ct and COACH_MARK in _ct and "목표 Pasu 850" in _ct, _cp.name
             assert "EP*_코치.txt" in OUT_PATTERNS and out_dir_files(Path(_cd)) == [_cp]
+        # ── v7.5: 적응형 루틴 ──
+        _al = allocate_plays(["a", "b", "c", "d"], ["c", "a", "d", "b"], 12); assert _al == {"c": 4, "a": 3, "d": 3, "b": 2}, _al
+        assert allocate_plays(["a", "b", "c", "d"], ["c", "a", "d", "b"], 10) == {"c": 4, "a": 3, "d": 2, "b": 1}
+        assert allocate_plays(list("abcde"), list("edcba"), 12) == {"e": 4, "d": 3, "c": 2, "b": 2, "a": 1} and sum(allocate_plays(list("abcdefghijkl"), list("abcdefghijkl"), 12).values()) == 12 and set(allocate_plays(list("abcdefghijkl"), list("abcdefghijkl"), 12).values()) == {1}
+        _oi = order_items(["a", "b", "c", "d"], _al); assert _oi == [("a", 2), ("b", 2), ("c", 2), ("d", 2), ("a", 1), ("c", 2), ("d", 1)], _oi
+        _flat = [k for k, n in _oi for _ in range(n)]; assert len(_flat) == 12 and all(n <= 2 for _, n in _oi) and not any(_flat[i] == _flat[i + 1] == _flat[i + 2] for i in range(10))
+        _ad = {"pb": dict(SAMPLE), "days": {}, "adapt": {"on": True}}; _ad["pb"].update(w4=900, ww5=1100, float=380, frog=900)   # 클리킹 정확 날 — 에너지: float 106 < w4 184 < ww5 210 < frog 245
+        ADAPT["on"] = True; _ap = adapt_plan(_ad, "2026-09-15")
+        assert _ap and not _ap["short"] and dict(_ap["main"]) and sum(n for _, n in _ap["main"]) == 12 and _ap["theme"] == "clk" and _ap["warm"] == list(WARMUP), _ap
+        _cnt = {}
+        for k, n in _ap["main"]: _cnt[k] = _cnt.get(k, 0) + n
+        assert _cnt["float"] == 4 and _cnt["frog"] == 2 and _cnt["w4"] + _cnt["ww5"] == 6 and "배분 · Floating Heads 4" in _ap["why"][0], (_cnt, _ap["why"])
+        assert adapt_plan(_ad, "2026-09-14") is None and adapt_plan(_ad, "2026-09-19") is None                                     # 쉬는 날·벤치 날은 없음
+        _ad["pb"].pop("float"); assert dict(adapt_plan(_ad, "2026-09-15")["main"]).get("float") is not None and {k: n for k, n in adapt_plan(_ad, "2026-09-15")["main"]}.get("float", 0) + 0 >= 2   # 기록 없는 시나리오가 가장 약한 것
+        _ad2 = {"pb": dict(SAMPLE), "days": {}, "adapt": {"on": True}}; _ap2 = adapt_plan(_ad2, "2026-09-18")                             # 전체 순회: 12개 한 판씩 그대로
+        assert _ap2["theme"] == "mix" and all(n == 1 for _, n in _ap2["main"]) and not any(w_.startswith("배분") for w_ in _ap2["why"]), _ap2
+        # 컨디션: 3일 연속 미완 → 짧은 날
+        _ad3 = {"pb": dict(SAMPLE), "days": {d_: dict(blank_day(), plays=[["pasu", "20.00.00", 700]] * 5, count={"pasu": 5}, first={"pasu": 700}) for d_ in ("2026-09-15", "2026-09-16", "2026-09-17")}, "adapt": {"on": True}}
+        assert cond_signal(_ad3, "2026-09-18")[0] == "short" and adapt_plan(_ad3, "2026-09-18")["short"] and adapt_plan(_ad3, "2026-09-18")["main"] == [] and cond_signal(_ad, "2026-09-15")[0] is None
+        _ad3["days"]["2026-09-17"]["adapt"] = {"warm": [["ground", 1], ["float", 1]], "main": [], "short": True, "why": [], "theme": "clk"}          # 짧은 날(8판)을 다 친 날은 미완이 아니다
+        _ad3["days"]["2026-09-17"]["plays"] = [["pasu", "20.00.00", 700]] * 8
+        assert day_plan_n(_ad3, "2026-09-17") == 8 and cond_signal(_ad3, "2026-09-18")[0] is None and day_plan_n(_ad3, "2026-09-16") == 20
+        # 부분 졸업: 풀런 2회 연속 골드인 갈래
+        _gold = {k: th_of(k)[3] + 5 for k in tier_keys("n")}; _ad4 = {"pb": dict(_gold), "days": {}, "adapt": {"on": True}}
+        for d_ in ("2026-09-05", "2026-09-12"): _ad4["days"][d_] = dict(blank_day(), best=dict(_gold), count={k: 1 for k in _gold}, first=dict(_gold))
+        _ad4["days"]["2026-09-12"]["best"]["dot"] = 700; _ad4["days"]["2026-09-12"]["best"]["eddie"] = 600                                # 스피드 갈래만 골드 미만
+        bump_ver(); _pr = promoted_subs(_ad4); assert "speed" not in _pr and len(_pr) == 8 and "dyn" in _pr, _pr
+        _ap4 = adapt_plan(_ad4, "2026-09-16"); assert _ap4["theme"] == "swt" and any(k.startswith("i.") for k, _n in _ap4["main"]) and all(not k.startswith("i.") for k in ("dot", "eddie") if k in dict(_ap4["main"])), _ap4["main"]
+        assert any(w_.startswith("부분 졸업") for w_ in _ap4["why"]) and sum(n for _, n in _ap4["main"]) == 12 and dict(_ap4["main"]).get("i.drift") is not None, _ap4["why"]
+        # 확정·고정: 같은 날은 다시 계산하지 않는다 (테마가 바뀌면 다시)
+        _ad5 = {"pb": dict(SAMPLE), "days": {}, "adapt": {"on": True}}; _p5 = set_adapt_plan(_ad5, "2026-09-15"); assert _p5 and _ad5["days"]["2026-09-15"]["adapt"] is _p5 and ADAPT_PLAN["2026-09-15"] is _p5
+        _ad5["pb"]["w4"] = 1; assert set_adapt_plan(_ad5, "2026-09-15") is _p5 and set_adapt_plan(_ad5, "2026-09-15", force=True) is not _p5
+        _w5, _pr5, _m5 = plan_parts("2026-09-15", _ad5["pb"]); assert _w5 == list(WARMUP) and _pr5 == [(k, 1) for k in PROBE] and sum(n for _, n in _m5) == 12 and sum(n for _, n in dict(playlists_for("2026-09-15", _ad5["pb"]))["AIMDESK Day"]) == 20
+        _full5 = dict(blank_day(), count={k: 0 for k in PROBE}, first={k: 1 for k in PROBE})
+        for k, n in _w5 + _m5: _full5["count"][k] = _full5["count"].get(k, 0) + n
+        assert routine_complete(_full5, "v", "2026-09-15", _ad5["pb"]) and adapt_why("2026-09-15").startswith("배분") and "적응형 루틴 · 배분" in daily_report(_ad5, "2026-09-15")
+        ADAPT["on"] = False; assert plan_parts("2026-09-15", _ad5["pb"])[2] == list(main_theme("2026-09-15", _ad5["pb"])[3]) and adapt_why("2026-09-15") == ""; ADAPT["on"] = True; ADAPT_PLAN.clear()
         # ── v7.4: 계획 탭 코칭 줄 ──
         _nb = "[오늘 한 줄]\n오늘 20판, 어제와 비슷한 하루였습니다. 둘째 문장은 안 나옵니다.\n[잘된 것]\nPasu 610.\n[내일 이렇게]\n1) Popcorn 첫 판은 팔로 붙이기. 2) EddieTS 12판째부터 손 털기. 3) Pasu는 그대로.\n[이번 주 흐름]\n관문 3/10.\n[한마디]\n화이팅"
         assert note_section(_nb, "[내일 이렇게]").startswith("1) Popcorn") and note_section(_nb, "[한마디]") == "화이팅" and note_section(_nb, "[없음]") == ""
@@ -8192,6 +8359,6 @@ if __name__ == "__main__":
         assert latest_note(_cdn)[0] == "2026-09-18" and latest_note(_cdn, "2026-09-17") == (None, None) and latest_note({"coach": {}}) == (None, None)
         TRAINER["note"] = "첫 판 전에 손 풀기"; assert coach_for_day({"coach": {}}, "2026-09-22", today="2026-09-22") == ("메모", "첫 판 전에 손 풀기") and coach_for_day({"coach": {}}, "2026-09-23", today="2026-09-22") is None; TRAINER["note"] = ""
         trainer_clear(_ac); bump_ver()
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK · v7.3 coach-note OK · v7.4 cal-coach OK")
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK · v7.3 coach-note OK · v7.4 cal-coach OK · v7.5 adaptive OK")
         sys.exit(0)
     main()

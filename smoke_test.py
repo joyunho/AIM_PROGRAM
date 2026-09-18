@@ -191,6 +191,14 @@ D["show"]("today"); root.geometry("1100x780"); pump(300)
 check("streak label", "연속" in D["hdr_streak"].cget("text"), D["hdr_streak"].cget("text"))
 check("week strip drawn (7 cells)", len([i for i in D["wk_cv"].find_all() if D["wk_cv"].type(i) == "polygon"]) == 7)
 sec0 = D["section_labels"][0][0].cget("text"); check("warmup section shows progress 2/2", sec0.endswith("2/2"), sec0)
+# v7.5 — 적응형 루틴: 본훈련 12판이 약한 순으로 4·3·3·2, 이유 한 줄, 같은 판 3연속 없음
+_sec2 = D["section_labels"][2][1]; _why = [w.cget("text") for w in walk(D["frames"]["today"]) if isinstance(w, tk.Label) and w.cget("text").startswith("적응 · ")]
+_main = [k for k in D["seq_win"]["seq"]][8:] if D["seq_win"]["seq"] else []
+_cnt = {}
+for k in _main: _cnt[k] = _cnt.get(k, 0) + 1
+check("v7.5: main block is 12 plays split 4·3·3·2 by weakness with a reason line", _sec2.startswith("③ 본훈련 · 12판") and sorted(_cnt.values()) == [2, 3, 3, 4] and len(_why) == 1 and "배분 · " in _why[0] and "다음 등급까지 먼 순" in _why[0], f"{_sec2} {_cnt} {_why}")
+check("v7.5: never the same scenario three plays in a row", not any(_main[i] == _main[i + 1] == _main[i + 2] for i in range(len(_main) - 2)), str(_main))
+check("v7.5: today's plan is fixed in the record", (data["days"].get(TODAY.isoformat()) or {}).get("adapt", {}).get("theme") and ad.ADAPT["on"] and data.get("adapt", {}).get("on") is True)
 hi = [r for r in D["routine_rows"] if r[9].cget("bg") == ad.C["card2"]]
 check("exactly one routine row highlighted as next", len(hi) == 1, str(len(hi)))
 sess = D["day_state"]["sess_lbl"].cget("text"); check("session line shows the session time", "분 (" in sess and "–" in sess, sess)
@@ -375,7 +383,7 @@ shot("9_trainer")
 _nf = len(fired); _old_seq = list(D["seq_win"]["seq"])
 D["trainer_txt"].insert("1.0", "테마 오늘 트래킹"); D["apply_trainer"](); pump(500)
 top = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel) and w.title().startswith("오늘 순서")][0]
-check("today's theme override rebuilds the plan and reopens the sequence window", data["trainer"]["themes"].get("2026-09-03") == "trk" and D["seq_win"]["seq"] != _old_seq and D["seq_win"]["seq"].count("raw") >= 3 and len(D["seq_win"]["rows"]) == 20 and top.winfo_exists(), str(D["seq_win"]["seq"][10:16]))
+check("today's theme override rebuilds the plan and reopens the sequence window", data["trainer"]["themes"].get("2026-09-03") == "trk" and D["seq_win"]["seq"] != _old_seq and sum(1 for k in D["seq_win"]["seq"][8:] if k in ("raw", "csphere", "ground", "aether")) == 12 and D["seq_win"]["seq"][8:].count("raw") >= 2 and len(D["seq_win"]["rows"]) == 20 and top.winfo_exists(), str(D["seq_win"]["seq"][10:16]))
 check("theme override keeps auto mode and sends nothing by itself", D["auto"]["on"] and len(fired) == _nf, f"{D['auto']['on']} {len(fired) - _nf}")
 _pl = json.loads((TMP / "FPSAimTrainer" / "Saved" / "SaveGames" / "Playlists" / "AIMDESK Day.json").read_bytes().decode("utf-16"))
 check("installed AIMDESK Day.json follows the new theme", sum(1 for x in _pl["scenarioList"] if x["scenario_Name"] == "VT Raw Control Novice S5") >= 1 and len(_pl["scenarioList"]) == len(D["seq_win"]["rows"]) or sum(x.get("play_Count", 1) for x in _pl["scenarioList"]) == 20, str([x["scenario_Name"] for x in _pl["scenarioList"]][-4:]))
