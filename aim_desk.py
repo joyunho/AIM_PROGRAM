@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v6.1 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
+에임 데스크 v6.2 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
@@ -28,6 +28,7 @@
 · v6.0: 골드 2 → 불멸 다섯 단계 — 에임·게임·랭크 관문을 전부 숫자로, 두 일요일 연속 다 차야 다음 단계 · 발로란트 전적 연동(선택)
 · v6.1: 눈에 들어오는 화면 — 회색 글씨 세 단계를 밝히고(dim 3.3:1 → 5.0:1) 기본 글꼴 한 단계 키움, 미룬 판정도 밝은 글씨('프로브 0/6'),
   라이브 줄에 큰 실행 버튼 하나, 루틴 줄은 굵은 막대, 발로 블록 설명은 접음, 옛 죽음 스텝퍼 제거, 방송창 좁은 타일은 두 줄(겹침 버그)
+· v6.2: '계획' 탭 — 달력 하나로 오늘 뭘 하고 · 이번 주가 어떻게 가고 · 몇 달 뒤 어디에 있는지. 처음 켜면 이 탭부터. 화면 말을 쉬운 말로
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
 from __future__ import annotations
@@ -2507,7 +2508,7 @@ def shortcut_action(keysym: str, state: int, in_entry: bool):
     if ctrl and keysym.lower() == "o": return "folder"
     if ctrl and keysym.lower() == "r": return "run"
     if in_entry: return None
-    return {"1": "tab:today", "2": "tab:grow", "3": "tab:bench", "4": "tab:log", "5": "tab:tools"}.get(keysym)
+    return {"1": "tab:today", "2": "tab:grow", "3": "tab:bench", "4": "tab:log", "5": "tab:tools", "6": "tab:cal"}.get(keysym)
 
 def seq_shortcut_action(keysym: str, state: int, in_entry: bool):
     ctrl = bool(state & 0x4)
@@ -4099,7 +4100,7 @@ def main():
         status_dot.itemconfig(status_oval, fill=col)
     body = tk.Frame(root, bg=C["bg"]); body.pack(fill="both", expand=True, padx=18, pady=(0, 10))
     frames, tabbtns, underls = {}, {}, {}
-    dirty = {"today": True, "grow": True, "bench": True, "log": True, "tools": True}
+    dirty = {"cal": True, "today": True, "grow": True, "bench": True, "log": True, "tools": True}
     cur_tab = ["today"]
     tab_fn = {}                                    # 탭 이름 -> 그 탭만 다시 그리는 함수 (아래에서 채움)
     def refresh_tab(t):
@@ -4115,13 +4116,129 @@ def main():
             underls[n].configure(bg=C["val"] if n == tab else C["bg"])
         cur_tab[0] = tab
         refresh_tab(tab)
-    for name, label in (("today","오늘"),("grow","성장"),("bench","벤치"),("log","기록"),("tools","도구")):
+    for name, label in (("cal","계획"),("today","오늘"),("grow","성장"),("bench","벤치"),("log","기록"),("tools","도구")):
         holder = tk.Frame(tabbar, bg=C["bg"]); holder.pack(side="left", padx=(0, 22))
         b = tk.Label(holder, text=label, font=(FAM, 13, "bold"), bg=C["bg"],
                      fg=C["sub"], cursor="hand2")
         b.pack(); b.bind("<Button-1>", lambda e, n=name: show(n))
         u = tk.Frame(holder, bg=C["bg"], height=3, width=30); u.pack(fill="x", pady=(3, 0))
         tabbtns[name], underls[name] = b, u
+
+
+    # ══ 계획 탭 (v6.2) ══ — 달력 하나로 '오늘 뭘 하고 · 이번 주가 어떻게 가고 · 몇 달 뒤 어디에 있는지'. 숫자보다 말이 먼저인 유일한 탭
+    fcal = tk.Frame(body, bg=C["bg"]); frames["cal"] = fcal
+    cal_scroll = VScroll(fcal); cal_scroll.pack(fill="both", expand=True); cbody = cal_scroll.body
+    cal_state = {"ym": None}
+    CAL_KIND = {"measure": ("출발선 재기 18판", C["gold"]), "boss": ("보스전 18판", C["gold"]), "rest": ("쉼 · 주간 결산", C["dim"]), "before": ("—", C["dim"])}
+    def cal_kind(dk: str, tdays: set):
+        """달력 한 칸의 종류 — (종류, 칩 글, 색). 종류: measure · boss · train · rest · before"""
+        base = BASE_DATE[0]; today = today_key[0]; wd = date.fromisoformat(dk).weekday()
+        if base is None:
+            if dk < today: return ("before", *CAL_KIND["before"]) if dk not in tdays else ("train", "훈련", C["sub"])
+            if dk == today: return ("measure", *CAL_KIND["measure"])
+        elif dk < base: return ("before", *CAL_KIND["before"]) if dk not in tdays else ("train", "시작 전 훈련", C["sub"])
+        elif dk == base: return ("measure", *CAL_KIND["measure"])
+        dt = DAYTYPES[wd] if base is None else day_type_of(dk)
+        if dt == "b": return ("boss", *CAL_KIND["boss"])
+        if dt == "r": return ("rest", *CAL_KIND["rest"])
+        return ("train", main_theme(dk, data.get("pb"))[1], C["ow"])
+    def cal_ep(dk: str, tdays: set):
+        """DAY 번호 — 친 날은 실제 번호, 앞으로의 날은 오늘부터 쉬는 날을 빼고 센 예정 번호"""
+        today = today_key[0]
+        if dk in tdays and dk <= today: return episode_no(data, dk)
+        if dk < today: return None
+        ep = episode_no(data, today); d = date.fromisoformat(today); end = date.fromisoformat(dk)
+        while d < end:
+            d += timedelta(days=1)
+            if cal_kind(d.isoformat(), tdays)[0] in ("measure", "boss", "train"): ep += 1
+        return ep
+    def cal_move(dm):
+        y, m = cal_state["ym"]; m += dm
+        if m < 1: y, m = y - 1, 12
+        if m > 12: y, m = y + 1, 1
+        cal_state["ym"] = (y, m); dirty["cal"] = True; refresh_tab("cal")
+    def refresh_cal():
+        for w_ in cbody.winfo_children(): w_.destroy()
+        today = today_key[0]; td = date.fromisoformat(today); tdays = training_days(data)
+        if cal_state["ym"] is None: cal_state["ym"] = (td.year, td.month)
+        y, m = cal_state["ym"]
+        # 머리: 달 이동 · 범례
+        hd = tk.Frame(cbody, bg=C["bg"]); hd.pack(fill="x", pady=(0, px(8)))
+        RBtn(hd, "‹", lambda: cal_move(-1), padx=10, pady=3).pack(side="left")
+        tk.Label(hd, text=f"{y}년 {m}월", font=FH, bg=C["bg"], fg=C["txt"]).pack(side="left", padx=px(10))
+        RBtn(hd, "›", lambda: cal_move(+1), padx=10, pady=3).pack(side="left")
+        if (y, m) != (td.year, td.month): RBtn(hd, "오늘 달", lambda: (cal_state.__setitem__("ym", (td.year, td.month)), cal_move(0)), padx=10, pady=3).pack(side="left", padx=(px(8), 0))
+        lg = tk.Frame(hd, bg=C["bg"]); lg.pack(side="right")
+        for txt, col in (("■ 출발선 · 보스전 18판 (27분)", C["gold"]), ("■ 훈련 20판 + 발로란트 15분 (48분)", C["ow"]), ("■ 쉼 — 앱이 주간 결산 저장", C["dim"])):
+            tk.Label(lg, text=txt, font=FS, bg=C["bg"], fg=col).pack(side="left", padx=(px(12), 0))
+        # 달력
+        grid = tk.Frame(cbody, bg=C["bg"]); grid.pack(fill="x")
+        for i, dow in enumerate("월화수목금토일"):
+            tk.Label(grid, text=dow, font=FCAP, bg=C["bg"], fg=C["gold"] if i == 5 else (C["dim"] if i == 6 else C["sub"])).grid(row=0, column=i, sticky="w", padx=(px(6), 0), pady=(0, px(2)))
+            grid.grid_columnconfigure(i, weight=1, uniform="cal")
+        first = date(y, m, 1); start = first - timedelta(days=first.weekday())
+        n_rows = ((date(y + (m == 12), (m % 12) + 1, 1) - timedelta(days=1)) - start).days // 7 + 1
+        for r in range(n_rows):
+            for c in range(7):
+                d = start + timedelta(days=r * 7 + c); dk = d.isoformat(); in_m = d.month == m
+                kind, chip, col = cal_kind(dk, tdays)
+                bg_ = {"measure": "#2A2410", "boss": "#221E12", "rest": C["bg"]}.get(kind, C["card"])
+                cell = tk.Frame(grid, bg=bg_, highlightbackground=C["gold"] if dk == today else (C["line"] if kind != "rest" else C["bg"]), highlightthickness=px(2) if dk == today else 1, padx=px(8), pady=px(6))
+                cell.grid(row=r + 1, column=c, sticky="nsew", padx=(0, px(4)), pady=(0, px(4)))
+                top_ = tk.Frame(cell, bg=bg_); top_.pack(fill="x")
+                tk.Label(top_, text=str(d.day), font=FB, bg=bg_, fg=(C["txt"] if in_m else C["dim"])).pack(side="left")
+                if dk == today: tk.Label(top_, text="오늘", font=FCAP, bg=C["gold"], fg="#10141A", padx=px(5)).pack(side="left", padx=(px(6), 0))
+                ep = cal_ep(dk, tdays) if kind in ("measure", "boss", "train") else None
+                if ep: tk.Label(top_, text=f"DAY {ep}", font=FNS, bg=bg_, fg=C["gold"] if dk in tdays else C["dim"]).pack(side="right")
+                tk.Label(cell, text=chip, font=FB, bg=bg_, fg=(col if in_m else C["dim"]), anchor="w", wraplength=px(150), justify="left").pack(fill="x", pady=(px(2), 0))
+                if dk in tdays:
+                    e_ = data["days"][dk]; n_ = sum((e_.get("count") or {}).values()) or len(e_.get("plays") or [])
+                    st, sc = f"✓ {n_}판", C["ok"]
+                elif kind in ("measure", "boss"): st, sc = ("오늘 · 27분" if dk == today else "27분"), C["sub"]
+                elif kind == "train": st, sc = ("오늘 · 48분" if dk == today else "48분"), C["sub"]
+                elif kind == "rest": st, sc = "", C["dim"]
+                else: st, sc = ("안 침" if dk < today and BASE_DATE[0] and dk > BASE_DATE[0] else ""), C["dim"]
+                if kind == "train" and dk < today and dk not in tdays and BASE_DATE[0] and dk > BASE_DATE[0]: st, sc = "안 침", C["val"]
+                tk.Label(cell, text=st, font=FS, bg=bg_, fg=sc, anchor="w").pack(fill="x")
+        # 아래: 이번 주 · 다섯 단계 · 이 앱이 하는 일
+        cols_ = tk.Frame(cbody, bg=C["bg"]); cols_.pack(fill="x", pady=(px(12), 0))
+        wk = card(cols_); wk.pack(side="left", fill="both", expand=True)
+        tk.Label(wk, text="이번 주", font=FH, bg=C["card"], fg=C["txt"]).pack(anchor="w")
+        mon = td - timedelta(days=td.weekday())
+        for i in range(7):
+            d = mon + timedelta(days=i); dk = d.isoformat(); kind, chip, col = cal_kind(dk, tdays)
+            what = {"measure": "18개를 한 판씩 — 이 점수가 앞으로의 0점", "boss": "18판 시험 — 출발선과 비교, 방송창은 에너지 보드",
+                    "rest": "쉬는 날 — 앱을 켜면 주간 결산이 저장됩니다", "before": ""}.get(kind, "워밍업 2 → 측정 6 → 본훈련 12 → 발로란트 15분")
+            row = tk.Frame(wk, bg=C["card"]); row.pack(fill="x", pady=(px(5), 0))
+            tk.Label(row, text=f"{'월화수목금토일'[i]} {d.month}/{d.day}", font=FB, bg=C["card"], fg=C["gold"] if dk == today else C["sub"], width=8, anchor="w").pack(side="left")
+            tk.Label(row, text=chip, font=FB, bg=C["card"], fg=col, width=14, anchor="w").pack(side="left")
+            tk.Label(row, text=(f"✓ {sum((data['days'][dk].get('count') or {}).values())}판 · " if dk in tdays else "") + what, font=FS, bg=C["card"], fg=C["sub"], anchor="w").pack(side="left", fill="x", expand=True)
+        rt = tk.Frame(cols_, bg=C["bg"]); rt.pack(side="left", anchor="n", padx=(px(12), 0))
+        wk.pack_configure(anchor="n")
+        sg = card(rt); sg.pack(fill="x")
+        ss = stage_status(data, today)
+        tk.Label(sg, text="골드 2 → 불멸 · 다섯 단계", font=FH, bg=C["card"], fg=C["txt"]).pack(anchor="w")
+        tk.Label(sg, text="관문은 전부 앱이 읽는 숫자. 두 일요일 연속 다 차야 다음 단계", font=FS, bg=C["card"], fg=C["hint"], wraplength=px(390), justify="left").pack(anchor="w", pady=(0, px(4)))
+        STAGE_PLAIN = ["첫날 18판 · 훈련 10일 · 발로 블록 8번 · 랭크 카드 5번", "코박스 9갈래 골드 · 헤드샷 25% · 사격 24/30 · 플래 1 2주",
+                       "인터 500 · 헤드샷 30% · ACS 220 · 다이아 1 2주 · 결산 8주", "인터 650 · ACS 230 · 40판 승률 53% · 어센 1 30일", "인터 700 · ACS 240 · 60판 승률 55% · 불멸 1 30일"]
+        for i, st_ in enumerate(STAGES):
+            here = i == ss["idx"]
+            row = tk.Frame(sg, bg=C["card2"] if here else C["card"], padx=px(8), pady=px(4)); row.pack(fill="x", pady=(px(3), 0))
+            tk.Label(row, text=str(i), font=FBIG if False else (MONO, 16, "bold"), bg=row["bg"], fg=C["gold"] if here else C["dim"], width=2).pack(side="left")
+            bx = tk.Frame(row, bg=row["bg"]); bx.pack(side="left", fill="x", expand=True)
+            tk.Label(bx, text=st_["name"] + f" · {st_['span']}" + ("  ← 지금 여기" if here else ""), font=FB, bg=row["bg"], fg=C["txt"] if here else C["sub"], anchor="w").pack(fill="x")
+            if here:
+                for g in ss["gates"]:
+                    tk.Label(bx, text=f"{'✓' if g['ok'] else '✗'} {g['label']} — {g['val']}", font=FS, bg=row["bg"], fg=C["ok"] if g["ok"] else C["sub"], anchor="w").pack(fill="x")
+            else: tk.Label(bx, text=STAGE_PLAIN[i], font=FS, bg=row["bg"], fg=C["dim"], anchor="w", wraplength=px(360), justify="left").pack(fill="x")
+        hp = card(rt); hp.pack(fill="x", pady=(px(10), 0))
+        tk.Label(hp, text="이 앱이 하는 일", font=FH, bg=C["card"], fg=C["txt"]).pack(anchor="w")
+        for ln in ("코박스(에임 연습 게임)가 저장하는 점수 파일을 2초마다 읽어 자동으로 기록합니다 — 직접 적는 건 하루 숫자 몇 개뿐",
+                   "노란 버튼 → 코박스에서 AIMDESK 재생 목록 ▶. 한 판 끝나면 앱이 다음 판을 넘깁니다",
+                   "판정 세 개 — 오늘(어제보다?) · 요즘(흐름) · 성장(몇 주 추세). 자료가 모자라면 꾸미지 않고 비워 둡니다",
+                   "루틴이 끝나면 오늘 한 장 · 유튜브 제목·설명·챕터 · 썸네일 페이지가 기록 폴더에 저장됩니다",
+                   "볼테익 점수의 Iron·Bronze·Silver·Gold 는 코박스 랭크입니다 — 발로란트 랭크가 아닙니다"):
+            tk.Label(hp, text="· " + ln, font=FS, bg=C["card"], fg=C["sub"], wraplength=px(390), justify="left", anchor="w").pack(fill="x", pady=(px(3), 0))
 
     # ══ 오늘 탭 ══
     ft = tk.Frame(body, bg=C["bg"]); frames["today"] = ft
@@ -5320,7 +5437,7 @@ def main():
         if dt == "v":
             add_section("① 워밍업 · 손 깨우기 (점수 무시)")
             for k, n in WARMUP: add_row("warm", k, n)
-            add_section("② 프로브 · 그날 첫 판이 측정값")
+            add_section("② 측정 6판 · 첫 판이 오늘 점수")
             for k in PROBE: add_row("probe", k, 1)
             mt = main_theme(dkey, data["pb"])
             add_section(f"③ 본훈련 · {mt[1]}")
@@ -5838,7 +5955,7 @@ def main():
     ben_total.pack(side="left")
     ben_rankcv = tk.Canvas(ben_head, width=px(76), height=px(26), bg=C["card"], highlightthickness=0)
     ben_rankcv.pack(side="left", padx=14)
-    ben_tier_lbl = tk.Label(ben_head, text="총 에너지 · Novice S5 · 볼테익 동일 수식", font=FS, bg=C["card"], fg=C["hint"])
+    ben_tier_lbl = tk.Label(ben_head, text="볼테익 점수 · 노비스 · 9갈래 평균 — 코박스 랭크 (발로란트 랭크 아님)", font=FS, bg=C["card"], fg=C["hint"])
     ben_tier_lbl.pack(side="left")
     ben_src = tk.Label(ben_head, text="", font=FNS, bg=C["card"], fg=C["dim"])
     ben_src.pack(side="right")
@@ -6015,12 +6132,12 @@ def main():
         H = px(236) if _has else px(74)                     # 그릴 게 없으면 자리를 덜 차지한다
         if int(cv.cget("height")) != H: cv.configure(height=H)
         if not _has:
-            cv.create_text(px(16), px(20), text="프로브 지수", anchor="w", fill=C["txt"], font=FB)
+            cv.create_text(px(16), px(20), text="측정 곡선 · 매일 첫 판 6개", anchor="w", fill=C["txt"], font=FB)
             cv.create_text(px(16), px(46), anchor="w", fill=C["hint"], font=FS,
                            text="그날 첫 판만 모아 컨디션을 뺀 실력 곡선을 그립니다 — 프로브 4일치가 쌓이면 여기에 나타납니다")
             return
         H = px(236)
-        cv.create_text(px(16), px(16), text="프로브 지수", anchor="w", fill=C["txt"], font=FB)
+        cv.create_text(px(16), px(16), text="측정 곡선 · 매일 첫 판 6개", anchor="w", fill=C["txt"], font=FB)
         cv.create_text(W-px(16), px(16), text="점 = 일별 · 선 = 7일 평균", anchor="e", fill=C["hint"], font=FS)
         cv.create_rectangle(px(96), px(11), px(108), px(14), fill=C["val"], outline="")
         cv.create_text(px(112), px(13), text="발로", anchor="w", fill=C["sub"], font=FS)
@@ -6051,12 +6168,13 @@ def main():
 
     def draw_bench_chart(cv, bd):
         cv.delete("all"); W = max(cv.winfo_width(), px(400)); H = px(196)
-        cv.create_text(px(16), px(16), text="벤치마크 총 에너지", anchor="w", fill=C["txt"], font=FB)
+        cv.create_text(px(16), px(16), text="볼테익 점수 · 토요일 시험", anchor="w", fill=C["txt"], font=FB)
         cv.create_text(W-px(16), px(16), text="랭크 선을 넘는 순간이 보입니다", anchor="e", fill=C["hint"], font=FS)
         L, R, T, B = px(70), px(18), px(38), px(22)
         top = max([520] + [e_ + 60 for _, e_ in bd])   # 골드 위로 외삽돼도 점이 차트 밖으로 나가지 않게
         def Y(v): return T + (H-T-B) * (1 - v/top)
         for (t, n, c) in RANKS:
+            if t > top: continue                                              # 차트 위로 나간 랭크 선은 제목과 겹친다
             cv.create_line(L, Y(t), W-R, Y(t), fill="#2A333D", dash=(3, 4))
             cv.create_text(L-px(10), Y(t), text=n, anchor="e", fill=c, font=FNS)
         if not bd:
@@ -6394,7 +6512,7 @@ def main():
         ben_src.configure(text=bench_src_label(src, n))
         wl = memo(("weakest",), lambda: weakest_link(data["pb"]))
         cfg(advice_lbl, text=fmt_weakest(wl))
-        t_ = CUR_TIER[0]; cfg(ben_tier_lbl, text=f"총 에너지 · {TIERS[t_][0]} S5 · 볼테익 동일 수식")
+        t_ = CUR_TIER[0]; cfg(ben_tier_lbl, text=f"볼테익 점수 · {TIER_KO[t_]} · 9갈래 평균 — 코박스 랭크 (발로란트 랭크 아님)")
         ok_, short_, dk_ = tier_ready(data); gw_, gn_, gc_ = fmt_gate(gate_status(data["pb"]))
         nt_ = TIER_ORDER[min(TIER_ORDER.index(t_) + 1, len(TIER_ORDER) - 1)]
         cfg(grad_title, text=(f"{gw_} · {gn_}" if BASE_DATE[0] else "관문 — 기준 측정 18판 뒤에 잽니다"))
@@ -6423,7 +6541,7 @@ def main():
         draw_bench_chart(cv_ben, memo(("bench_days",), lambda: bench_days(data)))
         for k, (cv, pbl) in spark_cvs.items(): draw_spark(k, cv, pbl)
 
-    tab_fn.update(today=refresh_today, grow=refresh_grow, bench=refresh_bench, tools=lambda: (sync_stats_lbl(), set_trainer_status()))
+    tab_fn.update(cal=refresh_cal, today=refresh_today, grow=refresh_grow, bench=refresh_bench, tools=lambda: (sync_stats_lbl(), set_trainer_status()))
 
     def refresh():
         """기록이 바뀌었을 때: 헤더 + 지금 보이는 탭만 그린다. 숨은 탭은 dirty 로 표시해 두고 열 때 그린다"""
@@ -6561,7 +6679,7 @@ def main():
         return "break"
     root.bind("<Key>", on_key)
     for _k in ("o", "b"): trainer_txt.bind(f"<Control-{_k}>", on_key)   # Text 클래스의 Ctrl+O(줄 열기)·Ctrl+B(커서) 보다 먼저 — 앱 단축키만 한 번
-    legend_lbl.configure(text="1·2·3·4·5 탭  F5 재스캔  Ctrl+R 실행  Ctrl+B 방송 화면")
+    legend_lbl.configure(text="6 계획 · 1·2·3·4·5 탭  F5 재스캔  Ctrl+R 실행  Ctrl+B 방송 화면")
 
     root.deiconify(); root.update_idletasks(); win_dark()
     if data["win"].get("zoomed") and sys.platform == "win32":
@@ -6569,7 +6687,7 @@ def main():
         except tk.TclError: pass
     refresh_header()
     refresh_files()
-    show(data["win"].get("tab") if data["win"].get("tab") in frames else "today")
+    show(data["win"].get("tab") if data["win"].get("tab") in frames else ("today" if training_days(data) else "cal"))   # 처음 켜면 계획부터
     if bcast_cfg().get("open", True) and not os.environ.get("AIMDESK_NO_BCAST"): root.after(400, open_broadcast)   # 녹화되는 화면은 늘 열려 있어야 한다
     if LOAD_ERROR:
         root.after(500, lambda: messagebox.showwarning("에임 데스크 — 기록 파일", "\n\n".join(LOAD_ERROR)))
@@ -6607,7 +6725,7 @@ def main():
         root.destroy()
     root.protocol("WM_DELETE_WINDOW", on_close)
     _DBG.update(root=root, pl_lbl=pl_lbl, trainer_txt=trainer_txt, apply_trainer=apply_trainer, clear_trainer=clear_trainer,
-                band_cv=band_cv, rec_now=rec_now, set_bcast=set_bcast, bcast_cfg=bcast_cfg, BCAST_PRESETS=BCAST_PRESETS, note_pb_flash=note_pb_flash, hdr_story=hdr_story, hdr_stage=hdr_stage, do_graduate=do_graduate, grad_btn=grad_btn, grad_title=grad_title, grad_lbl=grad_lbl, save_week_now=save_week_now, games_var=games_var, set_why=set_why, why_var=why_var, val_sync_now=val_sync_now, val_lbl=val_lbl, rid_var=rid_var, set_cutoff=set_cutoff, cut_btns=cut_btns, fstat=fstat, do_reset=do_reset, refresh_files=refresh_files, hdr_mi=hdr_mi, verdicts=lambda: verdicts(data, today_key[0], day_state.get("dt"), cur_plays(), day_state.get("hero_state")),
+                band_cv=band_cv, rec_now=rec_now, set_bcast=set_bcast, bcast_cfg=bcast_cfg, BCAST_PRESETS=BCAST_PRESETS, note_pb_flash=note_pb_flash, hdr_story=hdr_story, hdr_stage=hdr_stage, refresh_cal=refresh_cal, cal_state=cal_state, cbody=cbody, do_graduate=do_graduate, grad_btn=grad_btn, grad_title=grad_title, grad_lbl=grad_lbl, save_week_now=save_week_now, games_var=games_var, set_why=set_why, why_var=why_var, val_sync_now=val_sync_now, val_lbl=val_lbl, rid_var=rid_var, set_cutoff=set_cutoff, cut_btns=cut_btns, fstat=fstat, do_reset=do_reset, refresh_files=refresh_files, hdr_mi=hdr_mi, verdicts=lambda: verdicts(data, today_key[0], day_state.get("dt"), cur_plays(), day_state.get("hero_state")),
                 set_routine_open=set_routine_open, set_drawer=set_drawer, drawer=drawer, cur_lbl=cur_lbl, cur_score=cur_score, cur_word=cur_word,
                 auto_mini=auto_mini, live=live, show_sequence=show_sequence, tier_var=tier_var, rr_var=rr_var, commit_rank=commit_rank, trainer_mini=trainer_mini,
                 trainer_lbl=trainer_lbl, save_report_today=save_report_today, draw_ribbon=draw_ribbon, today_plan_n=today_plan_n, cv_sess=cv_sess, hdr_lv=hdr_lv, open_card=open_card, card_win=card_win, set_scale=set_scale, scale_btns=scale_btns, set_broadcast=set_broadcast, open_broadcast=open_broadcast, bcast=bcast, data=data, refresh=refresh, refresh_tab=refresh_tab, dirty=dirty, cur_tab=cur_tab, show=show,
@@ -6882,7 +7000,7 @@ if __name__ == "__main__":
         assert "오늘 3/27판" in _fs and "최고 1" in _fs and "%" not in _fs, _fs        # 판정 개수로 (▲▼% 없음)
         _fs2 = fmt_seq_summary(3, 27, 1, [0.05], None, (None, None), None)
         assert "PB 1 🏆" in _fs2 and "%" in _fs2, _fs2                                  # counts 없으면 옛 표기 유지
-        assert shortcut_action("2", 0, False) == "tab:grow" and shortcut_action("2", 0, True) is None and shortcut_action("F5", 0, True) == "rescan" and shortcut_action("5", 0, False) == "tab:tools"
+        assert shortcut_action("6", 0, False) == "tab:cal" and shortcut_action("2", 0, False) == "tab:grow" and shortcut_action("2", 0, True) is None and shortcut_action("F5", 0, True) == "rescan" and shortcut_action("5", 0, False) == "tab:tools"
         assert shortcut_action("r", 0x4, False) == "run" and shortcut_action("r", 0, False) is None and shortcut_action("o", 0x4, True) == "folder"
         assert shortcut_action("b", 0x4, False) == "cast" and shortcut_action("b", 0, False) is None
         assert seq_shortcut_action("space", 0, False) == "auto" and seq_shortcut_action("space", 0, True) is None and seq_shortcut_action("n", 0x4, False) == "skip"
