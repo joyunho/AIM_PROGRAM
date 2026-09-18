@@ -273,7 +273,7 @@ check("v7.2: choosing a save folder switches report_dir and moves existing app f
 pump(100); check("v7.2: settings card shows the chosen folder and the reset button", "다른 위치" in D["out_lbl"].cget("text") and D["out_reset_btn"].winfo_ismapped(), D["out_lbl"].cget("text"))
 _rp2 = D["save_report_today"](True); pump(150)
 check("v7.2: report · upload pack · thumbnail saved into the chosen folder", _rp2 is not None and _rp2.parent == _od and any(_od.glob("EP*_업로드.txt")) and any(_od.glob("EP*_썸네일.html")), str(_rp2))
-check("v7.2: an unwritable folder is refused and the setting stays", D["apply_out_dir"]("/proc/aimdesk_nope") is False and data.get("out_dir") == str(_od))
+check("v7.2: an unwritable folder (under a file) is refused and the setting stays", D["apply_out_dir"](str(TMP / "aim_desk_data.json" / "nope")) is False and data.get("out_dir") == str(_od))
 check("v7.2: back to default moves the files home", D["apply_out_dir"](None) is True and ad.report_dir() == TMP / "기록" and data.get("out_dir") is None and _wkf.exists() and not D["out_reset_btn"].winfo_ismapped(), str(list(_od.glob('*'))))
 # v6.0 — 녹화 시작 버튼은 오늘 기록에 시각을 남기고, 발로란트 연동은 키가 없으면 조용히 실패한다 (크래시 없이)
 D["rec_now"](); pump(100)

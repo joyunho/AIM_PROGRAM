@@ -7949,16 +7949,17 @@ if __name__ == "__main__":
         for _bad in ("판정까지", "노비스", "관문", "프로브"): assert _bad not in verdict_sentence(_mk("wait", "dim", "측정 중", "0/4쌍"), 0)[0]
         assert verdict_sentence(_mk("wait", "dim", "측정 중", "0/4쌍"), 0)[0].startswith("○ 아직 안 쳤어요")
         # ── v7.2: 저장 위치 ──
-        _o = {"out_dir": None}; _tdo = Path("/tmp/aimdesk_selftest_out"); _tdo2 = Path("/tmp/aimdesk_selftest_out2")
-        import shutil as _sh
+        import shutil as _sh, tempfile as _tfo
+        _o = {"out_dir": None}; _tdo = Path(_tfo.gettempdir()) / "aimdesk_selftest_out"; _tdo2 = Path(_tfo.gettempdir()) / "aimdesk_selftest_out2"
+        _nope = str(Path(os.path.abspath(__file__)) / "nope")                                          # 파일 밑의 폴더 — 윈도우·리눅스 모두 만들 수 없다 (/proc 은 윈도우에서 만들어진다)
         for _d_ in (_tdo, _tdo2): _sh.rmtree(_d_, ignore_errors=True)
         assert set_out_dir(_o, str(_tdo))[0] and report_dir() == _tdo and _o["out_dir"] == str(_tdo) and _tdo.is_dir()
         assert report_path("2026-09-10") == _tdo / "에임데스크_2026-09-10.txt"
         (_tdo / "에임데스크_2026-09-10.txt").write_text("x"); (_tdo / "EP001_2026-09-10_업로드.txt").write_text("x"); (_tdo / "메모.txt").write_text("x")
         assert move_out_files(_tdo, _tdo2) == (2, 0) and (_tdo2 / "EP001_2026-09-10_업로드.txt").exists() and (_tdo / "메모.txt").exists() and not (_tdo / "에임데스크_2026-09-10.txt").exists()
         (_tdo / "에임데스크_2026-09-10.txt").write_text("y"); assert move_out_files(_tdo, _tdo2) == (0, 1)     # 같은 이름은 건너뛴다
-        assert set_out_dir(_o, "/proc/aimdesk_nope")[0] is False and _o["out_dir"] == str(_tdo)              # 못 쓰는 폴더는 거절, 설정 유지
-        assert load_out_dir({"out_dir": "/proc/aimdesk_nope"}) is False and OUT_DIR[0] is None                # 켤 때 못 쓰면 기본으로
+        assert set_out_dir(_o, _nope)[0] is False and _o["out_dir"] == str(_tdo)                              # 못 쓰는 폴더는 거절, 설정 유지
+        assert load_out_dir({"out_dir": _nope}) is False and OUT_DIR[0] is None                                # 켤 때 못 쓰면 기본으로
         assert set_out_dir(_o, None) == (True, "기본 위치") and _o["out_dir"] is None and report_dir() == DATA_FILE.parent / "기록"
         for _d_ in (_tdo, _tdo2): _sh.rmtree(_d_, ignore_errors=True)
         # ── v7.1: 창 아이콘 — 64px PNG (exe 의 app.ico 와 같은 그림) ──
