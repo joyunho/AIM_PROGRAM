@@ -89,6 +89,8 @@ check("today tab visible", D["frames"]["today"].winfo_ismapped())
 check("stale override equal to ini key cleared at startup", data.get("next_key") is None, str(data.get("next_key")))
 check("status bar shows 0판 warn", "0판" in D["status_lbl"].cget("text"), D["status_lbl"].cget("text"))
 b = btn(root, "▶ 오늘 루틴 실행"); check("routine button exists (v-day)", b is not None)
+_gold0 = [w for w in walk(D["frames"]["today"]) if isinstance(w, tk.Canvas) and hasattr(w, "bgc") and w.winfo_viewable() and w.bgc == ad.C["gold"]]
+check("v7: before the run, the run button is the only gold surface on 오늘", len(_gold0) == 1 and _gold0[0] is D["run_btn"], str(len(_gold0)))
 c0 = D["counters"]["refresh_tab"]
 D["refresh"](); check("refresh() on today leaves grow dirty", D["dirty"]["grow"] is True and len(D["cv_idx"].find_all()) == 0)
 D["tabbtns"]["grow"].event_generate("<Button-1>"); pump(400)        # 첫 표시 뒤 캔버스 <Configure> 디바운스(80ms)까지 기다린다
@@ -105,7 +107,7 @@ D["show"]("today"); pump(100)
 # 스크롤
 root.geometry("960x660"); pump(300)
 ls = D["left_scroll"]
-check("verdict band and live strip visible at minsize", D["band_cv"].winfo_ismapped() and D["live"].winfo_ismapped() and len([i for i in D["band_cv"].find_all() if D["band_cv"].type(i) == "text"]) >= 8, str(len(D["band_cv"].find_all())))
+check("verdict band and live strip visible at minsize", D["band_cv"].winfo_ismapped() and D["live"].winfo_ismapped() and len([i for i in D["band_cv"].find_all() if D["band_cv"].type(i) == "text"]) >= 2, str(len(D["band_cv"].find_all())))
 D["set_routine_open"](True); pump(300)
 check("routine card overflows at minsize → thumb shown", ls.shown and ls.thumb.winfo_ismapped(), f"{ls.body.winfo_reqheight()} vs {ls.cv.winfo_height()}")
 class Ev: pass
@@ -195,6 +197,19 @@ sess = D["day_state"]["sess_lbl"].cget("text"); check("session line shows the se
 rib = D["day_state"]["rib_lbl"].cget("text"); check("ribbon line counts today's plays", rib.startswith("오늘 5/") and ("최고" in rib or "평소" in rib), rib)
 check("ribbon cells match the plan", len(D["day_state"]["rib_cells"]) == D["today_plan_n"]() == 20, str(len(D["day_state"]["rib_cells"])))
 check("training level shown in header", D["hdr_lv"].cget("text").startswith("Lv."), D["hdr_lv"].cget("text"))
+_FORBID = ("프로브", "측정 중", "관문", "단계", "볼테익", "노비스", "판정까지", "판별")
+_vis = [w.cget("text") for w in walk(D["frames"]["today"]) if isinstance(w, tk.Label) and w.winfo_viewable()]
+check("v7: no jargon on visible 오늘 labels", not any(any(f in x for f in _FORBID) for x in _vis), str([x for x in _vis if any(f in x for f in _FORBID)])[:200])
+_gold_btns = [w for w in walk(D["frames"]["today"]) if isinstance(w, tk.Canvas) and hasattr(w, "bgc") and w.winfo_viewable() and w.bgc == ad.C["gold"]]
+_rb_txt = D["run_btn"].itemcget(D["run_btn"].lbl, "text")
+check("v7: while auto-running nothing is gold and the button reads 자동 진행 중 (at most one gold surface)", len(_gold_btns) <= 1 and (_rb_txt.startswith("자동 진행 중") or (len(_gold_btns) == 1 and D["run_btn"] in _gold_btns)), f"{len(_gold_btns)} {_rb_txt}")
+check("v7: count reads 5/20 in the hero", D["cnt_lbl"].cget("text") == "5/20" and D["cnt_lbl"].winfo_viewable(), D["cnt_lbl"].cget("text"))
+D["set_routine_open"](False); pump(300)
+check("v7: three todo rows + 발로란트 row inside the hero, 자세히 closed", len(D["section_labels"]) == 3 and D["day_state"]["val_row"].winfo_viewable() and not D["cols"].winfo_ismapped(), f"{len(D['section_labels'])} {D['cols'].winfo_ismapped()}")
+D["set_routine_open"](True); pump(300)
+check("v7: 자세히 open → hero keeps headline·count·button, rows move to the detail card", D["cols"].winfo_ismapped() and not D["todo_host"].winfo_ismapped() and D["cnt_lbl"].winfo_viewable() and D["run_btn"].winfo_viewable(), f"{D['cols'].winfo_ismapped()} {D['todo_host'].winfo_ismapped()}")
+check("v7: headline names the next scenario", D["cur_lbl"].cget("text").startswith("다음 판 · "), D["cur_lbl"].cget("text"))
+check("v7: header shows DAY n and the settings link, tab bar has 5 tabs", D["hdr_day"].cget("text").startswith("DAY ") and D["settings_lbl"].winfo_viewable() and sum(1 for n_, b_ in D["tabbtns"].items() if n_ != "tools" and b_.winfo_viewable()) == 5, D["hdr_day"].cget("text"))
 _tt = texts(root)
 check("week theme line lists five weekday themes", any(x.startswith("이번 주 · 월 ") and x.count("·") == 5 for x in _tt), str([x for x in _tt if x.startswith("이번 주")])[:120])
 _V = D["verdicts"](); check("hero verdict is honest with 5 plays (측정 중, hollow)", _V["day"]["state"] == "wait" and _V["day"]["word"] == "측정 중" and D["band_cv"].itemcget("hero", "fill") == ad.C["card2"], str(_V["day"]))
