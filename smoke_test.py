@@ -211,7 +211,7 @@ check("v7: 자세히 open → hero keeps headline·count·button, rows move to t
 check("v7: headline names the next scenario", D["cur_lbl"].cget("text").startswith("다음 판 · "), D["cur_lbl"].cget("text"))
 check("v7: header shows DAY n and the settings link, tab bar has 5 tabs", D["hdr_day"].cget("text").startswith("DAY ") and D["settings_lbl"].winfo_viewable() and sum(1 for n_, b_ in D["tabbtns"].items() if n_ != "tools" and b_.winfo_viewable()) == 5, D["hdr_day"].cget("text"))
 _tt = texts(root)
-check("week theme line lists five weekday themes", any(x.startswith("이번 주 · 월 ") and x.count("·") == 5 for x in _tt), str([x for x in _tt if x.startswith("이번 주")])[:120])
+check("week theme line lists five weekday themes", any(x.startswith("이번 주 · 화 ") and x.count("·") == 5 and " 일 " in x for x in _tt), str([x for x in _tt if x.startswith("이번 주")])[:120])
 _V = D["verdicts"](); check("hero verdict is honest with 5 plays (측정 중, hollow)", _V["day"]["state"] == "wait" and _V["day"]["word"] == "측정 중" and D["band_cv"].itemcget("hero", "fill") == ad.C["card2"], str(_V["day"]))
 check("live strip shows the last score and its scenario", D["cur_score"].cget("text") == "700" and "Pasu" in D["cur_word"].cget("text"), D["cur_score"].cget("text") + " " + D["cur_word"].cget("text"))
 check("live strip mirrors the auto-progress hint", "코박스" in D["auto_mini"].cget("text") or "다음" in D["auto_mini"].cget("text") or D["auto_mini"].cget("text") == "", D["auto_mini"].cget("text")[:80])
@@ -267,6 +267,14 @@ check("header stage chip: 단계 0 · 관문 n/4", D["hdr_stage"].cget("text").s
 D["save_week_now"](); pump(150)
 _wkf = TMP / "기록" / f"WEEK_{ad.iso_week_id(TODAY.isoformat())}_결산.txt"
 check("week pack button writes 기록/WEEK_YYYY-Www_결산.txt", _wkf.exists() and "[관문]" in _wkf.read_text(encoding="utf-8-sig") and data.get("weeks", {}).get(ad.iso_week_id(TODAY.isoformat()), {}).get("pack") == TODAY.isoformat(), str(_wkf))
+# v7.2 — 저장 위치: 설정에서 고른 폴더로 기록·업로드 팩·썸네일·주간 결산이 간다 (askyesno 는 True 로 패치 → 기존 파일도 옮긴다)
+_od = TMP / "다른 위치"
+check("v7.2: choosing a save folder switches report_dir and moves existing app files", D["apply_out_dir"](str(_od)) is True and ad.report_dir() == _od and data.get("out_dir") == str(_od) and (_od / _wkf.name).exists() and not _wkf.exists(), f"{ad.report_dir()} {list(_od.glob('*'))}")
+pump(100); check("v7.2: settings card shows the chosen folder and the reset button", "다른 위치" in D["out_lbl"].cget("text") and D["out_reset_btn"].winfo_ismapped(), D["out_lbl"].cget("text"))
+_rp2 = D["save_report_today"](True); pump(150)
+check("v7.2: report · upload pack · thumbnail saved into the chosen folder", _rp2 is not None and _rp2.parent == _od and any(_od.glob("EP*_업로드.txt")) and any(_od.glob("EP*_썸네일.html")), str(_rp2))
+check("v7.2: an unwritable folder is refused and the setting stays", D["apply_out_dir"]("/proc/aimdesk_nope") is False and data.get("out_dir") == str(_od))
+check("v7.2: back to default moves the files home", D["apply_out_dir"](None) is True and ad.report_dir() == TMP / "기록" and data.get("out_dir") is None and _wkf.exists() and not D["out_reset_btn"].winfo_ismapped(), str(list(_od.glob('*'))))
 # v6.0 — 녹화 시작 버튼은 오늘 기록에 시각을 남기고, 발로란트 연동은 키가 없으면 조용히 실패한다 (크래시 없이)
 D["rec_now"](); pump(100)
 rec = data["days"][TODAY.isoformat()].get("rec") or {}

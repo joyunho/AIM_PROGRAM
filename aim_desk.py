@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v7.1 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
+에임 데스크 v7.2 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
@@ -25,7 +25,7 @@
 · v6.0: 하루 20판(웜업 2 · 프로브 6 · 본훈련 12, 같은 판 3연속 없음) + 발로란트 블록 15분(숫자 4개) · 토 보스전 · 일 주간 결산
 · v6.0: 매일 올리는 시리즈 — DAY N · 녹화 시작 시각 → 명장면·챕터(mm:ss) · 업로드 팩(제목·설명·태그·고정 댓글) · 썸네일 HTML · 16:9 오늘 한 장
 · v6.0: 방송창(AimDesk Broadcast) — 원시 픽셀 프리셋 · 글자 하한 28px · 크로마 · 보스전/주간 보드 · 관문 미터 · 주인공 줄
-· v6.0: 골드 2 → 불멸 다섯 단계 — 에임·게임·랭크 관문을 전부 숫자로, 두 일요일 연속 다 차야 다음 단계 · 발로란트 전적 연동(선택)
+· v6.0: 골드 2 → 불멸 다섯 단계 — 에임·게임·랭크 관문을 전부 숫자로, 두 주 연속 다 차야 다음 단계 · 발로란트 전적 연동(선택)
 · v6.1: 눈에 들어오는 화면 — 회색 글씨 세 단계를 밝히고(dim 3.3:1 → 5.0:1) 기본 글꼴 한 단계 키움, 미룬 판정도 밝은 글씨('프로브 0/6'),
   라이브 줄에 큰 실행 버튼 하나, 루틴 줄은 굵은 막대, 발로 블록 설명은 접음, 옛 죽음 스텝퍼 제거, 방송창 좁은 타일은 두 줄(겹침 버그)
 · v6.2: '계획' 탭 — 달력 하나로 오늘 뭘 하고 · 이번 주가 어떻게 가고 · 몇 달 뒤 어디에 있는지. 처음 켜면 이 탭부터. 화면 말을 쉬운 말로
@@ -33,6 +33,8 @@
 · v7.0: 오늘 탭을 '한 가지만'으로 — 헤드라인 하나(다음 판) · 숫자 하나(6/20) · 버튼 하나. 판정은 타일이 아니라 문장 한 줄,
   ①②③④ 는 히어로 안의 얇은 막대, 나머지(시나리오별 점수·곡선·코치·랭크·트레이너)는 '자세히' 뒤. 헤더는 네 가지, 탭은 다섯
 · v7.1: 아이콘 — 금색 A 모노그램 + 조준점 (app.ico 6장 · 창 아이콘 ICON_B64 도 같은 그림. 32·16px 은 단순화한 그림)
+· v7.2: 저장 위치 — 설정 탭 '기록 파일' 카드에서 기록·업로드 팩·썸네일·주간 결산이 갈 폴더를 고른다 (data["out_dir"], 기본은 기록 파일 옆 '기록')
+· v7.2: 쉬는 날은 월요일 (REST_WD) — 화~금·일 훈련, 토 벤치. 주간 결산은 월요일에 지난 주(월~일)를 마감. 10일 테마 주기는 화~일 5일 × 2주
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
 from __future__ import annotations
@@ -139,7 +141,10 @@ WARMUP_BASE = [("ground", 1), ("float", 1)]                     # 손 깨우기 
 PROBE = list(PROBE_BASE); WARMUP = list(WARMUP_BASE)
 MAIN   = [("ww5", 3), ("popcorn", 3), ("dot", 6), ("drift", 3), ("cts", 2)]   # v3.1 까지의 고정 본훈련 (호환용)
 FRIDAY = [("raw", 12), ("csphere", 12)]                            # v3 의 금요일 컨트롤 데이 (호환용 — v4 부터 금요일도 테마 루틴)
-DAYTYPES = ["v", "v", "v", "v", "v", "b", "r"]                     # 월~금 발로 데이 · 토 벤치마크 · 일 휴식
+REST_WD, BENCH_WD = 0, 5                                          # 쉬는 날 = 월요일 (v7.2 — "쉬는 요일은 무조건 월요일") · 실력 재는 날 = 토요일
+DAYTYPES = ["r", "v", "v", "v", "v", "b", "v"]                     # 월 휴식 · 화~금 발로 데이 · 토 벤치마크 · 일 발로 데이
+_TRAIN_CUM = [sum(1 for t in DAYTYPES[:i + 1] if t == "v") for i in range(7)]   # 요일별 '그 주 훈련일 누적' (월 0 · 화 1 … 금 4 · 토 4 · 일 5)
+TRAIN_PER_WEEK = _TRAIN_CUM[6]
 
 # 본훈련 테마 — 발로란트에 닿는 결(클리킹·스위칭·플릭)을 위주로, 같은 걸 이틀 연속 치지 않게 10일 주기로 돈다.
 # 본훈련 12판. 같은 시나리오가 3판 연속 오지 않게 (2,2,2,2,1,1,1,1) 로 섞는다 — '같은 걸 5판 연속' 이 지루함의 원인이었다.
@@ -156,16 +161,16 @@ MAIN_THEMES_BASE = [
 MAIN_PLAYS = 12                 # 본훈련 판 수 (테마 전부 같아야 세션 길이가 일정하다)
 # 10 훈련일(2주) 주기. 세 가지를 동시에 만족하게 짠 순서다 — ① 같은 테마가 이틀 연속 오지 않고,
 # ② 같은 요일에 2주 연속 같은 테마가 오지 않고, ③ 달력 한 주(월~금) 안에서 5일이 전부 다른 테마다.
-# ③ 때문에 순서가 CYCLE_EPOCH 요일에 묶인다 — 시작 요일을 바꾸면 주기 경계가 주 중간에 걸려 이 순서를 다시 짜야 한다.
+# ③ 때문에 순서가 CYCLE_EPOCH 요일에 묶인다 — 시작 요일이나 쉬는 요일을 바꾸면 5칸 창이 달라져 이 순서를 다시 짜야 한다 (v7.2: 창 = 화~금·일).
 # 구성: 클리킹 4 (정확 2 · 스피드 2) · 스위칭 2 · 약점 2 · 플릭 1 · 순회 1
-CYCLE = ["clk", "swt", "spd", "mix", "clk", "weak", "spd", "flk", "swt", "weak"]
-CYCLE_EPOCH = "2026-09-15"                                          # 화요일 — 주기의 1번 날 (여기부터 CYCLE[0])
+CYCLE = ["clk", "swt", "spd", "mix", "weak", "spd", "clk", "weak", "flk", "swt"]   # 5칸 창(화~일) 둘 다 서로 다른 테마 · 이틀 연속 없음 · 같은 요일 2주 연속 없음
+CYCLE_EPOCH = "2026-09-15"                                          # 화요일 — 주기의 1번 날 (여기부터 CYCLE[0]). 월요일이 쉬는 날이라 화~일 5일 = 주기 절반
 
 def _train_ord(d: date) -> int:
-    """월~금만 세는 일련번호. 주말은 그 주 금요일과 같은 번호(훈련일이 아니라 쓸 일이 없다).
+    """훈련일(DAYTYPES 의 v)만 세는 일련번호. 쉬는 날·벤치 날은 직전 훈련일과 같은 번호(훈련일이 아니라 쓸 일이 없다).
     기준일이 무슨 요일이든 주기가 맞게 돌도록 — 날짜 차이를 7로 나누는 방식은 기준일이 월요일일 때만 맞다."""
     n = d.toordinal() - 1                            # 0 = 0001-01-01 (월요일)
-    return (n // 7) * 5 + min(n % 7, 4)
+    return (n // 7) * TRAIN_PER_WEEK + _TRAIN_CUM[n % 7]
 
 def weak_theme(pb: dict):
     """약점 집중 — 발로란트에 닿는 클리킹·스위칭 서브카테고리 중 가장 약한 둘에서 12판. 기록이 모자라면 None"""
@@ -193,14 +198,15 @@ def theme_line(dkey: str, pb: dict = None) -> str:
     return out
 
 def week_themes(dkey: str, pb: dict = None) -> str:
-    """이번 주 월~금 본훈련 테마 한 줄. '매일 같은 걸 친다'는 느낌을 눈으로 반박하는 용도"""
+    """이번 주 훈련일(화~금·일) 본훈련 테마 한 줄. '매일 같은 걸 친다'는 느낌을 눈으로 반박하는 용도. 쉬는 날·벤치 날엔 비움"""
     d = date.fromisoformat(dkey)
-    if d.weekday() > 4: return ""
+    if DAYTYPES[d.weekday()] != "v": return ""
     mon = d - timedelta(days=d.weekday())
     out = []
-    for i in range(5):
+    for i in range(7):
+        if DAYTYPES[i] != "v": continue
         dd = mon + timedelta(days=i)
-        out.append(("▶" if dd == d else "") + f"{'월화수목금'[i]} {main_theme(dd.isoformat(), pb)[1]}")
+        out.append(("▶" if dd == d else "") + f"{DOWK[i]} {main_theme(dd.isoformat(), pb)[1]}")
     return "이번 주 · " + " · ".join(out)
 
 def daily_challenge(data: dict, dkey: str, pb: dict = None):
@@ -413,7 +419,42 @@ def suggest_target(target, today_best, band, pb=None):
     if today_best is None or today_best < target: return int(target)
     return int(math.ceil(max(target * 1.02, hi or 0)))
 
-def report_dir() -> Path: return DATA_FILE.parent / "기록"
+OUT_DIR = [None]                       # 설정 탭에서 고른 저장 폴더 (None = 기록 파일 옆 '기록'). load_data 가 채운다
+OUT_PATTERNS = ("에임데스크_*.txt", "EP*_업로드.txt", "EP*_썸네일.html", "WEEK_*_결산.txt")   # 앱이 만드는 파일만 — 폴더의 다른 파일은 건드리지 않는다
+def default_report_dir() -> Path: return DATA_FILE.parent / "기록"
+def report_dir() -> Path:
+    """기록 · 업로드 팩 · 썸네일 · 주간 결산이 저장되는 폴더 — 설정 탭 '저장 위치' 로 바꿀 수 있다 (data["out_dir"])"""
+    return Path(OUT_DIR[0]) if OUT_DIR[0] else default_report_dir()
+def dir_writable(p: Path) -> bool:
+    try:
+        p.mkdir(parents=True, exist_ok=True); probe = p / ".aimdesk_write_test"; probe.write_text("x"); probe.unlink(); return True
+    except OSError: return False
+def set_out_dir(d: dict, path):
+    """저장 위치를 바꾼다 — 만들 수 있고 써 볼 수 있는 폴더만 받는다. (성공, 이유)"""
+    if not path:
+        d["out_dir"] = None; OUT_DIR[0] = None; return True, "기본 위치"
+    p = Path(str(path)).expanduser()
+    if not dir_writable(p): return False, "쓸 수 없는 폴더"
+    d["out_dir"] = str(p); OUT_DIR[0] = str(p); return True, str(p)
+def load_out_dir(d: dict):
+    """켤 때 — 저장해 둔 폴더가 지금도 쓸 수 있으면 그곳, 아니면(USB 뽑힘 등) 기본 폴더. 설정값은 지우지 않는다. 쓸 수 있는지 돌려준다"""
+    od = d.get("out_dir")
+    OUT_DIR[0] = str(od) if od and dir_writable(Path(str(od))) else None
+    return not od or OUT_DIR[0] is not None
+def out_dir_files(src: Path) -> list:
+    """폴더 안의 앱 파일들 (기록 · 업로드 팩 · 썸네일 · 주간 결산)"""
+    if not src.is_dir(): return []
+    return sorted({f for pat in OUT_PATTERNS for f in src.glob(pat) if f.is_file()})
+def move_out_files(src: Path, dst: Path):
+    """앱 파일만 옮긴다. 같은 이름이 이미 있으면 건너뛴다 → (옮긴 수, 건너뛴 수)"""
+    import shutil
+    moved = skipped = 0
+    dst.mkdir(parents=True, exist_ok=True)
+    for f in out_dir_files(src):
+        if (dst / f.name).exists(): skipped += 1; continue
+        try: shutil.move(str(f), str(dst / f.name)); moved += 1
+        except OSError: skipped += 1
+    return moved, skipped
 def report_path(dkey: str, dir_=None) -> Path: return (Path(dir_) if dir_ else report_dir()) / f"에임데스크_{dkey}.txt"
 
 def plan_items(dkey: str, pb: dict = None):
@@ -520,7 +561,7 @@ def daily_report(data: dict, dkey: str, plays=None, dt: str = None) -> str:
           "  " + fmt_verdict_line("요즘", V["recent"])]
     chg = day_changes(data, dkey)
     if chg: L.append("오늘 바뀐 것:"); L += [f"  - {x}" for x in chg]
-    L += ["", "[단계]  (골드 2 → 불멸 다섯 단계 — 관문은 앱이 읽는 숫자. 두 일요일 연속 다 차면 다음 단계)"] + ["  " + x for x in stage_lines(data, dkey)]
+    L += ["", "[단계]  (골드 2 → 불멸 다섯 단계 — 관문은 앱이 읽는 숫자. 두 주 연속 다 차면 다음 단계)"] + ["  " + x for x in stage_lines(data, dkey)]
     # ── 판별 기록 ──
     L += ["", "[판별 기록]  시각 · 시나리오 · 점수 · 판정 · 어제까지 평소 범위(판 단위)"]
     if not plays: L.append("  (오늘 판 없음)")
@@ -957,7 +998,7 @@ def load_data() -> dict:
     try: DAY_CUTOFF_H[0] = max(0, min(12, int(d.setdefault("day_cutoff", 5))))
     except (TypeError, ValueError): DAY_CUTOFF_H[0] = 5; d["day_cutoff"] = 5
     MIGRATED[0] = migrate_cutoff(d)                       # 자정에 쪼개졌던 옛 기록 합치기 (한 번만)
-    trainer_load(d)
+    trainer_load(d); load_out_dir(d)
     set_tier(d.setdefault("tier", "n"))                  # 지금 훈련 중인 벤치 단계 (n/i/a)
     d.setdefault("series", {}).setdefault("ep_offset", 0)   # DAY N 시작 오프셋 (새로 시작할 때 이어 셀 수 있게)
     d.setdefault("valo_cfg", {"rid": "", "region": "ap", "key": ""})
@@ -1547,7 +1588,7 @@ def fmt_session(s: dict) -> str:
 def training_days(data: dict) -> set:
     return {d for d, e in data["days"].items() if e.get("first") or e.get("count")}
 
-def streak(days: set, today: date, rest_wd=(6,)):
+def streak(days: set, today: date, rest_wd=(REST_WD,)):
     """(현재 연속 훈련일, 최고 기록). 휴식 요일은 끊지도 더하지도 않는다"""
     cur = 0; d = today
     if d.isoformat() not in days: d -= timedelta(days=1)
@@ -1566,7 +1607,7 @@ def streak(days: set, today: date, rest_wd=(6,)):
         best = max(best, run); prev = dd
     return cur, max(best, cur)
 
-def week_strip(days: set, today: date, rest_wd=(6,)):
+def week_strip(days: set, today: date, rest_wd=(REST_WD,)):
     """이번 주 월~일 각 칸의 상태: done / rest / today / future / miss"""
     mon = today - timedelta(days=today.weekday()); out = []
     for i in range(7):
@@ -2091,8 +2132,8 @@ def verdict_day(data: dict, dkey: str, plays=None, dt: str = None, prev_state=No
     plays = day_plays(data, dkey) if plays is None else [tuple(p) for p in plays]
     dt = dt or day_type_of(dkey); d = date.fromisoformat(dkey); day = data["days"].get(dkey) or {}
     if dt == "r" and not plays:                       # 실제로 친 날이면 아래 정상 판정으로 내려간다
-        wk = [k for k in week_of(dkey) if k < dkey and k in training_days(data)]
-        return _V("rest", "solid", "휴식일", "○", f"이번 주 {len(wk)}일", cap=f"오늘 · {d.month}/{d.day} {DOWK[d.weekday()]}",
+        wk = [k for k in recap_week(dkey) if k < dkey and k in training_days(data)]
+        return _V("rest", "solid", "휴식일", "○", f"{recap_label(dkey)} {len(wk)}일", cap=f"오늘 · {d.month}/{d.day} {DOWK[d.weekday()]}",
                   cap2="손목도 데이터의 일부 — 내일 다시", colk="flat", fill="solid")
     n_pb = sum(1 for _k, _s, kind in day_verdicts(data, dkey, plays) if kind == "pb")
     t = day_value(data, dkey, plays)
@@ -3058,7 +3099,7 @@ def held_days(data: dict, dkey: str, min_ord: int) -> int:
     return (date.fromisoformat(dkey) - date.fromisoformat(since)).days + 1
 
 def _recap_streak(data: dict, dkey: str) -> int:
-    """일요일 결산이 연속 몇 주 저장됐나 (이번 주가 아직 안 닫혔으면 지난 주부터)"""
+    """주간 결산이 연속 몇 주 저장됐나 (이번 주가 아직 안 닫혔으면 지난 주부터)"""
     wks = data.get("weeks") or {}; d = date.fromisoformat(dkey); sun = d + timedelta(days=6 - d.weekday()); n = 0
     for i in range(104):
         if (wks.get(iso_week_id((sun - timedelta(days=7 * i)).isoformat())) or {}).get("pack"): n += 1
@@ -3118,7 +3159,7 @@ def stage_gates(data: dict, dkey: str, idx: int = None):
         rg, _n = _val_field_med(data, dkey, "range"); G.append(_gate_item("game", "사격 ≥ 27/30", ge(rg, 27), fv(rg, "/30")))
         rc = _api_recent(data, 20); acs = rc["acs"] if rc else None; G.append(_gate_item("game", "최근 20판 ACS ≥ 220", ge(acs, 220), fv(acs)))
         hd = held_days(data, dkey, val_rank_ord("Diamond 1")); G.append(_gate_item("rank", "다이아 1 · 14일 유지", hd >= 14, f"{hd}/14일"))
-        rs = _recap_streak(data, dkey); G.append(_gate_item("rank", "일요일 결산 8주 연속", rs >= 8, f"{rs}/8주"))
+        rs = _recap_streak(data, dkey); G.append(_gate_item("rank", "주간 결산 8주 연속", rs >= 8, f"{rs}/8주"))
     elif idx == 3:
         e_i, _n = tier_energy(pb, "i"); all600 = bool(_n == 9 and all((subE(s, pb) or 0) >= 600 for s in SUBS_T["i"]))
         G.append(_gate_item("aim", "인터 650 · 9갈래 600", (e_i or 0) >= 650 and all600, fv(e_i) + (" · 9갈래 ✓" if all600 else f" · {sum(1 for s in SUBS_T['i'] if (subE(s, pb) or 0) >= 600)}/9")))
@@ -3154,7 +3195,7 @@ def stage_lines(data: dict, dkey: str):
     return L
 
 def stage_check(data: dict, dkey: str):
-    """일요일 결산 때 부른다. 관문이 다 찼으면 그 주를 적고, 두 주 연속이면 다음 단계로 → (올랐는가, 지금 단계)"""
+    """쉬는 날 결산 때 부른다. 관문이 다 찼으면 그 주를 적고, 두 주 연속이면 다음 단계로 → (올랐는가, 지금 단계)"""
     st = data.setdefault("stage", {"idx": 0, "since": None, "ok_weeks": []})
     s = stage_status(data, dkey); wid = iso_week_id(dkey)
     if s["n_ok"] < s["total"] or s["final"]: return False, st["idx"]
@@ -3166,7 +3207,7 @@ def stage_check(data: dict, dkey: str):
     bump_ver(); return False, st["idx"]
 
 def week_pack(data: dict, dkey: str) -> str:
-    """일요일 결산 한 장 — 이번 주 숫자 · 관문 · 특별편 · 다음 주 · 주간 영상 제목 후보. 매일 편의 '이번 주 한 장' 재료"""
+    """주간 결산 한 장 — 그 주 숫자 · 관문 · 특별편 · 다음 주 · 주간 영상 제목 후보 (dkey 가 속한 월~일 주). 매일 편의 '이번 주 한 장' 재료"""
     wk = week_range(dkey); wid = iso_week_id(dkey); days_ = data.get("days") or {}
     days = [d for d in wk if d <= dkey and d in days_ and (days_[d].get("first") or days_[d].get("count"))]
     head = f"[{SERIES['title']}] {wid} 결산 · {wk[0][5:].replace('-', '/')} ~ {wk[6][5:].replace('-', '/')}"
@@ -3202,7 +3243,7 @@ def week_pack(data: dict, dkey: str) -> str:
     L += ["", "[관문]"] + stage_lines(data, dkey)
     if stars: L += ["", "[특별편]"] + [f"  {m}" for m in stars]
     nmon = date.fromisoformat(wk[6]) + timedelta(days=1)
-    L += ["", "[다음 주]", "  " + " · ".join(f"{'월화수목금'[i]} {main_theme((nmon + timedelta(days=i)).isoformat(), data.get('pb'))[1]}" for i in range(5)) + " · 토 보스전 18판 · 일 결산"]
+    L += ["", "[다음 주]", "  " + " · ".join(f"{DOWK[i]} " + ("쉼 · 결산" if DAYTYPES[i] == "r" else "보스전 18판" if DAYTYPES[i] == "b" else main_theme((nmon + timedelta(days=i)).isoformat(), data.get('pb'))[1]) for i in range(7))]
     s = stage_status(data, dkey); vt = None
     for d in reversed(wk):
         if d <= dkey and day_val_tier(data, d)[0]: vt = day_val_tier(data, d)[0]; break
@@ -3213,7 +3254,7 @@ def week_pack(data: dict, dkey: str) -> str:
     return "\n".join(L)
 
 def save_week_pack(data: dict, dkey: str, dir_=None) -> Path:
-    """기록/WEEK_YYYY-Www_결산.txt. 저장한 사실도 기록에 남긴다 (관문 '일요일 결산 N주 연속' 이 이걸 센다)"""
+    """기록/WEEK_YYYY-Www_결산.txt. 저장한 사실도 기록에 남긴다 (관문 '주간 결산 N주 연속' 이 이걸 센다)"""
     wid = iso_week_id(dkey)
     p = (Path(dir_) if dir_ else report_dir()) / f"WEEK_{wid}_결산.txt"
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -3221,10 +3262,11 @@ def save_week_pack(data: dict, dkey: str, dir_=None) -> Path:
     data.setdefault("weeks", {}).setdefault(wid, {})["pack"] = dkey
     return p
 
-def sunday_close(data: dict, dkey: str, dir_=None):
-    """일요일 하루 한 번 — 관문 검사(두 주 연속이면 단계 상승) → 결산 파일. (파일, 올랐는가, 단계)"""
-    adv, idx = stage_check(data, dkey)
-    p = save_week_pack(data, dkey, dir_)
+def week_close(data: dict, dkey: str, dir_=None):
+    """쉬는 날 하루 한 번 — 방금 끝난 주(월요일이면 어제까지의 지난 주)를 마감: 관문 검사(두 주 연속이면 단계 상승) → 결산 파일. (파일, 올랐는가, 단계)"""
+    ck = close_key(dkey)
+    adv, idx = stage_check(data, ck)
+    p = save_week_pack(data, ck, dir_)
     return p, adv, idx
 
 
@@ -3281,7 +3323,7 @@ def auto_coach(data: dict, dkey: str, plays=None, dt: str = None) -> str:
     tds = sorted(d for d in training_days(data) if d < dkey and day_type_of(d) == "v")[-3:]
     if len(tds) == 3 and all(len((data["days"][d].get("plays") or [])) < 20 for d in tds): memo.append("3일 연속 20판을 못 채웠습니다 — 오늘은 측정 6판만이라도")
     cur_st, _b = streak(training_days(data), date.fromisoformat(dkey))
-    if cur_st >= 12: memo.append(f"{cur_st}일 연속 — 이번 일요일은 꼭 쉬기")
+    if cur_st >= 12: memo.append(f"{cur_st}일 연속 — 이번 {DOWK[REST_WD]}요일은 꼭 쉬기")
     if memo: L.append("메모 " + " · ".join(memo))
     return "\n".join(L)
 
@@ -3388,6 +3430,18 @@ def week_of(dkey: str):
     d = date.fromisoformat(dkey); mon = d - timedelta(days=d.weekday())
     return [(mon + timedelta(days=i)).isoformat() for i in range((d - mon).days + 1)]
 
+def close_key(dkey: str) -> str:
+    """쉬는 날이 마감하는 주 — 마지막으로 '다 지난' 주의 일요일. 쉬는 날이 월요일이면 어제(일요일), 일요일이면 그날"""
+    d = date.fromisoformat(dkey)
+    return dkey if d.weekday() == 6 else (d - timedelta(days=d.weekday() + 1)).isoformat()
+
+def recap_week(dkey: str):
+    """리캡이 보는 주 — 쉬는 날엔 방금 끝난 주(월~일 전부), 훈련일엔 이번 주 오늘까지"""
+    return week_range(close_key(dkey)) if day_type_of(dkey) == "r" else week_of(dkey)
+
+def recap_label(dkey: str) -> str:
+    return "지난 주" if day_type_of(dkey) == "r" and date.fromisoformat(dkey).weekday() != 6 else "이번 주"
+
 def week_pbs(data: dict, dkey: str):
     wk = week_of(dkey); out = []
     for k in SCEN:
@@ -3436,11 +3490,11 @@ def sleep_effect(data: dict, min_n: int = 5):
     return (a, b, len(hi), len(lo)) if (len(hi) >= min_n and len(lo) >= min_n) else (None, None, len(hi), len(lo))
 
 def weekly_recap(data: dict, dkey: str):
-    wk = [d for d in week_of(dkey) if d < dkey]
+    wk = [d for d in recap_week(dkey) if d < dkey]; lbl = recap_label(dkey)
     days = [data["days"][d] for d in wk if d in data["days"] and (data["days"][d].get("first") or data["days"][d].get("count"))]
-    if not days: return [("이번 주 기록 없음", "sub")]
+    if not days: return [(f"{lbl} 기록 없음", "sub")]
     plays = sum(sum(e["count"].values()) for e in days)
-    out = [(f"이번 주 {len(days)}일 · {plays}판 · PB {len(week_pbs(data, dkey))}개", "sub")]
+    out = [(f"{lbl} {len(days)}일 · {plays}판 · PB {len(week_pbs(data, wk[-1] if wk else dkey))}개", "sub")]
     ser = probe_series(data)
     if len(ser) >= 2:
         last = ser[-1]; prev = next((p_ for p_ in reversed(ser) if p_["date"] <= (date.fromisoformat(last["date"]) - timedelta(days=7)).isoformat()), None)
@@ -4318,7 +4372,7 @@ def main():
         # 달력
         grid = tk.Frame(cbody, bg=C["bg"]); grid.pack(fill="x")
         for i, dow in enumerate("월화수목금토일"):
-            tk.Label(grid, text=dow, font=FCAP, bg=C["bg"], fg=C["gold"] if i == 5 else (C["dim"] if i == 6 else C["sub"])).grid(row=0, column=i, sticky="w", padx=(px(6), 0), pady=(0, px(2)))
+            tk.Label(grid, text=dow, font=FCAP, bg=C["bg"], fg=C["gold"] if i == BENCH_WD else (C["dim"] if i == REST_WD else C["sub"])).grid(row=0, column=i, sticky="w", padx=(px(6), 0), pady=(0, px(2)))
             grid.grid_columnconfigure(i, weight=1, uniform="cal")
         first = date(y, m, 1); start = first - timedelta(days=first.weekday())
         n_rows = ((date(y + (m == 12), (m % 12) + 1, 1) - timedelta(days=1)) - start).days // 7 + 1
@@ -4362,7 +4416,7 @@ def main():
         sg = card(rt); sg.pack(fill="x")
         ss = stage_status(data, today)
         tk.Label(sg, text="골드 2 → 불멸 · 다섯 단계", font=FH, bg=C["card"], fg=C["txt"]).pack(anchor="w")
-        tk.Label(sg, text="관문은 전부 앱이 읽는 숫자. 두 일요일 연속 다 차야 다음 단계", font=FS, bg=C["card"], fg=C["hint"], wraplength=px(390), justify="left").pack(anchor="w", pady=(0, px(4)))
+        tk.Label(sg, text="관문은 전부 앱이 읽는 숫자. 두 주 연속 다 차야 다음 단계 (쉬는 날인 월요일에 지난 주를 마감)", font=FS, bg=C["card"], fg=C["hint"], wraplength=px(390), justify="left").pack(anchor="w", pady=(0, px(4)))
         STAGE_PLAIN = ["첫날 18판 · 훈련 10일 · 발로 블록 8번 · 랭크 카드 5번", "코박스 9갈래 골드 · 헤드샷 25% · 사격 24/30 · 플래 1 2주",
                        "인터 500 · 헤드샷 30% · ACS 220 · 다이아 1 2주 · 결산 8주", "인터 650 · ACS 230 · 40판 승률 53% · 어센 1 30일", "인터 700 · ACS 240 · 60판 승률 55% · 불멸 1 30일"]
         for i, st_ in enumerate(STAGES):
@@ -5878,7 +5932,7 @@ def main():
             except Exception: log_exc("auto_coach_now")
             if coach_cfg.get("ai_auto"): ai_coach_now("done")
         if show:
-            if p: show_toast(f"기록 저장 ✓ 기록\\{p.name}")
+            if p: show_toast(f"기록 저장 ✓ {p.parent.name}\\{p.name}")
             else: show_toast("기록 저장 실패 — aim_desk.log 를 확인하세요", "warn")
         set_trainer_status()
         return p
@@ -5892,7 +5946,8 @@ def main():
     RBtn(trow, "기록 폴더 열기", open_report_dir, padx=10, pady=5).pack(side="left", padx=(8, 0))
     def save_week_now():
         try:
-            _p = save_week_pack(data, today_key[0]); save_data(data); show_toast(f"주간 결산 저장 ✓ 기록\\{_p.name}")
+            _wk = close_key(today_key[0]) if day_state.get("dt") == "r" else today_key[0]      # 쉬는 날엔 방금 끝난 주, 훈련일엔 이번 주 지금까지
+            _p = save_week_pack(data, _wk); save_data(data); show_toast(f"주간 결산 저장 ✓ {_p.parent.name}\\{_p.name}")
         except Exception:
             log_exc("save_week_pack"); show_toast("주간 결산 저장 실패 — aim_desk.log 를 확인하세요", "warn")
     RBtn(trow, "주간 결산", save_week_now, padx=10, pady=5).pack(side="left", padx=(8, 0))
@@ -5996,6 +6051,35 @@ def main():
     fstat.pack(anchor="w", pady=(2, 0))
     frow = tk.Frame(fc, bg=C["card"]); frow.pack(anchor="w", pady=(6, 0))
     RBtn(frow, "폴더 열기", lambda: open_uri(str(DATA_FILE.parent)), padx=10, pady=4).pack(side="left")
+    # 저장 위치 — 기록 텍스트 · 업로드 팩 · 썸네일 · 주간 결산이 가는 폴더 (기본: 기록 파일 옆 '기록')
+    tk.Label(fc, text="저장 위치 — 기록 · 업로드 팩 · 썸네일 · 주간 결산", font=FB, bg=C["card"], fg=C["txt"]).pack(anchor="w", pady=(12, 4))
+    out_lbl = tk.Label(fc, text="", font=FS, bg=C["card"], fg=C["sub"], wraplength=px(268), justify="left"); out_lbl.pack(anchor="w")
+    orow = tk.Frame(fc, bg=C["card"]); orow.pack(anchor="w", pady=(6, 0))
+    def sync_out_lbl():
+        cfg(out_lbl, text=mask_user_path(str(report_dir())) + ("" if OUT_DIR[0] else "  (기본 · 기록 파일 옆)"))
+        if OUT_DIR[0]:
+            if not out_reset_btn.winfo_ismapped(): out_reset_btn.pack(side="left", padx=(8, 0))
+        else: out_reset_btn.pack_forget()
+    def apply_out_dir(path):
+        """저장 위치를 바꾸고(None = 기본) 이전 폴더의 앱 파일을 옮길지 묻는다. 쓸 수 없는 폴더면 그대로 둔다"""
+        old = report_dir()
+        ok, why = set_out_dir(data, path)
+        if not ok:
+            show_toast(f"저장 위치를 바꾸지 못했습니다 — {why}: {mask_user_path(str(path))}", "warn"); return False
+        save_data(data); new = report_dir(); sync_out_lbl(); set_trainer_status()
+        n = len(out_dir_files(old)) if new != old else 0
+        if n and messagebox.askyesno("저장 위치", f"지금까지의 기록 파일 {n}개를 새 폴더로 옮길까요?\n\n{old}\n→ {new}\n\n(같은 이름이 이미 있으면 건너뜁니다 · 다른 파일은 건드리지 않습니다)"):
+            moved, skipped = move_out_files(old, new)
+            show_toast(f"저장 위치 ✓ {mask_user_path(str(new))} · 기록 {moved}개 옮김" + (f" · {skipped}개 건너뜀" if skipped else ""))
+        else: show_toast(f"저장 위치 ✓ {mask_user_path(str(new))}")
+        return True
+    def pick_out_dir():
+        p = filedialog.askdirectory(title="기록을 저장할 폴더 선택", initialdir=str(report_dir() if report_dir().is_dir() else DATA_FILE.parent))
+        if p: apply_out_dir(p)
+    RBtn(orow, "바꾸기…", pick_out_dir, padx=10, pady=4).pack(side="left")
+    RBtn(orow, "열기", open_report_dir, padx=10, pady=4).pack(side="left", padx=(8, 0))
+    out_reset_btn = RBtn(orow, "기본으로", lambda: apply_out_dir(None), padx=10, pady=4)
+    sync_out_lbl()
     stray_box = tk.Frame(fc, bg=C["card"]); stray_box.pack(fill="x")
 
     def refresh_files():
@@ -6044,11 +6128,10 @@ def main():
         try: kept = archive_data()
         except OSError:
             log_exc("reset"); show_toast("보관에 실패해 새로 시작하지 않았습니다"); return
-        sd, nk, cut = data.get("stats_dir"), data.get("next_key"), data.get("day_cutoff", 5)
-        win, seqp = data.get("win"), data.get("seq_popup")
+        keep = {k: data.get(k) for k in ("stats_dir", "next_key", "win", "seq_popup", "theme", "ui_scale", "coach", "bcast", "valo_cfg", "out_dir") if data.get(k) is not None}
+        keep["day_cutoff"] = data.get("day_cutoff", 5)
         data.clear()
-        data.update({"stats_dir": sd, "next_key": nk, "day_cutoff": cut, "win": win, "seq_popup": seqp,
-                     "pb": {}, "days": {}})
+        data.update(keep); data.update({"pb": {}, "days": {}})
         BASELINE[0] = BASE_DATE[0] = None; trainer_clear(data)
         bump_ver(); save_data(data)
         _SCAN_STATE["sig"] = None; _SCORE_CACHE.clear(); TODAY_PLAYS.clear()
@@ -6718,12 +6801,12 @@ def main():
             ss = session_summary(cp, rc)
             cfg(day_state["sess_lbl"], text=fmt_session(ss), fg=C["gold"] if ss["n_pb"] else C["sub"])
         sync_deaths_lbl()
-        if day_state.get("dt") == "r" and not day_state.get("sunday_done") and not ((data.get("weeks") or {}).get(iso_week_id(dkey)) or {}).get("pack"):
-            day_state["sunday_done"] = True                   # 일요일 하루 한 번: 관문 검사(두 주 연속이면 단계 상승) → 주간 결산 파일
+        if day_state.get("dt") == "r" and not day_state.get("week_closed") and not ((data.get("weeks") or {}).get(iso_week_id(close_key(dkey))) or {}).get("pack"):
+            day_state["week_closed"] = True                   # 쉬는 날(월요일) 하루 한 번: 지난 주 마감 — 관문 검사(두 주 연속이면 단계 상승) → 주간 결산 파일
             try:
-                _wp, _adv, _idx = sunday_close(data, dkey); save_data(data)
-                show_toast((f"★ 단계 {_idx} 진입 — {STAGES[_idx]['name']} · " if _adv else "") + f"이번 주 결산 저장 ✓ 기록\\{_wp.name}", "pb" if _adv else "info")
-            except Exception: log_exc("sunday_close")
+                _wp, _adv, _idx = week_close(data, dkey); save_data(data)
+                show_toast((f"★ 단계 {_idx} 진입 — {STAGES[_idx]['name']} · " if _adv else "") + f"{recap_label(dkey)} 결산 저장 ✓ {_wp.parent.name}\\{_wp.name}", "pb" if _adv else "info")
+            except Exception: log_exc("week_close")
         # 코치 카드
         if day_state["coach"]:
             dt_ = day_state["dt"]
@@ -6968,6 +7051,8 @@ def main():
     for _k in ("o", "b"): trainer_txt.bind(f"<Control-{_k}>", on_key)   # Text 클래스의 Ctrl+O(줄 열기)·Ctrl+B(커서) 보다 먼저 — 앱 단축키만 한 번
     legend_lbl.configure(text="F5 다시 읽기 · Ctrl+R 실행 · Ctrl+B 방송 · 1~5 탭 · 6 계획")
 
+    if data.get("out_dir") and not OUT_DIR[0]:
+        root.after(1500, lambda: show_toast(f"저장 위치를 쓸 수 없어 기본 폴더에 저장합니다 — {mask_user_path(str(data.get('out_dir')))}", "warn"))
     root.deiconify(); root.update_idletasks(); win_dark()
     if data["win"].get("zoomed") and sys.platform == "win32":
         try: root.state("zoomed")
@@ -7026,7 +7111,8 @@ def main():
                 hist_cells=hist_cells, det_lines=det_lines, det_title=det_title, grow_title=grow_title, select_day=select_day,
                 hdr_streak=hdr_streak, wk_cv=wk_cv, section_labels=section_labels, advice_lbl=advice_lbl, ben_rows=ben_rows,
                 dth_lbl=dth_lbl, steppers=steppers, on_key=on_key, pick_stats=pick_stats,
-                detail=detail, open_detail=open_detail, spark_cvs=spark_cvs, daych=daych, set_compact=set_compact)
+                detail=detail, open_detail=open_detail, spark_cvs=spark_cvs, daych=daych, set_compact=set_compact,
+                apply_out_dir=apply_out_dir, out_lbl=out_lbl, out_reset_btn=out_reset_btn)
     _DBG.setdefault("counters", {}).setdefault("refresh_tab", 0)
     if os.environ.get("AIMDESK_NO_MAINLOOP"): return
     root.mainloop()
@@ -7164,8 +7250,9 @@ if __name__ == "__main__":
         assert session_summary([("pasu","10.00.00",500),("pasu","10.01.00",520),("pasu","10.02.00",530)], {"pasu":(450,480)})["n_pb"] == 1
         assert fmt_session(session_summary([], {})) == ""
         assert streak({"2026-09-01","2026-09-02","2026-09-03"}, date(2026,9,4)) == (3, 3)
-        assert streak({"2026-09-05","2026-09-07"}, date(2026,9,7))[0] == 2           # 일요일(휴식) 건너뜀
-        ws = week_strip({"2026-09-01"}, date(2026,9,3)); assert len(ws) == 7 and ws[6][1] == "rest" and ws[1][1] == "done" and ws[2][1] == "miss" and ws[3][1] == "today" and ws[4][1] == "future", ws
+        assert streak({"2026-09-06","2026-09-08"}, date(2026,9,8))[0] == 2           # 월요일(휴식) 건너뜀
+        assert streak({"2026-09-05","2026-09-07"}, date(2026,9,7))[0] == 1           # 일요일은 훈련일 — 빠지면 끊긴다
+        ws = week_strip({"2026-09-01"}, date(2026,9,3)); assert len(ws) == 7 and ws[0][1] == "rest" and ws[1][1] == "done" and ws[2][1] == "miss" and ws[3][1] == "today" and ws[4][1] == "future" and ws[6][1] == "future", ws
         assert SAMPLE_DATE not in training_days({"days": {SAMPLE_DATE: {"first": {}, "count": {}, "best": dict(SAMPLE)}, "2026-09-01": {"first": {"pasu": 1}, "count": {"pasu": 1}}}})
         sg = segment_geometry(120, 6); assert len(sg) == 6 and sg[-1][1] <= 120 and max(b-a for a, b in sg) - min(b-a for a, b in sg) <= 1
         assert len(segment_geometry(60, 12)) == 12 and len(segment_geometry(100, 30)) == 12
@@ -7370,27 +7457,30 @@ if __name__ == "__main__":
         ks = key_status("F5", None); assert ks["key"] == "F5" and ks["mismatch"] is None and "여야" in key_line(ks)[0]
         _pls = playlists_for("2026-09-10")
         assert dict(_pls)["AIMDESK Bench"] == [(k, 1) for s in SUBS for k, _ in s[3]] and len(dict(_pls)["AIMDESK Bench"]) == 18 and len(_pls) == 3
-        # 요일 변주: 월~목이 한 주 안에서 모두 다르고, 판 수는 늘 17, 다음 주엔 밀린다
+        # 요일 변주: 한 주의 훈련일(화~금·일)이 모두 다르고, 다음 주엔 밀린다
         _mon = date.fromisoformat("2026-09-07")
-        _wk = [main_theme((_mon + timedelta(days=i)).isoformat(), SAMPLE)[0] for i in range(5)]
+        _vd = [i for i in range(7) if DAYTYPES[i] == "v"]; assert _vd == [1, 2, 3, 4, 6] and DAYTYPES[REST_WD] == "r" and DAYTYPES[BENCH_WD] == "b"
+        _wk = [main_theme((_mon + timedelta(days=i)).isoformat(), SAMPLE)[0] for i in _vd]
         assert len(set(_wk)) == 5, _wk
-        _wk2 = [main_theme((_mon + timedelta(days=7 + i)).isoformat(), SAMPLE)[0] for i in range(5)]
+        _wk2 = [main_theme((_mon + timedelta(days=7 + i)).isoformat(), SAMPLE)[0] for i in _vd]
         assert _wk2 != _wk and len(set(_wk2)) == 5, _wk2
+        assert _train_ord(date(2026, 9, 14)) == _train_ord(date(2026, 9, 13)) and _train_ord(date(2026, 9, 15)) == _train_ord(date(2026, 9, 13)) + 1 and _train_ord(date(2026, 9, 20)) == _train_ord(date(2026, 9, 18)) + 1
         for _t in MAIN_THEMES: assert sum(n for _, n in _t[3]) == MAIN_PLAYS and all(n <= 2 for _, n in _t[3]) and all(_t[3][i][0] != _t[3][i + 1][0] for i in range(len(_t[3]) - 1)), _t[0]
         assert sum(n for _, n in main_theme("2026-09-10", SAMPLE)[3]) == MAIN_PLAYS
         assert main_theme("2026-09-10")[0] != "weak"                      # 기록 없으면 약점 테마로 안 감
-        assert [main_theme((_mon + timedelta(days=i)).isoformat(), SAMPLE)[0] for i in range(5)] == ["clk", "weak", "spd", "flk", "swt"], [main_theme((_mon + timedelta(days=i)).isoformat(), SAMPLE)[0] for i in range(5)]
+        assert [main_theme((_mon + timedelta(days=i)).isoformat(), SAMPLE)[0] for i in _vd] == ["spd", "clk", "weak", "flk", "swt"], [main_theme((_mon + timedelta(days=i)).isoformat(), SAMPLE)[0] for i in _vd]   # 9/8 화 = 주기 6번(index 5) · 9/15 화 = 1번
         _c10 = [main_theme((date.fromisoformat(CYCLE_EPOCH) + timedelta(days=i)).isoformat(), SAMPLE)[0] for i in range(14) if day_type_of((date.fromisoformat(CYCLE_EPOCH) + timedelta(days=i)).isoformat()) == "v"]
         assert _c10 == CYCLE and all(_c10[i] != _c10[i + 1] for i in range(9)) and all(_c10[i] != _c10[i + 5] for i in range(5)), _c10   # 이틀 연속 같은 테마 없음 · 같은 요일 2주 연속 없음
         assert _c10.count("clk") + _c10.count("spd") == 4 and "trk" not in _c10                                      # 발로: 클리킹 4/10, 트래킹은 지정할 때만
         _w = weak_theme(SAMPLE); assert _w and _w[0] == "weak" and sum(n for _, n in _w[3]) == MAIN_PLAYS and all(n <= 2 for _, n in _w[3])
         assert weak_theme({}) is None and weak_theme({"pasu": 700}) is None
-        assert theme_line("2026-09-07", SAMPLE).startswith("오늘 본훈련 · ") and "내일은 " in theme_line("2026-09-07", SAMPLE)   # 월→화
-        assert "3일 뒤는 " in theme_line("2026-09-11", SAMPLE), theme_line("2026-09-11", SAMPLE)             # 금→월
-        assert theme_line("2026-09-11").startswith("오늘 본훈련") and theme_line("2026-09-12") == "" and theme_line("2026-09-13") == ""   # 금요일도 테마 · 토·일은 고정
+        assert theme_line("2026-09-08", SAMPLE).startswith("오늘 본훈련 · ") and "내일은 " in theme_line("2026-09-08", SAMPLE)   # 화→수
+        assert "2일 뒤는 " in theme_line("2026-09-11", SAMPLE), theme_line("2026-09-11", SAMPLE)             # 금→일 (토는 벤치)
+        assert "2일 뒤는 " in theme_line("2026-09-13", SAMPLE), theme_line("2026-09-13", SAMPLE)             # 일→화 (월은 쉼)
+        assert theme_line("2026-09-11").startswith("오늘 본훈련") and theme_line("2026-09-12") == "" and theme_line("2026-09-14") == ""   # 금·일요일도 테마 · 토·월은 고정
         _wt = week_themes("2026-09-09", SAMPLE)
-        assert _wt.startswith("이번 주 · 월 ") and "▶수 " in _wt and _wt.count("·") == 5 and " 금 " in _wt, _wt
-        assert week_themes("2026-09-12") == ""                                   # 토요일엔 안 띄운다
+        assert _wt.startswith("이번 주 · 화 ") and "▶수 " in _wt and _wt.count("·") == 5 and " 금 " in _wt and " 일 " in _wt and "월" not in _wt, _wt
+        assert week_themes("2026-09-12") == "" and week_themes("2026-09-14") == ""   # 토·월엔 안 띄운다
         _ch = daily_challenge({"pb": dict(SAMPLE), "days": {}}, "2026-09-10", dict(SAMPLE))
         assert _ch is None or (_ch["target"] > _ch["cur"] and _ch["sigma"] <= 2.5 and _ch["key"] in dict(SCEN)), _ch
         _far = daily_challenge({"pb": {"ww5": 10}, "days": {}}, "2026-09-10", {"ww5": 10}); assert _far is None   # 너무 멀면 안 낸다
@@ -7440,25 +7530,25 @@ if __name__ == "__main__":
         assert _pr["targets"] == {} and len(_pr["errors"]) == 2, _pr
         assert theme_lookup("트래킹") == "trk" and theme_lookup("클리킹 집중") == "clk" and theme_lookup("전체 순회") == "mix" and theme_lookup("약점") == "weak"
         assert theme_lookup("switching") == "swt" and theme_lookup("??") is None and theme_lookup("") is None
-        assert day_type_of("2026-09-10") == "v" and day_type_of("2026-09-11") == "v" and day_type_of("2026-09-12") == "b" and day_type_of("2026-09-13") == "r"
-        _p = parse_trainer("목표 Pasu 850\n- 도전: Ground 3300점 (지금 3181)\nPopcorn 700\n테마 내일 트래킹\n테마 2026-09-14 약점\n"
+        assert day_type_of("2026-09-10") == "v" and day_type_of("2026-09-11") == "v" and day_type_of("2026-09-12") == "b" and day_type_of("2026-09-13") == "v" and day_type_of("2026-09-14") == "r"
+        _p = parse_trainer("목표 Pasu 850\n- 도전: Ground 3300점 (지금 3181)\nPopcorn 700\n테마 내일 트래킹\n테마 2026-09-15 약점\n"
                            "메모 첫 판 전에 손 풀기\n이상한 줄\n# 주석\n\n목표 Popcorn 없음\ntarget eddie: 800 — 넘으면 Silver", "2026-09-10")
         assert _p["targets"] == {"pasu": 850, "ground": 3300, "eddie": 800} and _p["challenge"] == "ground", _p
-        assert _p["themes"] == {"2026-09-11": "trk", "2026-09-14": "weak"} and _p["note"] == "첫 판 전에 손 풀기", _p
+        assert _p["themes"] == {"2026-09-11": "trk", "2026-09-15": "weak"} and _p["note"] == "첫 판 전에 손 풀기", _p
         assert _p["errors"] == ["이상한 줄"] and _p["remove"] == ["popcorn"], _p
         assert parse_trainer("", "2026-09-10")["targets"] == {} and parse_trainer("테마 내일 ???", "2026-09-10")["errors"] == ["테마 내일 ???"]
         _pb = parse_trainer("테마 2026-09-31 트래킹\n테마 2026-13-01 약점", "2026-09-10"); assert _pb["themes"] == {} and len(_pb["errors"]) == 2   # 달력에 없는 날
-        _tl = {"trainer": {"themes": {"2026-09-31": "trk", "2026-09-14": "trk"}, "targets": {"pasu": "850", "zzz": 1}}}
-        trainer_load(_tl); assert TRAINER["themes"] == {"2026-09-14": "trk"} and TRAINER["targets"] == {"pasu": 850}; trainer_load({})
+        _tl = {"trainer": {"themes": {"2026-09-31": "trk", "2026-09-15": "trk"}, "targets": {"pasu": "850", "zzz": 1}}}
+        trainer_load(_tl); assert TRAINER["themes"] == {"2026-09-15": "trk"} and TRAINER["targets"] == {"pasu": 850}; trainer_load({})
         assert scen_lookup("Pasu는") == "pasu" and scen_lookup("Pasu를") == "pasu" and scen_lookup("Popcorn 오늘") is None and scen_lookup("Ground PB") is None
         assert parse_trainer("Pasu PB 900\nPopcorn 오늘 660\nGround 어제 3181\nPasu는 850", "2026-09-10")["targets"] == {"pasu": 850}   # 답장의 현황 요약 줄은 목표가 아니다
         assert parse_trainer("메모 Pasu 850 넘기, PB 노리기", "2026-09-10")["note"] == "Pasu 850 넘기, PB 노리기"                    # 메모는 대소문자 그대로
         _td = {"pb": dict(SAMPLE), "days": {}}
-        _pp = trainer_apply(_td, "목표 Pasu 850\n도전 Pasu 850\n테마 2026-09-14 트래킹\n메모 손 풀기", "2026-09-10")
+        _pp = trainer_apply(_td, "목표 Pasu 850\n도전 Pasu 850\n테마 2026-09-15 트래킹\n메모 손 풀기", "2026-09-10")
         assert TRAINER["targets"] == {"pasu": 850} and TRAINER["challenge"] == "pasu" and _td["trainer"]["set_on"] == "2026-09-10" and TRAINER["note"] == "손 풀기"
-        assert main_theme("2026-09-14", SAMPLE)[0] == "trk" and main_theme("2026-09-15", SAMPLE)[0] != "trk"     # 그 하루만 지정 (원래 9/14 = weak)
-        assert "트레이너 지정" in theme_line("2026-09-14", SAMPLE) and "트레이너 지정" not in theme_line("2026-09-15", SAMPLE)
-        assert sum(n for _, n in dict(playlists_for("2026-09-14", SAMPLE))["AIMDESK Day"]) == 20
+        assert main_theme("2026-09-15", SAMPLE)[0] == "trk" and main_theme("2026-09-16", SAMPLE)[0] != "trk"     # 그 하루만 지정 (원래 9/15 = clk)
+        assert "트레이너 지정" in theme_line("2026-09-15", SAMPLE) and "트레이너 지정" not in theme_line("2026-09-16", SAMPLE)
+        assert sum(n for _, n in dict(playlists_for("2026-09-15", SAMPLE))["AIMDESK Day"]) == 20
         _ch = daily_challenge(_td, "2026-09-10", dict(SAMPLE))
         assert _ch and _ch["src"] == "trainer" and _ch["key"] == "pasu" and _ch["target"] == 850 and _ch["cur"] == 806 and _ch["gap"] == 44, _ch
         assert fmt_challenge(_ch).startswith("오늘의 도전 · Pasu 850점 — 트레이너 목표 (지금 최고 806)") and "✓ 달성" in fmt_challenge(_ch, 860)
@@ -7466,14 +7556,14 @@ if __name__ == "__main__":
         assert TRAINER["targets"] == {} and TRAINER["challenge"] is None and TRAINER["note"] == "손 풀기"     # 언급 없는 것은 남는다
         _c0 = daily_challenge(_td, "2026-09-10", dict(SAMPLE)); assert _c0 is None or _c0.get("src") != "trainer"
         trainer_apply(_td, "목표 Ground 3300\n목표 Pasu 850", "2026-09-10")
-        _c1 = daily_challenge(_td, "2026-09-15", dict(SAMPLE)); assert _c1 and _c1["key"] == "pasu" and _c1["src"] == "trainer", _c1   # 화(스위칭)엔 Ground 없음 · Pasu 는 프로브라 매일 도전이 된다
+        _c1 = daily_challenge(_td, "2026-09-16", dict(SAMPLE)); assert _c1 and _c1["key"] == "pasu" and _c1["src"] == "trainer", _c1   # 수(스위칭)엔 Ground 없음 (화는 트레이너가 트래킹 지정) · Pasu 는 프로브라 매일 도전이 된다
         trainer_apply(_td, "도전 Snake 3300", "2026-09-10")
-        _c3 = daily_challenge(_td, "2026-09-15", dict(SAMPLE)); assert _c3 is None or _c3["key"] != "snake", _c3       # 지정 도전도 오늘 안 치면 안 낸다
+        _c3 = daily_challenge(_td, "2026-09-16", dict(SAMPLE)); assert _c3 is None or _c3["key"] != "snake", _c3       # 지정 도전도 오늘 안 치면 안 낸다
         _c4 = daily_challenge(_td, "2026-09-12", dict(SAMPLE)); assert _c4 and _c4["key"] == "snake" and _c4["src"] == "trainer", _c4   # 토요일 벤치엔 친다
         trainer_apply(_td, "도전 Snake 없음", "2026-09-10")
         assert suggest_target(850, 861, {"hi": 842}) == 867 and suggest_target(850, 840, {"hi": 842}) == 850 and suggest_target(850, None, None) == 850
         assert suggest_target(850, 861, {"hi": 880}) == 880 and suggest_target(None, 861, {"hi": 842}, 806) == 879 and suggest_target(None, None, None) is None
-        assert plan_count("2026-09-10", SAMPLE) == 20 and plan_count("2026-09-12") == 18 and plan_count("2026-09-13") == 0 and plan_count("2026-09-11") == 20
+        assert plan_count("2026-09-10", SAMPLE) == 20 and plan_count("2026-09-12") == 18 and plan_count("2026-09-14") == 0 and plan_count("2026-09-13") == 20 and plan_count("2026-09-11") == 20
         _rd = {"pb": dict(SAMPLE), "days": {SAMPLE_DATE: dict(blank_day(), best=dict(SAMPLE)),
                "2026-09-09": dict(blank_day(), first={"pasu": 790}, best={"pasu": 800, "ground": 3100}, count={"pasu": 2, "ground": 1},
                                   plays=[["pasu", "10.00.00", 790], ["pasu", "10.02.00", 800], ["ground", "10.04.00", 3100]]),
@@ -7486,18 +7576,18 @@ if __name__ == "__main__":
             assert _sec in _rt, _sec
         assert _rt.startswith("에임 데스크 기록 · 2026-09-10 (목) · 발로 데이 · ") and "판 3/20" in _rt and "수면 7.5h" in _rt and "체감 6/10" in _rt and "죽음 에임 2" in _rt and "[판정]" in _rt, _rt[:400]
         assert "Pasu 900 신기록 (+94)" in _rt and "목표   850 · 오늘   900  ✓ 넘음 · 다음 제안 867" in _rt and "Ground" in _rt and "목표 3300 (300 남음)" in _rt, _rt
-        assert "10:30  Pasu" in _rt and "09-11 금  발로 데이" in _rt and "09-12 토  벤치마크 18개" in _rt and "09-13 일  휴식" in _rt, _rt
-        assert "09-14 월  발로 데이 · 트래킹 집중 (트레이너 지정)" in _rt, _rt
+        assert "10:30  Pasu" in _rt and "09-11 금  발로 데이" in _rt and "09-12 토  벤치마크 18개" in _rt and "09-13 일  발로 데이" in _rt and "09-14 월  휴식" in _rt, _rt
+        assert "09-15 화  발로 데이 · 트래킹 집중 (트레이너 지정)" in _rt, _rt
         _js = json.loads(_rt.split("[데이터]")[1].splitlines()[1]); assert _js["targets"] == {"ground": 3300, "pasu": 850} and _js["today_best"]["pasu"] == 900 and _js["plan"] == 20
-        assert "(오늘 판 없음)" in daily_report({"pb": {}, "days": {}}, "2026-09-13") and "휴식" in daily_report({"pb": {}, "days": {}}, "2026-09-13")
+        assert "(오늘 판 없음)" in daily_report({"pb": {}, "days": {}}, "2026-09-14") and "휴식" in daily_report({"pb": {}, "days": {}}, "2026-09-14")
         with _tf.TemporaryDirectory() as _td2:
             _pth = save_report(_rd, "2026-09-10", dir_=_td2)
             assert _pth == Path(_td2) / "에임데스크_2026-09-10.txt" and _pth.read_bytes()[:3] == b"\xef\xbb\xbf" and "[요약]" in _pth.read_text(encoding="utf-8-sig")
             assert report_path("2026-09-10", _td2) == _pth and not _pth.with_name(_pth.name + ".tmp").exists()
         trainer_clear(_td); assert TRAINER == {"targets": {}, "themes": {}, "note": "", "challenge": None, "set_on": None}
-        assert main_theme("2026-09-14", SAMPLE)[0] == "weak"                                    # 지정이 지워지면 다시 주기대로
+        assert main_theme("2026-09-15", SAMPLE)[0] == "clk"                                     # 지정이 지워지면 다시 주기대로 (9/15 = 주기 1번)
         # v4.0 판정 엔진 — 합성 기록(그날 계획대로 SAMPLE×배율, 판마다 ±0.4% 번갈아)
-        def _syn(days_fac, start="2026-09-14"):
+        def _syn(days_fac, start="2026-09-15"):                 # 화요일부터 (월요일은 쉬는 날)
             dd = {"pb": dict(SAMPLE), "days": {SAMPLE_DATE: dict(blank_day(), best=dict(SAMPLE))}}; d0 = date.fromisoformat(start)
             for off, fac in sorted(days_fac.items()):
                 dk = (d0 + timedelta(days=off)).isoformat()
@@ -7510,26 +7600,26 @@ if __name__ == "__main__":
         assert _median([3, 1, 2]) == 2 and _median([1, 2, 3, 4]) == 2.5 and _median([]) is None and _wa("어제") == "와" and _wa("토요일") == "과"
         _mk = mann_kendall([(i, i * 1.0) for i in range(10)]); assert _mk[0] > 2.3 and _mk[1] == 45 and mann_kendall([(i, 5.0) for i in range(10)]) == (0.0, 0)
         assert theil_sen([(0, 0), (1, 2), (2, 4)]) == 2.0 and theil_sen([(0, 1)]) == 0.0
-        _e = _syn({0: 1.0, 1: 1.0}); _v = verdict_day(_e, "2026-09-15")
+        _e = _syn({0: 1.0, 1: 1.0}); _v = verdict_day(_e, "2026-09-16")
         assert _v["state"] == "flat" and _v["conf"] == "solid" and _v["n"] == 6 and _v["word"] == "어제와 비슷" and _v["glyph"] == "▬" and _v["fill"] == "solid", _v
-        _e = _syn({0: 1.0, 1: 1.08}); _v = verdict_day(_e, "2026-09-15"); assert _v["state"] == "up" and _v["word"] == "어제보다 좋음" and _v["num"].startswith("+") and _v["colk"] == "up", _v
-        _e = _syn({0: 1.0, 1: 0.92}); _v = verdict_day(_e, "2026-09-15"); assert _v["state"] == "down" and _v["word"] == "어제보다 별로" and _v["glyph"] == "▼", _v
-        _e = _syn({0: 1.0, 1: (1.0, 6)}); _v = verdict_day(_e, "2026-09-15"); assert _v["conf"] == "prov" and _v["n"] == 4 and _v["fill"] == "hollow" and "잠정" in _v["cap"], _v
-        _e = _syn({0: 1.0, 1: (1.0, 5)}); _v = verdict_day(_e, "2026-09-15"); assert _v["state"] == "wait" and _v["word"] == "측정 중" and _v["num"] == "3/4쌍", _v
-        _e = _syn({0: 1.0}); _v = verdict_day(_e, "2026-09-14"); assert _v["state"] == "none" and _v["word"] == "오늘이 기준선" and _v["colk"] == "gold", _v
-        _e = _syn({-2: 1.0, 0: 1.0}); _v = verdict_day(_e, "2026-09-14"); assert _v["word"] == "토요일과 비슷" and "(벤치)" in _v["cap"] and _v["prev"] == "2026-09-12", _v
-        _e = _syn({0: 1.0, 1: (1.0, 12)}); _v = verdict_day(_e, "2026-09-15"); assert _v["state"] == "flat" and "어제 12판" in _v["cap2"], _v
-        _v = verdict_day(_syn({}), "2026-09-13"); assert _v["state"] == "rest" and _v["word"] == "휴식일"
-        _e = _syn({i: 1.0 for i in range(12)}); _e["days"].update(_syn({0: 1.0}, "2026-10-05")["days"]); bump_ver()
-        _v = verdict_day(_e, "2026-10-05"); assert _v["state"] == "flat" and "비교할 어제 없음 · 평소 기준" in _v["cap"], _v   # 열흘 쉬고 돌아온 날은 '첫 훈련일'이 아니다 → 평소 기준
-        _e["days"].update(_syn({0: 1.0}, "2026-10-19")["days"]); bump_ver()
-        _v = verdict_day(_e, "2026-10-19"); assert _v["state"] == "wait" and "비교할 어제 없음" in _v["cap"], _v            # 3주 넘게 쉬면 평소 범위도 없다 → 측정 중
-        _v = verdict_day(_syn({0: 1.0, 7: 1.0}), "2026-09-21"); assert _v["word"] == "지난 월요일과 비슷" and _iga("월요일") == "이" and _iga("어제") == "가", _v
-        _e = _syn({0: 1.0, 1: (1.0, 10)}); _v = verdict_day(_e, "2026-09-15"); assert _v["n"] == 6 and "어제 10판" in _v["cap2"], _v   # 같은 지점 = 웜업 뺀 판 수
+        _e = _syn({0: 1.0, 1: 1.08}); _v = verdict_day(_e, "2026-09-16"); assert _v["state"] == "up" and _v["word"] == "어제보다 좋음" and _v["num"].startswith("+") and _v["colk"] == "up", _v
+        _e = _syn({0: 1.0, 1: 0.92}); _v = verdict_day(_e, "2026-09-16"); assert _v["state"] == "down" and _v["word"] == "어제보다 별로" and _v["glyph"] == "▼", _v
+        _e = _syn({0: 1.0, 1: (1.0, 6)}); _v = verdict_day(_e, "2026-09-16"); assert _v["conf"] == "prov" and _v["n"] == 4 and _v["fill"] == "hollow" and "잠정" in _v["cap"], _v
+        _e = _syn({0: 1.0, 1: (1.0, 5)}); _v = verdict_day(_e, "2026-09-16"); assert _v["state"] == "wait" and _v["word"] == "측정 중" and _v["num"] == "3/4쌍", _v
+        _e = _syn({0: 1.0}); _v = verdict_day(_e, "2026-09-15"); assert _v["state"] == "none" and _v["word"] == "오늘이 기준선" and _v["colk"] == "gold", _v
+        _e = _syn({-3: 1.0, 0: 1.0}); _v = verdict_day(_e, "2026-09-15"); assert _v["word"] == "토요일과 비슷" and "(벤치)" in _v["cap"] and _v["prev"] == "2026-09-12", _v
+        _e = _syn({0: 1.0, 1: (1.0, 12)}); _v = verdict_day(_e, "2026-09-16"); assert _v["state"] == "flat" and "어제 12판" in _v["cap2"], _v
+        _v = verdict_day(_syn({}), "2026-09-14"); assert _v["state"] == "rest" and _v["word"] == "휴식일"
+        _e = _syn({i: 1.0 for i in range(12)}); _e["days"].update(_syn({0: 1.0}, "2026-10-06")["days"]); bump_ver()
+        _v = verdict_day(_e, "2026-10-06"); assert _v["state"] == "flat" and "비교할 어제 없음 · 평소 기준" in _v["cap"], _v   # 열흘 쉬고 돌아온 날은 '첫 훈련일'이 아니다 → 평소 기준
+        _e["days"].update(_syn({0: 1.0}, "2026-10-20")["days"]); bump_ver()
+        _v = verdict_day(_e, "2026-10-20"); assert _v["state"] == "wait" and "비교할 어제 없음" in _v["cap"], _v            # 3주 넘게 쉬면 평소 범위도 없다 → 측정 중
+        _v = verdict_day(_syn({0: 1.0, 7: 1.0}), "2026-09-22"); assert _v["word"] == "지난 화요일과 비슷" and _iga("화요일") == "이" and _iga("월요일") == "이" and _iga("어제") == "가", _v
+        _e = _syn({0: 1.0, 1: (1.0, 10)}); _v = verdict_day(_e, "2026-09-16"); assert _v["n"] == 6 and "어제 10판" in _v["cap2"], _v   # 같은 지점 = 웜업 뺀 판 수
         _v = verdict_day(_syn({-2: (1.0, 0)}) if False else _syn({0: 1.0}), "2026-09-19"); assert _v["state"] == "wait" and _v["word"] == "벤치마크 시작 전" and _v["num"] == "0/18", _v
-        _dv = day_value(_syn({1: 1.0}), "2026-09-15"); assert "frog" in _dv and "float" in _dv and "ground" not in _dv, sorted(_dv)   # 클리킹 정확 날: 본훈련의 frog/float 블록은 남고 웜업 1판만 빠진다
-        _e = _syn({-2: 1.0}); _v = verdict_day(_e, "2026-09-12"); assert _v["state"] in ("flat", "up", "down") and _v["word"].startswith("확정") and _v["colk"] == "rank", _v   # 벤치 18/18
-        _e = _syn({-2: (1.0, 5)}); _v = verdict_day(_e, "2026-09-12"); assert _v["state"] == "bench" and _v["word"].startswith("예상") and _v["fill"] == "hollow", _v
+        _dv = day_value(_syn({0: 1.0}), "2026-09-15"); assert "frog" in _dv and "float" in _dv and "ground" not in _dv, sorted(_dv)   # 클리킹 정확 날: 본훈련의 frog/float 블록은 남고 웜업 1판만 빠진다
+        _e = _syn({-3: 1.0}); _v = verdict_day(_e, "2026-09-12"); assert _v["state"] in ("flat", "up", "down") and _v["word"].startswith("확정") and _v["colk"] == "rank", _v   # 벤치 18/18
+        _e = _syn({-3: (1.0, 5)}); _v = verdict_day(_e, "2026-09-12"); assert _v["state"] == "bench" and _v["word"].startswith("예상") and _v["fill"] == "hollow", _v
         _ps = probe_level_series({"days": {SAMPLE_DATE: dict(blank_day(), best=dict(SAMPLE)), "2026-09-15": dict(blank_day(), first={k: SAMPLE[k] * 2 for k in PROBE}), "2026-09-16": dict(blank_day(), first={k: SAMPLE[k] for k in PROBE[:3]})}})
         assert len(_ps) == 1 and _ps[0]["lvl"] == 100.0 and _ps[0]["date"] == "2026-09-15" and _ps[0]["n"] == 6, _ps   # 2배 = +100% (옛 ±30 클램프였다면 30 에서 잘렸다)
         # 이상치는 클램프가 아니라 중앙값이 막는다: 6개 중 하나가 말도 안 되게 크거나 작아도 레벨선은 거의 안 움직인다
@@ -7549,13 +7639,13 @@ if __name__ == "__main__":
         _g = verdict_growth(_syn({i: 1.0 for i in range(9)}), "2026-09-22"); assert _g["state"] == "hold" and _g["word"].startswith("판정까지") and "에너지" in _g["cap2"], _g
         _g = verdict_growth(_syn({i: 1 + 0.01 * i for i in range(30)}), "2026-10-13"); assert _g["state"] == "up" and _g["word"] == "꾸준히 오르는 중" and _g["glyph"] == "↗" and float(_g["num"].rstrip("%")) > 15, _g
         _g = verdict_growth(_syn({i: 1.0 for i in range(30)}), "2026-10-13"); assert _g["state"] == "flat" and _g["word"] == "큰 변화 없음", _g
-        _r = verdict_recent(_syn({i: 1.0 for i in range(8)}), "2026-09-21"); assert _r["state"] == "hold" and _r["word"].startswith("판정까지"), _r
-        _r = verdict_recent(_syn({i: (0.95 if i >= 25 else 1.0) for i in range(30)}), "2026-10-13"); assert _r["state"] == "down" and _r["word"] == "요즘 부진" and float(_r["num"].rstrip("%")) < -3, _r
-        _r = verdict_recent(_syn({i: (0.90 if i == 29 else 1.0) for i in range(30)}), "2026-10-13"); assert _r["state"] == "flat" and _r["word"] == "요즘 평소 흐름", _r
-        _r = verdict_recent(_syn({i: (1.05 if i >= 25 else 1.0) for i in range(30)}), "2026-10-13"); assert _r["state"] == "up" and _r["word"] == "요즘 상승세", _r
-        _e = _syn({0: 1.0, 1: 1.0}); _vv = verdicts(_e, "2026-09-15"); assert _vv is verdicts(_e, "2026-09-15") and set(_vv) == {"day", "grow", "recent"}
+        _r = verdict_recent(_syn({i: 1.0 for i in range(8)}), "2026-09-22"); assert _r["state"] == "hold" and _r["word"].startswith("판정까지"), _r
+        _r = verdict_recent(_syn({i: (0.95 if i >= 24 else 1.0) for i in range(30)}), "2026-10-13");   # 10/9 금 · 10/10 토 · 10/11 일 · 10/13 화 = 최근 5일 중 4일 (10/12 월은 쉼) assert _r["state"] == "down" and _r["word"] == "요즘 부진" and float(_r["num"].rstrip("%")) < -3, _r
+        _r = verdict_recent(_syn({i: (0.90 if i == 28 else 1.0) for i in range(30)}), "2026-10-13"); assert _r["state"] == "flat" and _r["word"] == "요즘 평소 흐름", _r
+        _r = verdict_recent(_syn({i: (1.05 if i >= 24 else 1.0) for i in range(30)}), "2026-10-13"); assert _r["state"] == "up" and _r["word"] == "요즘 상승세", _r
+        _e = _syn({0: 1.0, 1: 1.0}); _vv = verdicts(_e, "2026-09-16"); assert _vv is verdicts(_e, "2026-09-16") and set(_vv) == {"day", "grow", "recent"}
         assert fmt_verdict_line("오늘", _vv["day"]).startswith("오늘 · 어제와 비슷 ▬ ") and "verdict" in session_card(_e, "2026-09-15", "발로 데이")
-        assert "[판정]" in daily_report(_e, "2026-09-15") and "오늘 · 어제와 비슷" in daily_report(_e, "2026-09-15")
+        assert "[판정]" in daily_report(_e, "2026-09-16") and "오늘 · 어제와 비슷" in daily_report(_e, "2026-09-16")
         # v4.2 훈련일 경계(새벽 5시) — 자정을 넘긴 세션이 한 날로 모인다
         assert DAY_CUTOFF_H[0] == 5
         assert t_key("23.50.00") < t_key("00.10.00") and t_key("04.59.59") < t_key("05.00.00") + 24 * 3600
@@ -7580,7 +7670,7 @@ if __name__ == "__main__":
         _op = {"pb": dict(SAMPLE), "days": {"2026-09-16": dict(blank_day(), plays=[["ww5", "00.10.00", 1200], ["dot", "00.12.00", 900]])}}
         _n_off, _k_off = off_plan_plays(_op, "2026-09-16", pb=SAMPLE)      # 9/16 수 = 스위칭 집중 (ww5t 없음)
         assert (_n_off, _k_off) == (1, ["ww5"]) and "계획 밖 1판" in fmt_off_plan(_n_off, _k_off) and fmt_off_plan(0, []) == ""
-        assert off_plan_plays({"pb": {}, "days": {}}, "2026-09-13")[0] == 0        # 휴식일은 계획이 없다
+        assert off_plan_plays({"pb": {}, "days": {}}, "2026-09-14")[0] == 0        # 휴식일(월)은 계획이 없다
         # 자정에 쪼개진 기록 합치기 — 사용자 사례(워밍업 4판은 전날, 나머지 23판은 자정 뒤)
         _seq = [k for k, n in dict(playlists_for("2026-09-15", SAMPLE))["AIMDESK Day"] for _ in range(n)]
         _mg = {"pb": dict(SAMPLE), "days": {
@@ -7617,7 +7707,7 @@ if __name__ == "__main__":
                 cur += timedelta(days=1)
             bump_ver(); return dd, (cur - timedelta(days=1)).isoformat()
         BASELINE[0] = {k: int(SAMPLE[k] * 0.7) for k in PROBE}; BASE_DATE[0] = "2026-09-16"
-        for _nd, _eg, _er in ((1, 21, 12), (5, 16, 7), (10, 11, 2), (18, 1, None)):
+        for _nd, _eg, _er in ((1, 21, 11), (5, 17, 7), (10, 11, 1), (18, 1, None)):     # 훈련일 = 화~금·토·일 (월만 쉼) 기준 달력일
             _dd, _ld = _grow_days(_nd)
             _g, _r2 = verdict_growth(_dd, _ld), verdict_recent(_dd, _ld)
             assert _g["word"] == f"판정까지 {_eg}일", (_nd, _g["word"])
@@ -7632,8 +7722,8 @@ if __name__ == "__main__":
         bump_ver()
         assert (_cur - date.fromisoformat(_ld)).days == 11 and verdict_growth(_dd, _cur.isoformat())["state"] != "hold"
         # 휴식일에 실제로 쳤으면 '훈련 안 함' 이라고 하지 않는다
-        _sun = "2026-09-20"
-        assert day_type_of(_sun) == "r"
+        _sun = "2026-09-21"                                                        # 월요일 = 쉬는 날
+        assert day_type_of(_sun) == "r" and day_type_of("2026-09-20") == "v"
         _rd = {"pb": {}, "days": {_sun: dict(blank_day(), plays=[[k, "20.00.00", SAMPLE[k]] for k in PROBE], first={k: SAMPLE[k] for k in PROBE})}}
         bump_ver(); assert verdict_day(_rd, _sun)["word"] != "휴식일"
         assert verdict_day({"pb": {}, "days": {}}, _sun)["word"] == "휴식일"
@@ -7807,12 +7897,15 @@ if __name__ == "__main__":
         _st = {"pb": dict(SAMPLE), "days": {}, "series": {"ep_offset": 0}}
         BASE_DATE[0] = "2026-09-14"; BASELINE[0] = dict(SAMPLE); bump_ver()
         _s0 = stage_status(_st, "2026-09-14"); assert _s0["idx"] == 0 and _s0["total"] == 4 and _s0["n_ok"] == 1 and fmt_stage_chip(_s0) == "단계 0 · 관문 1/4", [(g["label"], g["ok"]) for g in _s0["gates"]]
-        _dks = [d for d in (date(2026, 9, 14) + timedelta(days=i) for i in range(20)) if d.weekday() < 5][:11]       # 기준 측정일 + 훈련 10일
+        _dks = [d for d in (date(2026, 9, 14) + timedelta(days=_j) for _j in range(20)) if DAYTYPES[d.weekday()] == "v" or d == date(2026, 9, 14)][:11]       # 기준 측정일(9/14 월) + 훈련 10일 (화~금·일)
         for _i, _d in enumerate(_dks):
             _st["days"][_d.isoformat()] = dict(blank_day(), plays=[["pasu", "20.01.00", 700]], count={"pasu": 1}, first={"pasu": 700}, best={"pasu": 700},
                                               val={"range": 22 + (_i % 3), "dm_k": 20, "dm_d": 18, "dm_hs": 24.0, "skip": False},
                                               rank={"tier": "골드 2", "rr": 10, "games": 2, "why": "aim" if _i % 2 else "pos"})
-        bump_ver(); _lk = _dks[-1].isoformat(); assert _lk == "2026-09-28"
+        assert _dks[-1].isoformat() == "2026-09-27"                                                                      # 11번째 = 9/27 일 (월요일 둘을 건너뜀)
+        _st["days"]["2026-09-29"] = dict(blank_day(), plays=[["pasu", "20.01.00", 700]], count={"pasu": 1}, first={"pasu": 700}, best={"pasu": 700},   # W40 의 훈련 하루 (결산 검사용)
+                                         val={"range": 23, "dm_k": 20, "dm_d": 18, "dm_hs": 24.0, "skip": False}, rank={"tier": "골드 2", "rr": 10, "games": 2, "why": "pos"})
+        bump_ver(); _lk = "2026-09-29"
         _s0 = stage_status(_st, _lk); assert _s0["n_ok"] == 4 and _s0["total"] == 4 and _s0["by"]["game"] == (1, 1), [(g["label"], g["ok"], g["val"]) for g in _s0["gates"]]
         assert stage_lines(_st, _lk)[0].startswith("단계 0 · 출발선 — 재고 시작한다") and all(x.startswith("  ✓") for x in stage_lines(_st, _lk)[1:5])
         assert "[단계]" in daily_report(_st, _lk) and "관문 4/4" in daily_report(_st, _lk)
@@ -7833,14 +7926,18 @@ if __name__ == "__main__":
         assert stage_check(_st, "2026-10-18") == (False, 4)                                                              # 마지막 단계는 더 오르지 않는다
         _st["stage"] = {"idx": 0, "since": None, "ok_weeks": []}; _st.pop("valo"); bump_ver()
         _wp = week_pack(_st, "2026-10-04")
-        assert _wp.startswith("[Road to Immortal] 2026-W40 결산 · 09/28 ~ 10/04 · DAY ") and "[이번 주]" in _wp and "훈련 1일 · 1판" in _wp and "발로 블록 1/1일 · 사격 중앙 23/30 · DM HS% 24" in _wp and "랭크 골드 2 · RR +10 · 판 2 · 죽은 이유 피크·위치 1" in _wp and "[관문]" in _wp and "[다음 주]" in _wp and "토 보스전 18판 · 일 결산" in _wp and "[제목 후보]" in _wp and "W40 결산 — 골드 2 · 관문 4/4" in _wp, _wp
+        assert _wp.startswith("[Road to Immortal] 2026-W40 결산 · 09/28 ~ 10/04 · DAY ") and "[이번 주]" in _wp and "훈련 1일 · 1판" in _wp and "발로 블록 1/1일 · 사격 중앙 23/30 · DM HS% 24" in _wp and "랭크 골드 2 · RR +10 · 판 2 · 죽은 이유 피크·위치 1" in _wp and "[관문]" in _wp and "[다음 주]" in _wp and "월 쉼 · 결산" in _wp and "토 보스전 18판" in _wp and "· 일 " in _wp.split("[다음 주]")[1].split("\n")[1] and "[제목 후보]" in _wp and "W40 결산 — 골드 2 · 관문 4/4" in _wp, _wp
         assert "훈련 기록 없음" in week_pack({"pb": {}, "days": {}, "series": {"ep_offset": 0}}, "2026-10-04")
         import tempfile as _tf
         with _tf.TemporaryDirectory() as _wd:
             _wpp = save_week_pack(_st, "2026-10-04", dir_=_wd); assert _wpp.name == "WEEK_2026-W40_결산.txt" and _wpp.read_text(encoding="utf-8-sig").startswith("[Road to Immortal]")
             assert _st["weeks"]["2026-W40"]["pack"] == "2026-10-04" and _recap_streak(_st, "2026-10-04") == 1 and _recap_streak(_st, "2026-10-11") == 1 and _recap_streak(_st, "2026-10-18") == 0
-            _p2, _adv, _idx = sunday_close(_st, "2026-10-11", dir_=_wd); assert _p2.name == "WEEK_2026-W41_결산.txt" and (_adv, _idx) == (False, 0) and _st["stage"]["ok_weeks"] == ["2026-W41"]
+            _p2, _adv, _idx = week_close(_st, "2026-10-11", dir_=_wd); assert _p2.name == "WEEK_2026-W41_결산.txt" and (_adv, _idx) == (False, 0) and _st["stage"]["ok_weeks"] == ["2026-W41"]
             assert _recap_streak(_st, "2026-10-11") == 2
+            assert close_key("2026-10-19") == "2026-10-18" and close_key("2026-10-18") == "2026-10-18" and close_key("2026-10-21") == "2026-10-18"
+            _p3, _adv3, _idx3 = week_close(_st, "2026-10-19", dir_=_wd)               # 월요일(쉬는 날)엔 지난 주(10/12~10/18)를 마감한다
+            assert _p3.name == "WEEK_2026-W42_결산.txt" and _st["weeks"]["2026-W42"]["pack"] == "2026-10-18" and _recap_streak(_st, "2026-10-19") == 3, (_p3.name, _recap_streak(_st, "2026-10-19"))
+            assert recap_label("2026-10-19") == "지난 주" and recap_label("2026-10-20") == "이번 주" and recap_week("2026-10-19") == week_range("2026-10-18")
         _measured(); bump_ver()
         # ── v7: 판정 한 문장 ──
         _mk = lambda st, colk, word, num, rs=None, rw="", n_pb=0: {"day": {"state": st, "colk": colk, "word": word, "num": num, "n_pb": n_pb}, "recent": {"state": rs, "word": rw, "glyph": "▲"}, "grow": {}}
@@ -7851,6 +7948,19 @@ if __name__ == "__main__":
         assert verdict_sentence(_mk("bench", "rank", "예상 Silver", "Gold까지 34"))[0] == "● 예상 Silver · Gold까지 34"
         for _bad in ("판정까지", "노비스", "관문", "프로브"): assert _bad not in verdict_sentence(_mk("wait", "dim", "측정 중", "0/4쌍"), 0)[0]
         assert verdict_sentence(_mk("wait", "dim", "측정 중", "0/4쌍"), 0)[0].startswith("○ 아직 안 쳤어요")
+        # ── v7.2: 저장 위치 ──
+        _o = {"out_dir": None}; _tdo = Path("/tmp/aimdesk_selftest_out"); _tdo2 = Path("/tmp/aimdesk_selftest_out2")
+        import shutil as _sh
+        for _d_ in (_tdo, _tdo2): _sh.rmtree(_d_, ignore_errors=True)
+        assert set_out_dir(_o, str(_tdo))[0] and report_dir() == _tdo and _o["out_dir"] == str(_tdo) and _tdo.is_dir()
+        assert report_path("2026-09-10") == _tdo / "에임데스크_2026-09-10.txt"
+        (_tdo / "에임데스크_2026-09-10.txt").write_text("x"); (_tdo / "EP001_2026-09-10_업로드.txt").write_text("x"); (_tdo / "메모.txt").write_text("x")
+        assert move_out_files(_tdo, _tdo2) == (2, 0) and (_tdo2 / "EP001_2026-09-10_업로드.txt").exists() and (_tdo / "메모.txt").exists() and not (_tdo / "에임데스크_2026-09-10.txt").exists()
+        (_tdo / "에임데스크_2026-09-10.txt").write_text("y"); assert move_out_files(_tdo, _tdo2) == (0, 1)     # 같은 이름은 건너뛴다
+        assert set_out_dir(_o, "/proc/aimdesk_nope")[0] is False and _o["out_dir"] == str(_tdo)              # 못 쓰는 폴더는 거절, 설정 유지
+        assert load_out_dir({"out_dir": "/proc/aimdesk_nope"}) is False and OUT_DIR[0] is None                # 켤 때 못 쓰면 기본으로
+        assert set_out_dir(_o, None) == (True, "기본 위치") and _o["out_dir"] is None and report_dir() == DATA_FILE.parent / "기록"
+        for _d_ in (_tdo, _tdo2): _sh.rmtree(_d_, ignore_errors=True)
         # ── v7.1: 창 아이콘 — 64px PNG (exe 의 app.ico 와 같은 그림) ──
         import base64 as _b64, struct as _st
         _ic = _b64.b64decode(ICON_B64); assert _ic[:8] == b"\x89PNG\r\n\x1a\n"; assert _st.unpack(">II", _ic[16:24]) == (64, 64)
@@ -7868,6 +7978,6 @@ if __name__ == "__main__":
         assert ai_coach_parse({"stop_reason": "refusal", "stop_details": {"category": "x"}, "content": []})[0] is None and ai_coach_parse({"content": []})[1] == "빈 답장"
         assert ai_coach(_ac, _lk, key="") == (False, "API 키 없음", None)
         trainer_clear(_ac); bump_ver()
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK")
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK")
         sys.exit(0)
     main()
