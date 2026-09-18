@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v6.2 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
+에임 데스크 v6.3 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
@@ -29,6 +29,7 @@
 · v6.1: 눈에 들어오는 화면 — 회색 글씨 세 단계를 밝히고(dim 3.3:1 → 5.0:1) 기본 글꼴 한 단계 키움, 미룬 판정도 밝은 글씨('프로브 0/6'),
   라이브 줄에 큰 실행 버튼 하나, 루틴 줄은 굵은 막대, 발로 블록 설명은 접음, 옛 죽음 스텝퍼 제거, 방송창 좁은 타일은 두 줄(겹침 버그)
 · v6.2: '계획' 탭 — 달력 하나로 오늘 뭘 하고 · 이번 주가 어떻게 가고 · 몇 달 뒤 어디에 있는지. 처음 켜면 이 탭부터. 화면 말을 쉬운 말로
+· v6.3: 밝은 테마(기본) — 도구 탭에서 어두움으로. 방송창은 늘 어두운 고대비. 자동 코치(앱 규칙, 매일 목표·테마·메모) · AI 코치(Claude, 선택)
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
 from __future__ import annotations
@@ -958,6 +959,7 @@ def load_data() -> dict:
     d.setdefault("series", {}).setdefault("ep_offset", 0)   # DAY N 시작 오프셋 (새로 시작할 때 이어 셀 수 있게)
     d.setdefault("valo_cfg", {"rid": "", "region": "ap", "key": ""})
     _bc = d.setdefault("bcast", {}); _bc.setdefault("preset", "card"); _bc.setdefault("frameless", False); _bc.setdefault("chroma", False); _bc.setdefault("open", True)
+    d.setdefault("theme", "light")                       # v6.3: 기본 밝은 테마 (도구 탭에서 어두움으로)
     # 출발선: 하드코딩이 아니라 사용자가 직접 측정한 점수. 없으면 첫 훈련일이 '기준 측정일'이 된다
     b = d.get("base") or {}
     BASELINE[0] = dict(b.get("scores") or {}) or None
@@ -1252,8 +1254,8 @@ RANK_TIER = {n: t for t in TIERS for n in TIERS[t][2]}
 
 def rank_of(e):
     if e is None: return ("—", C["dim"])
-    for t, n, c in RANKS:
-        if e >= t: return (n, c)
+    for t, n, _c in RANKS:
+        if e >= t: return (n, RANKC[RANK_IDX[n]])
     return ("Unranked", C["dim"])
 
 def sub_of(key):
@@ -3223,6 +3225,95 @@ def sunday_close(data: dict, dkey: str, dir_=None):
     return p, adv, idx
 
 
+
+# ══════════════════ 자동 코치 · AI 코치 (v6.3) ══════════════════
+# "너가 기록을 보고 내 훈련을 조절해 줄 순 없어?" — 두 가지 길, 둘 다 트레이너 답장과 같은 형식의 글을 만들어 같은 길(trainer_apply)로 적용한다.
+#  ① 자동 코치: 앱 안의 규칙. 네트워크 없음. 매일 시작 때와 루틴이 끝났을 때 한 번씩.
+#     목표 = 평소 범위 위끝 · 넘은 날은 ×1.02 와 위끝 중 큰 쪽 · 못 넘으면 유지 · PB+5% 까지.
+#     테마 = 가장 약한 갈래가 두 풀런 연속 같으면 다음 '전체 순회' 자리에 '약점'. 메모 = 부진 신호 · 3일 연속 미완 · 12일 연속.
+#  ② AI 코치(선택): 오늘 기록 파일을 그대로 Claude 에 보내 답장을 받아 적용. API 키가 있어야 하고 요청마다 요금이 든다.
+CLAUDE_API = "https://api.anthropic.com/v1/messages"
+CLAUDE_MODEL = "claude-opus-5"
+COACH_SYSTEM = ("당신은 발로란트 에임 코치다. 아래는 훈련 앱이 만든 오늘 기록이다. 기록에 있는 숫자만 근거로 내일을 정하라.\n"
+                "답은 아래 형식의 줄만 쓴다. 다른 문장은 쓰지 않는다 (설명은 '메모' 한 줄에).\n"
+                "목표 <시나리오> <점수>   ← 측정 6개(1w4ts·Pasu·Popcorn·EddieTS·DriftTS·ControlTS) 중 바꿀 것만. 한 번에 3% 넘게 올리지 말고, 못 넘은 목표는 유지\n"
+                "도전 <시나리오> <점수>   ← 오늘의 도전 하나 (선택)\n"
+                "테마 내일 <클리킹|트래킹|스위칭|전체|약점>   ← 바꿀 이유가 있을 때만\n"
+                "메모 <한 줄>   ← 내일 가장 중요한 한 가지, 30자 안팎")
+
+def _cycle_theme_id(dkey: str) -> str:
+    d = date.fromisoformat(dkey)
+    return CYCLE[(_train_ord(d) - _train_ord(date.fromisoformat(CYCLE_EPOCH))) % len(CYCLE)]
+
+def _next_vday(dkey: str):
+    d = date.fromisoformat(dkey)
+    for i in range(1, 8):
+        nd = (d + timedelta(days=i)).isoformat()
+        if day_type_of(nd) == "v": return nd
+    return None
+
+def auto_coach(data: dict, dkey: str, plays=None, dt: str = None) -> str:
+    """규칙 코치 — 트레이너 답장 형식의 글. 정할 게 없으면 빈 문자열"""
+    if BASE_DATE[0] is None or dkey == BASE_DATE[0]: return ""
+    plays = day_plays(data, dkey) if plays is None else [tuple(p) for p in plays]
+    dt = dt or day_type_of(dkey)
+    day = (data.get("days") or {}).get(dkey) or {}; best = day.get("best") or {}; pb = data.get("pb") or {}
+    L = []
+    for k in PROBE:                                                     # 목표: 측정 6개
+        band = scen_band(data, k, dkey)
+        if not band: continue
+        cur = TRAINER["targets"].get(k); b = best.get(k)
+        if cur is None: t = int(round(band["hi"]))
+        elif b is not None and b >= cur: t = max(int(round(cur * 1.02)), int(round(band["hi"])))
+        else: t = int(cur)
+        if pb.get(k): t = min(t, int(round(pb[k] * 1.05)))
+        if t > 0 and t != cur: L.append(f"목표 {sname(k)} {t}")
+    nd = _next_vday(dkey); bd = bench_days(data)                          # 테마: 약점이 두 풀런 연속 같으면
+    if nd and len(bd) >= 2 and TRAINER["themes"].get(nd) is None and _cycle_theme_id(nd) == "mix":
+        w1 = weakest_link(data["days"][bd[-1][0]].get("best") or {}); w2 = weakest_link(data["days"][bd[-2][0]].get("best") or {})
+        if w1 and w2 and w1["sub"] == w2["sub"]: L.append("테마 내일 약점")
+    memo = []                                                           # 메모: 신호가 있을 때만
+    V = verdicts(data, dkey, dt, plays)
+    if V["recent"]["state"] == "down": memo.append("요즘 부진 신호 — 내일은 워밍업을 두 배로, 본훈련은 점수를 보지 말고 감각만")
+    tds = sorted(d for d in training_days(data) if d < dkey and day_type_of(d) == "v")[-3:]
+    if len(tds) == 3 and all(len((data["days"][d].get("plays") or [])) < 20 for d in tds): memo.append("3일 연속 20판을 못 채웠습니다 — 오늘은 측정 6판만이라도")
+    cur_st, _b = streak(training_days(data), date.fromisoformat(dkey))
+    if cur_st >= 12: memo.append(f"{cur_st}일 연속 — 이번 일요일은 꼭 쉬기")
+    if memo: L.append("메모 " + " · ".join(memo))
+    return "\n".join(L)
+
+def ai_coach_request(report: str, key: str):
+    """(url, headers, body) — Messages API 원형 HTTP. 거절 시 서버가 다른 모델로 이어 답하게(fallbacks) 둔다"""
+    body = {"model": CLAUDE_MODEL, "max_tokens": 4000, "system": COACH_SYSTEM, "fallbacks": "default",
+            "messages": [{"role": "user", "content": report}]}
+    hdr = {"content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01",
+           "anthropic-beta": "server-side-fallback-2026-07-01", "User-Agent": "AimDesk"}
+    return CLAUDE_API, hdr, body
+
+def ai_coach_parse(j: dict):
+    """응답 → (답장 글, 오류). 거절이면 (None, 이유)"""
+    if j.get("stop_reason") == "refusal":
+        return None, "코치가 답을 거절했습니다" + (f" ({(j.get('stop_details') or {}).get('category')})" if (j.get("stop_details") or {}).get("category") else "")
+    text = "\n".join((b.get("text") or "") for b in (j.get("content") or []) if b.get("type") == "text").strip()
+    return (text, None) if text else (None, "빈 답장")
+
+def ai_coach(data: dict, dkey: str, plays=None, dt: str = None, key: str = None, timeout: float = 90.0):
+    """오늘 기록을 보내고 답장을 받는다 → (성공, 답장 또는 오류 문구, usage). 네트워크를 타므로 GUI 는 스레드로 부른다"""
+    key = (key or "").strip()
+    if not key: return False, "API 키 없음", None
+    url, hdr, body = ai_coach_request(daily_report(data, dkey, plays, dt), key)
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=hdr, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r: j = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try: msg = ((json.loads(e.read().decode("utf-8")).get("error") or {}).get("message") or "")
+        except Exception: msg = ""
+        return False, {401: "API 키가 틀렸습니다", 403: "API 키 권한 없음", 429: "요청 한도 — 잠시 뒤 다시", 529: "서버 혼잡 — 잠시 뒤 다시"}.get(e.code, f"오류 {e.code}") + (f" · {msg[:80]}" if msg else ""), None
+    except (urllib.error.URLError, TimeoutError, OSError) as e: return False, f"연결 실패 — {getattr(e, 'reason', e)}", None
+    except ValueError: return False, "응답 형식 오류", None
+    text, err = ai_coach_parse(j)
+    return (True, text, j.get("usage")) if text is not None else (False, err, j.get("usage"))
+
 def routine_complete(day: dict, dt: str, dkey: str = None, pb: dict = None) -> bool:
     if dt == "b": return all(day.get("best", {}).get(k) is not None for k in tier_keys())
     if dt != "v": return False
@@ -3763,12 +3854,30 @@ ICON_B64 = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAACkUlEQVR4nO1bwWrDMAxN
 # 판정 색 — up/flat/down 은 히어로 '면'에 깔리고 글자는 onfill. 빨강(val)과 온도를 달리해 '발로 그룹색 ≠ 별로'.
 VERDICT_C = {"up": "#4ED490", "flat": "#8CA0B3", "down": "#F0654F", "onfill": "#0B0E11", "up_bg": "#122A1E", "flat_bg": "#1D242C", "down_bg": "#2A1512"}
 VERDICT_C_BROADCAST = {"up": "#63E6A6", "flat": "#B7C6D3", "down": "#FF8A70", "onfill": "#0B0E11", "up_bg": "#17392A", "flat_bg": "#252E38", "down_bg": "#3A1E1A"}
+VERDICT_C_LIGHT = {"up": "#177A48", "flat": "#5F6C79", "down": "#C9372C", "onfill": "#FFFFFF", "up_bg": "#DDF3E6", "flat_bg": "#E9EDF2", "down_bg": "#FBE3E0"}
+C_HC_LIGHT = {"sub": "#3C4854", "hint": "#4A5765", "dim": "#55626F", "wait": "#2B3540", "line": "#B9C3CE", "card2": "#E1E6EC", "c3": "#D0D7DF",
+              "val": "#B0262E", "ow": "#2451B8", "ok": "#1E7A46", "gold": "#8F5E0F"}
+RANKC_HC_LIGHT = ["#5C6470", "#8F4A16", "#4F5F6F", "#8F5E0F"]
+VERDICT_C_HC_LIGHT = {"up": "#1E7A46", "flat": "#4A5765", "down": "#B0262E", "onfill": "#FFFFFF", "up_bg": "#D2EEDD", "flat_bg": "#E1E6EC", "down_bg": "#F8D9D5"}
 # v6.1 — 회색 글씨 세 단계를 전부 밝혔다 (sub 4.9:1 → 7.4:1, dim 3.3:1 → 5.0:1). 어두운 회색은 1080p 모니터에서 '없는 글씨'였다.
 # wait = 판정을 미루는 동안의 큰 글씨 — 판정색은 아니지만 '비어 있음'이 아니라 '읽으라는 글'이라 밝게
-C = {"bg":"#0B0E11","card":"#14191F","card2":"#1D242C","c3":"#242C35","line":"#2B3540",
-     "txt":"#EDF1F5","sub":"#A7B6C6","dim":"#7A8A9A","hint":"#93A3B3","wait":"#C9D3DD",
-     "val":"#E8453A","ow":"#3B87F7","ok":"#4ED490","gold":"#F5C24B"}
-RANKC = ["#98A2AC", "#E08A3C", "#C9D6E2", "#F5C24B"]
+# v6.3 — 테마 두 벌. 위젯은 만들 때 색이 정해지므로 apply_theme() 는 창을 만들기 전에 한 번. 방송창은 테마와 무관하게 늘 어두운 고대비(BC).
+# 색은 전부 키로만 쓴다 (onfill = 색 채움 위의 글자, flash = 판정이 바뀌는 순간, gold_bg = 금색 배경 칸, ok_bg = 초록 버튼 배경 …)
+THEME_DARK = {"bg":"#0B0E11","card":"#14191F","card2":"#1D242C","c3":"#242C35","line":"#2B3540",
+              "txt":"#EDF1F5","sub":"#A7B6C6","dim":"#7A8A9A","hint":"#93A3B3","wait":"#C9D3DD",
+              "val":"#E8453A","ow":"#3B87F7","ok":"#4ED490","gold":"#F5C24B",
+              "onfill":"#0B0E11","flash":"#FFFFFF","pb_bg":"#241E0E","warn_bg":"#2A1512","ok_bg":"#1B2A22","ok_bg2":"#173226",
+              "gold_bg":"#2A2410","gold_bg2":"#221E12","miss":"#3A1F1D","grid":"#222A32","grid2":"#39434E","chart_line":"#2A333D","swt":"#B98CFF","sel":"#E8702A"}
+THEME_LIGHT = {"bg":"#F3F5F8","card":"#FFFFFF","card2":"#E9EDF2","c3":"#DCE2E9","line":"#D3DAE2",
+               "txt":"#17202B","sub":"#4B5866","dim":"#69768A","hint":"#5F6C79","wait":"#3D4955",
+               "val":"#C93030","ow":"#2F5FD0","ok":"#177A48","gold":"#9C6A12",
+               "onfill":"#FFFFFF","flash":"#FFE9A8","pb_bg":"#FFF3D6","warn_bg":"#FBE3E0","ok_bg":"#DDF3E6","ok_bg2":"#CFEBDB",
+               "gold_bg":"#FBEFD6","gold_bg2":"#FDF6E7","miss":"#F6D9D6","grid":"#E4E9EF","grid2":"#D3DAE2","chart_line":"#D3DAE2","swt":"#6E43C9","sel":"#D2691E"}
+RANKC_DARK = ["#98A2AC", "#E08A3C", "#C9D6E2", "#F5C24B"]
+RANKC_LIGHT = ["#6B7480", "#A8571A", "#5E6F80", "#9C6A12"]
+C = dict(THEME_DARK)
+RANKC = list(RANKC_DARK)
+THEME = ["dark"]
 
 # 방송 모드 팔레트 — 녹화·스트리밍에서 가장 먼저 사라지는 것은 어두운 회색 글씨(dim 3.27:1)와
 # 진한 빨강이다(4:2:0 색 서브샘플링이 채도 높은 빨강 테두리를 뭉갠다). 밝기를 올리고 빨강을 연하게 한다.
@@ -3777,14 +3886,25 @@ C_BROADCAST = {"txt": "#FFFFFF", "sub": "#C2D0DC", "hint": "#A9BACA", "dim": "#9
                "val": "#FF7A6E", "ow": "#6FAEFF", "ok": "#63E6A6", "gold": "#FFD36B"}
 RANKC_BROADCAST = ["#B6C0CA", "#F0A257", "#DCE6F0", "#FFD36B"]
 C.update(VERDICT_C)                                   # 기본 팔레트에 판정 색 (방송 모드는 apply_broadcast 가 덮어씀)
+BC = dict(THEME_DARK); BC.update(VERDICT_C); BC.update(C_BROADCAST); BC.update(VERDICT_C_BROADCAST)   # 방송창 — 테마와 무관하게 늘 어두운 고대비 (OBS 캡처 대상)
+RANKC_BC = list(RANKC_BROADCAST)
+DAY_TYPE = {"v": ("발로 데이", C["val"]), "w": ("약점 데이", "#8A94A2"), "b": ("벤치마크", C["gold"]), "r": ("휴식", C["dim"])}
+
+def apply_theme(name: str):
+    """테마를 고른다 — 창을 만들기 전에. 색을 직접 들고 있는 표(DAY_TYPE)도 같이 갱신"""
+    light = name == "light"
+    C.update(THEME_LIGHT if light else THEME_DARK); C.update(VERDICT_C_LIGHT if light else VERDICT_C)
+    RANKC[:] = RANKC_LIGHT if light else RANKC_DARK; THEME[0] = "light" if light else "dark"
+    DAY_TYPE.update({"v": ("발로 데이", C["val"]), "b": ("벤치마크", C["gold"]), "r": ("휴식", C["dim"])})
+    return THEME[0]
 
 def apply_broadcast(on: bool):
-    """팔레트를 바꾼다. 위젯은 만들 때 색이 정해지므로 창을 만들기 전에 불러야 한다"""
+    """고대비(방송 모드) 팔레트 — 지금 테마 위에 덮는다. 위젯은 만들 때 색이 정해지므로 창을 만들기 전에 불러야 한다"""
     if not on: return False
-    C.update(C_BROADCAST); C.update(VERDICT_C_BROADCAST)
-    RANKC[:] = RANKC_BROADCAST
+    if THEME[0] == "light": C.update(C_HC_LIGHT); C.update(VERDICT_C_HC_LIGHT); RANKC[:] = RANKC_HC_LIGHT
+    else: C.update(C_BROADCAST); C.update(VERDICT_C_BROADCAST); RANKC[:] = RANKC_BROADCAST
+    DAY_TYPE.update({"v": ("발로 데이", C["val"]), "b": ("벤치마크", C["gold"]), "r": ("휴식", C["dim"])})
     return True
-DAY_TYPE = {"v": ("발로 데이", C["val"]), "w": ("약점 데이", "#8A94A2"), "b": ("벤치마크", C["gold"]), "r": ("휴식", C["dim"])}
 
 def single_instance_lock(tries: int = 1):
     """두 개가 동시에 떠서 서로 기록을 덮어쓰는 것 방지. 소켓 하나를 점유(참조를 유지해야 함).
@@ -3821,7 +3941,8 @@ def main():
         r0.destroy(); return
 
     data = load_data(); bump_ver()
-    apply_broadcast(bool(data.get("broadcast")))      # 색은 위젯을 만들기 전에 정해야 한다
+    apply_theme(os.environ.get("AIMDESK_THEME") or data.get("theme") or "light")   # 색은 위젯을 만들기 전에 정해야 한다
+    apply_broadcast(bool(data.get("broadcast")))
     if sys.platform == "win32":                      # 125~150% 배율 모니터에서 흐릿하지 않게 (시스템 DPI 인식)
         try:
             import ctypes
@@ -3864,7 +3985,7 @@ def main():
             hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
             for attr in (20, 19):
                 ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                    hwnd, attr, ctypes.byref(ctypes.c_int(1)), 4)
+                    hwnd, attr, ctypes.byref(ctypes.c_int(1 if THEME[0] == "dark" else 0)), 4)
         except Exception: pass
 
     # ── 커스텀 위젯 킷 ──────────────────────
@@ -3905,7 +4026,7 @@ def main():
             except Exception: inside = False
             self.itemconfig(self.shape, fill=self.hv if inside else self.bgc)
         @staticmethod
-        def _lift(hexc): return shade(hexc, 16)
+        def _lift(hexc): return shade(hexc, 16 if THEME[0] == "dark" else -12)
         def restyle(self, bg=None, fg=None, text=None):
             if bg: self.bgc = bg; self.hv = self._lift(bg); self.itemconfig(self.shape, fill=bg)
             if fg: self.fgc = fg; self.itemconfig(self.lbl, fill=fg)
@@ -3928,7 +4049,7 @@ def main():
             self.setter(not self.getter()); self.sync()
         def sync(self):
             on = self.getter()
-            self.restyle(bg="#173226" if on else C["card2"], fg=C["ok"] if on else C["sub"],
+            self.restyle(bg=C["ok_bg2"] if on else C["card2"], fg=C["ok"] if on else C["sub"],
                          text=("● " if on else "○ ") + self.base)
 
     class Stepper(tk.Frame):
@@ -4026,7 +4147,7 @@ def main():
     date_lbl = tk.Label(sub, text="", font=FS, bg=C["bg"], fg=C["sub"]); date_lbl.pack(side="left")
     daych = tk.Canvas(sub, width=px(70), height=px(18), bg=C["bg"], highlightthickness=0); daych.pack(side="left", padx=8)
     wk_cv = tk.Canvas(sub, width=px(7*15), height=px(18), bg=C["bg"], highlightthickness=0); wk_cv.pack(side="left")
-    WEEK_FILL = {"done": C["ok"], "miss": "#3A1F1D", "rest": C["card2"], "future": C["card"], "today": C["bg"]}
+    WEEK_FILL = {"done": C["ok"], "miss": C["miss"], "rest": C["card2"], "future": C["card"], "today": C["bg"]}
     def draw_week(strip):
         wk_cv.delete("all")
         for i, (dow, st) in enumerate(strip):
@@ -4034,7 +4155,7 @@ def main():
             rrect(wk_cv, x, px(3), x + sz, px(3) + sz, 3, fill=WEEK_FILL[st],
                   outline=C["gold"] if st == "today" else "", width=1)
             wk_cv.create_text(x + sz / 2, px(3) + sz / 2, text=dow, font=(FAM, 7),
-                              fill="#0B0E11" if st == "done" else C["dim"])
+                              fill=C["onfill"] if st == "done" else C["dim"])
 
     rf = tk.Frame(head, bg=C["bg"]); rf.pack(side="right")
     hdr_e = tk.Label(rf, text="", font=(MONO, 13, "bold"), bg=C["card2"], fg=C["gold"], padx=px(10), pady=px(3))   # 랭크 필: 배경이 랭크색
@@ -4057,7 +4178,7 @@ def main():
     # 토스트 — 최대 3개 쌓이고, 클릭하면 닫히고, 각각 10초 뒤 사라진다
     toast = tk.Frame(root, bg=C["bg"])
     tq = ToastQueue()
-    TOAST_STYLE = {"pb": ("#241E0E", C["gold"]), "info": (C["card2"], C["txt"]), "warn": ("#2A1512", C["val"])}
+    TOAST_STYLE = {"pb": (C["pb_bg"], C["gold"]), "info": (C["card2"], C["txt"]), "warn": (C["warn_bg"], C["val"])}
     toast_after = [None]
     def render_toasts():
         for w_ in toast.winfo_children(): w_.destroy()
@@ -4182,12 +4303,12 @@ def main():
             for c in range(7):
                 d = start + timedelta(days=r * 7 + c); dk = d.isoformat(); in_m = d.month == m
                 kind, chip, col = cal_kind(dk, tdays)
-                bg_ = {"measure": "#2A2410", "boss": "#221E12", "rest": C["bg"]}.get(kind, C["card"])
+                bg_ = {"measure": C["gold_bg"], "boss": C["gold_bg2"], "rest": C["bg"]}.get(kind, C["card"])
                 cell = tk.Frame(grid, bg=bg_, highlightbackground=C["gold"] if dk == today else (C["line"] if kind != "rest" else C["bg"]), highlightthickness=px(2) if dk == today else 1, padx=px(8), pady=px(6))
                 cell.grid(row=r + 1, column=c, sticky="nsew", padx=(0, px(4)), pady=(0, px(4)))
                 top_ = tk.Frame(cell, bg=bg_); top_.pack(fill="x")
                 tk.Label(top_, text=str(d.day), font=FB, bg=bg_, fg=(C["txt"] if in_m else C["dim"])).pack(side="left")
-                if dk == today: tk.Label(top_, text="오늘", font=FCAP, bg=C["gold"], fg="#10141A", padx=px(5)).pack(side="left", padx=(px(6), 0))
+                if dk == today: tk.Label(top_, text="오늘", font=FCAP, bg=C["gold"], fg=C["onfill"], padx=px(5)).pack(side="left", padx=(px(6), 0))
                 ep = cal_ep(dk, tdays) if kind in ("measure", "boss", "train") else None
                 if ep: tk.Label(top_, text=f"DAY {ep}", font=FNS, bg=bg_, fg=C["gold"] if dk in tdays else C["dim"]).pack(side="right")
                 tk.Label(cell, text=chip, font=FB, bg=bg_, fg=(col if in_m else C["dim"]), anchor="w", wraplength=px(150), justify="left").pack(fill="x", pady=(px(2), 0))
@@ -4280,7 +4401,7 @@ def main():
         if not pl_: return
         if seq_alive(): show_sequence(pl_)
         else: run_playlist(pl_)
-    run_btn = RBtn(lv_r, "▶ 오늘 루틴 실행", run_cta, bg=C["gold"], fg="#10141A", padx=16, pady=7, w=px(250)); run_btn.pack(anchor="e")   # 화면에서 가장 먼저 눌러야 할 것 하나
+    run_btn = RBtn(lv_r, "▶ 오늘 루틴 실행", run_cta, bg=C["gold"], fg=C["onfill"], padx=16, pady=7, w=px(250)); run_btn.pack(anchor="e")   # 화면에서 가장 먼저 눌러야 할 것 하나
     lv_btns = tk.Frame(lv_r, bg=C["card"]); lv_btns.pack(anchor="e", pady=(px(8), 0))     # 오늘 한 장 · 녹화 시작 — 나란히 (세로로 쌓으면 둘째가 잘린다)
     card_btn = RBtn(lv_btns, "오늘 한 장", lambda: open_card(), padx=10, pady=3); card_btn.pack(side="right")
     def rec_now():
@@ -4390,7 +4511,7 @@ def main():
         if day_state.get("anim"):
             try: root.after_cancel(day_state["anim"])
             except Exception: pass
-        draw_band(band_cv, V, flash="#FFFFFF")
+        draw_band(band_cv, V, flash=C["flash"])
         day_state["anim"] = root.after(140, lambda: (day_state.__setitem__("anim", None), band_cv.winfo_exists() and draw_band(band_cv, V)))
 
     # ── 순서창 + 자동 진행 ──
@@ -4568,8 +4689,8 @@ def main():
         wbox, h, gap, x, y = px(108), px(24), px(6), px(2), px(2)
         for i, nm in enumerate(names):
             on = i == 3
-            rrect(cv, x, y, x + wbox, y + h, 5, fill=("#E8702A" if on else C["bg"]), outline="#E8702A", width=1)
-            cv.create_text(x + wbox / 2, y + h / 2, text=nm, fill=("#0B0E11" if on else "#E8702A"), font=(FAM, 8, "bold" if on else "normal"))
+            rrect(cv, x, y, x + wbox, y + h, 5, fill=(C["sel"] if on else C["bg"]), outline=C["sel"], width=1)
+            cv.create_text(x + wbox / 2, y + h / 2, text=nm, fill=(C["onfill"] if on else C["sel"]), font=(FAM, 8, "bold" if on else "normal"))
             x += wbox + gap
         cv.create_text(x - gap - wbox / 2, y + h + px(13), text="▲ 이 탭(네 번째)에서 AIMDESK 를 고르세요 · 시나리오 탭이 아닙니다", fill=C["gold"], font=(FAM, 8, "bold"), anchor="e")
 
@@ -5024,10 +5145,20 @@ def main():
     bcast = {"win": None, "cv": None}
 
     BCAST_PRESETS = {"strip": (1920, 240), "card": (1280, 400), "full": (1920, 1080)}   # 원시 픽셀 — OBS 는 픽셀을 캡처한다
+    def vcol_bc(V_):
+        """방송창용 vcol — 테마와 무관하게 방송 팔레트에서"""
+        colk = V_.get("colk")
+        if colk == "rank":
+            rk = V_.get("rank"); return (RANKC_BC[RANK_IDX[rk]] if rk in RANK_IDX else BC["gold"]), True
+        if colk in ("up", "flat", "down"): return BC[colk], True
+        if colk == "gold": return BC["gold"], True
+        return BC["dim"], False
     def draw_broadcast(cv):
         """녹화되는 화면 그 자체. 폰에서 1080p 를 볼 때도 읽히게 글자 하한 28px, 텍스트 요소 7개 이하.
+        테마가 밝아도 이 창은 어둡다 (C = BC) — OBS 가 잡는 화면은 늘 같아야 한다.
         첫 줄 = 주인공 줄(DAY N · 골드 2 → 불멸) + 티어/볼테익 필. 발로 데이 = 오늘 판정 · 요즘 · 관문 + 지금 판 · 남은 시간 · 띠.
         토요일 = 보스전 보드(에너지 카운터 · 9갈래 막대) · 일요일 = 이번 주 점수판. 크로마 모드면 글자 묶음마다 판을 깐다"""
+        C = BC                                             # 이 함수 안의 C 는 방송 팔레트
         cv.delete("all")
         W = max(cv.winfo_width(), 320); H = max(cv.winfo_height(), 120)
         chroma = bool((data.get("bcast") or {}).get("chroma"))
@@ -5098,11 +5229,11 @@ def main():
                 cv.create_text(pad, yy, text=ln, anchor="w", fill=C["txt"], font=f_l); yy += int(H * (0.13 if not strip else 0.3))
             return
         # ── 발로 데이: 판정 셋 (오늘 히어로 · 요즘 · 관문) ──
-        Vd = V["day"]; fc, isv = vcol(Vd)
+        Vd = V["day"]; fc, isv = vcol_bc(Vd)
         gw_, gn_, gc_ = fmt_gate(gate_status(data.get("pb") or {})) if BASELINE[0] else ("기준 측정 전", "", "")
         hero_num = Vd["num"]
         if Vd.get("state") == "wait": hero_num = f"프로브 {len({k_ for k_, _t_, _s_ in cp if k_ in PROBE})}/{len(PROBE)}"
-        rc_ = vcol(V["recent"])
+        rc_ = vcol_bc(V["recent"])
         tiles = [("hero", Vd["word"] + (" " + Vd["glyph"] if Vd.get("glyph") else ""), hero_num, fc if isv else C["wait"], Vd["fill"], not isv),
                  ("recent", V["recent"]["word"] + (" " + V["recent"]["glyph"] if V["recent"].get("glyph") else ""), V["recent"]["num"], rc_[0] if rc_[1] else C["wait"], "chip", not rc_[1]),
                  ("gate", gw_, gn_, C["gold"], "chip", False)]
@@ -5144,8 +5275,8 @@ def main():
             f_s = mon(0.24); sw_ = f_s.measure(str(sc_)) + int(W * 0.02)
             if flash:
                 rrect(cv, W - pad - sw_ - int(W * 0.16), ym - int(H * 0.14), W - pad, ym + int(H * 0.14), int(H * 0.04), fill=C["gold"], outline="")
-                cv.create_text(W - pad - sw_, ym, text="★ 신기록", anchor="e", fill="#10141A", font=fam(0.08))
-                cv.create_text(W - pad - int(W * 0.01), ym, text=str(sc_), anchor="e", fill="#10141A", font=f_s)
+                cv.create_text(W - pad - sw_, ym, text="★ 신기록", anchor="e", fill=C["onfill"], font=fam(0.08))
+                cv.create_text(W - pad - int(W * 0.01), ym, text=str(sc_), anchor="e", fill=C["onfill"], font=f_s)
             else:
                 plate(W - pad - sw_, ym - int(H * 0.14), W - pad, ym + int(H * 0.14))
                 cv.create_text(W - pad - int(W * 0.01), ym, text=str(sc_), anchor="e", fill=col, font=f_s)
@@ -5194,12 +5325,12 @@ def main():
         if w is None or not w.winfo_exists():
             w = tk.Toplevel(root); bcast["win"] = w
             w.title("AimDesk Broadcast")                      # 고정 ASCII 제목 — OBS 창 캡처 소스가 어긋나지 않게
-            w.configure(bg="#00FF00" if cfg_.get("chroma") else C["bg"])
+            w.configure(bg="#00FF00" if cfg_.get("chroma") else BC["bg"])
             w.resizable(False, False)
             if cfg_.get("frameless"):
                 w.overrideredirect(True)
                 w.bind("<ButtonPress-1>", _drag_start); w.bind("<B1-Motion>", _drag_move)
-            cv = tk.Canvas(w, bg="#00FF00" if cfg_.get("chroma") else C["bg"], highlightthickness=0)
+            cv = tk.Canvas(w, bg="#00FF00" if cfg_.get("chroma") else BC["bg"], highlightthickness=0)
             cv.pack(fill="both", expand=True); bcast["cv"] = cv
             cv.bind("<Configure>", lambda e: draw_broadcast(cv))
             def close_b(*_): remember_bcast(); cfg_["open"] = False; save_data(data); w.destroy()
@@ -5330,7 +5461,7 @@ def main():
         date_lbl.configure(text=f"{d.month}월 {d.day}일 {DOWK[d.weekday()]}")
         daych.delete("all")
         rrect(daych, 0, 1, px(68), px(17), 8, fill=dt_col, outline="")
-        daych.create_text(px(34), px(9), text=dt_name, fill="#0B0E11", font=(FAM, 8, "bold"))
+        daych.create_text(px(34), px(9), text=dt_name, fill=C["onfill"], font=(FAM, 8, "bold"))
 
         for w_ in left_scroll.body.winfo_children(): w_.destroy()
         routine_rows.clear(); section_labels.clear(); routine_next[0] = None
@@ -5520,7 +5651,7 @@ def main():
     WHY = (("aim", "에임"), ("pos", "피크·위치"), ("dec", "정보·판단"), ("util", "유틸"))
     def set_why(k_):
         why_var.set("" if why_var.get() == k_ else k_); commit_rank()
-        for kk, bb in why_btns.items(): bb.restyle(bg=C["gold"] if kk == why_var.get() else C["card2"], fg="#10141A" if kk == why_var.get() else C["txt"])
+        for kk, bb in why_btns.items(): bb.restyle(bg=C["gold"] if kk == why_var.get() else C["card2"], fg=C["onfill"] if kk == why_var.get() else C["txt"])
     for k_, nm_ in WHY:
         b_ = RBtn(why_row, nm_, (lambda k_=k_: set_why(k_)), padx=7, pady=3); b_.pack(side="left", padx=(0, 4)); why_btns[k_] = b_
     def sync_rank_entry():
@@ -5530,7 +5661,7 @@ def main():
         except (TypeError, ValueError): games_var.set(0)
         cfg(games_lbl, text=str(games_var.get()))
         why_var.set(rk_.get("why") or "")
-        for kk, bb in why_btns.items(): bb.restyle(bg=C["gold"] if kk == why_var.get() else C["card2"], fg="#10141A" if kk == why_var.get() else C["txt"])
+        for kk, bb in why_btns.items(): bb.restyle(bg=C["gold"] if kk == why_var.get() else C["card2"], fg=C["onfill"] if kk == why_var.get() else C["txt"])
         rr_ent.configure(fg=C["txt"])
     def commit_rank(*_):
         v = rr_var.get().strip().replace("＋", "+").replace("−", "-")
@@ -5601,7 +5732,7 @@ def main():
         cur = data.get("ui_scale")
         for v, b in scale_btns.items():
             on = (v == cur) or (v is None and not cur)
-            b.restyle(bg=C["gold"] if on else C["card2"], fg="#10141A" if on else C["txt"])
+            b.restyle(bg=C["gold"] if on else C["card2"], fg=C["onfill"] if on else C["txt"])
 
     def set_scale(v):
         if (data.get("ui_scale") or None) == (v or None): return
@@ -5618,7 +5749,17 @@ def main():
         _b = RBtn(srow if _i < 3 else srow2, scale_label(_v), (lambda v=_v: set_scale(v)), padx=7, pady=4)
         _b.pack(side="left", padx=(0, 4)); scale_btns[_v] = _b
     sync_scale_btns()
-    RBtn(vc, "방송 화면 열기 (Ctrl+B)", open_broadcast, bg="#1B2A22", fg=C["ok"], padx=12, pady=6).pack(anchor="w", pady=(8, 0))
+    trow_t = tk.Frame(vc, bg=C["card"]); trow_t.pack(anchor="w", pady=(8, 0))
+    tk.Label(trow_t, text="테마", font=FS, bg=C["card"], fg=C["sub"]).pack(side="left")
+    theme_btns = {}
+    def set_theme(name):
+        if data.get("theme", "light") == name: return
+        data["theme"] = name; save_data(data)
+        if not restart_app(): show_toast("테마는 다시 켜면 적용됩니다")
+    for _n, _l in (("light", "밝음"), ("dark", "어두움")):
+        _b = RBtn(trow_t, _l, (lambda n=_n: set_theme(n)), padx=10, pady=3); _b.pack(side="left", padx=(6, 0)); theme_btns[_n] = _b
+    theme_btns[data.get("theme", "light") if data.get("theme") in ("light", "dark") else "light"].restyle(bg=C["gold"], fg=C["onfill"])
+    RBtn(vc, "방송 화면 열기 (Ctrl+B)", open_broadcast, bg=C["ok_bg"], fg=C["ok"], padx=12, pady=6).pack(anchor="w", pady=(8, 0))
     brow = tk.Frame(vc, bg=C["card"]); brow.pack(anchor="w", pady=(8, 0))
     def set_broadcast(v):
         if bool(data.get("broadcast")) == bool(v): return
@@ -5640,10 +5781,72 @@ def main():
     # ── 트레이너: 하루 기록 → 텍스트 → 답장 붙여넣기 ──
     tcd = card(tcol1); tcd.pack(fill="x")
     tk.Label(tcd, text="트레이너", font=FB, bg=C["card"], fg=C["txt"]).pack(anchor="w", pady=(0, 4))
-    tk.Label(tcd, text="루틴을 마치면 그날 기록이 '기록' 폴더에 텍스트로 저장됩니다. 그 파일을 트레이너에게 보내고, "
-                       "답장을 아래에 붙여넣으면 목표·테마·메모가 오늘 화면에 적용됩니다.",
+    tk.Label(tcd, text="루틴을 마치면 그날 기록이 '기록' 폴더에 텍스트로 저장됩니다. 답장(목표·테마·메모)은 세 갈래 중 어디서 와도 같은 자리에 적용됩니다 — "
+                       "① 자동 코치(앱 규칙) ② AI 코치(Claude) ③ 사람 트레이너 답장 붙여넣기.",
              font=FS, bg=C["card"], fg=C["hint"], wraplength=px(268), justify="left").pack(anchor="w", pady=(0, 7))
-    trow = tk.Frame(tcd, bg=C["card"]); trow.pack(anchor="w")
+    coach_cfg = data.setdefault("coach", {})
+    for _k, _v in (("auto", True), ("ai_key", ""), ("ai_auto", False), ("last", ""), ("last_ai", "")): coach_cfg.setdefault(_k, _v)
+    crow = tk.Frame(tcd, bg=C["card"]); crow.pack(anchor="w")
+    Toggle(crow, "자동 코치", lambda: bool(coach_cfg.get("auto", True)), lambda v: (coach_cfg.__setitem__("auto", bool(v)), save_data(data))).pack(side="left")
+    tk.Label(crow, text="앱이 매일 기록을 보고 목표 · 내일 테마 · 메모를 정합니다 (인터넷 없음)", font=FS, bg=C["card"], fg=C["hint"], wraplength=px(170), justify="left").pack(side="left", padx=(8, 0))
+    coach_lbl = tk.Label(tcd, text="", font=FS, bg=C["card"], fg=C["ok"], wraplength=px(268), justify="left"); coach_lbl.pack(anchor="w", pady=(2, 0))
+    def auto_coach_now(reason="manual"):
+        """규칙 코치 — 시작 때 한 번 · 루틴이 끝나면 한 번 (같은 날 같은 이유로는 다시 돌지 않는다)"""
+        if not coach_cfg.get("auto", True): return False
+        tag = f"{today_key[0]}:{reason}"
+        if reason != "manual" and coach_cfg.get("last") == tag: return False
+        coach_cfg["last"] = tag
+        try: txt = auto_coach(data, today_key[0], cur_plays(), day_state.get("dt"))
+        except Exception: log_exc("auto_coach"); txt = ""
+        if not txt:
+            save_data(data); cfg(coach_lbl, text="자동 코치: 아직 정할 게 없습니다 — 평소 범위(판 4개 이상)가 생기면 목표를 냅니다", fg=C["hint"]); return False
+        p = trainer_apply(data, txt, today_key[0]); save_data(data); replan_today(); set_trainer_status(p)
+        cfg(coach_lbl, text="자동 코치 · " + txt.replace("\n", " · "), fg=C["ok"])
+        if reason != "start": show_toast("자동 코치 적용 ✓ " + txt.split("\n")[0] + (" …" if "\n" in txt else ""))
+        return True
+    tk.Label(tcd, text="AI 코치 (선택) — 오늘 기록 파일을 Claude 에 보내 답장을 받아 그대로 적용합니다. API 키는 console.anthropic.com 에서 (유료 · 한 번에 몇 십 원)",
+             font=FS, bg=C["card"], fg=C["hint"], wraplength=px(268), justify="left").pack(anchor="w", pady=(10, 0))
+    akrow = tk.Frame(tcd, bg=C["card"]); akrow.pack(fill="x", pady=(4, 0))
+    tk.Label(akrow, text="API 키", font=FS, bg=C["card"], fg=C["sub"]).pack(side="left")
+    ai_key_var = tk.StringVar(value=coach_cfg.get("ai_key") or "")
+    ai_key_ent = tk.Entry(akrow, textvariable=ai_key_var, show="•", font=FS, bg=C["card2"], fg=C["txt"], insertbackground=C["txt"], relief="flat")
+    ai_key_ent.pack(side="left", fill="x", expand=True, padx=(6, 0), ipady=3)
+    def _save_ai_key(*_): coach_cfg["ai_key"] = ai_key_var.get().strip(); save_data(data)
+    ai_key_ent.bind("<FocusOut>", _save_ai_key); ai_key_ent.bind("<Return>", _save_ai_key)
+    arow = tk.Frame(tcd, bg=C["card"]); arow.pack(anchor="w", pady=(4, 0))
+    Toggle(arow, "루틴 끝나면 자동으로", lambda: bool(coach_cfg.get("ai_auto")), lambda v: (coach_cfg.__setitem__("ai_auto", bool(v)), save_data(data))).pack(side="left")
+    ai_lbl = tk.Label(tcd, text="", font=FS, bg=C["card"], fg=C["hint"], wraplength=px(268), justify="left"); ai_lbl.pack(anchor="w", pady=(3, 0))
+    import queue, threading                                   # (발로란트 연동 카드가 뒤에서 다시 들여오지만, 이 카드가 먼저 만들어진다)
+    ai_q = queue.Queue(); ai_busy = [False]
+    def _ai_poll():
+        try: ok, msg, _usage = ai_q.get_nowait()
+        except queue.Empty: root.after(200, _ai_poll); return
+        ai_busy[0] = False
+        if ok:
+            p = trainer_apply(data, msg, today_key[0]); save_data(data); replan_today(); set_trainer_status(p)
+            n_ = len(p["targets"]) + len(p["themes"]) + (1 if p["note"] else 0) + (1 if p["challenge"] else 0)
+            cfg(ai_lbl, text=("AI 코치 답장 · " + msg.replace("\n", " · "))[:400], fg=C["ok"] if n_ else C["val"])
+            show_toast((f"AI 코치 적용 ✓ 목표 {len(p['targets'])}개" + (" · 테마" if p["themes"] else "") + (" · 메모" if p["note"] else "")) if n_ else "AI 코치 답장에 읽을 수 있는 줄이 없습니다", "ok" if n_ else "warn")
+        else:
+            cfg(ai_lbl, text="AI 코치 실패 — " + msg, fg=C["val"]); show_toast("AI 코치 실패 — " + msg, "warn")
+    def ai_coach_now(reason="manual"):
+        if ai_busy[0]: return False
+        _save_ai_key()
+        if not coach_cfg.get("ai_key"):
+            if reason == "manual": show_toast("API 키를 먼저 넣으세요 (console.anthropic.com)", "warn")
+            return False
+        tag = f"{today_key[0]}:{reason}"
+        if reason != "manual" and coach_cfg.get("last_ai") == tag: return False
+        coach_cfg["last_ai"] = tag; save_data(data)
+        cfg(ai_lbl, text="AI 코치에게 보내는 중… (30초 안팎)", fg=C["hint"]); ai_busy[0] = True
+        dk_, cp_, dt_, key_ = today_key[0], cur_plays(), day_state.get("dt"), coach_cfg["ai_key"]
+        def work():
+            try: ai_q.put(ai_coach(data, dk_, cp_, dt_, key_))
+            except Exception as e: log_exc("ai_coach"); ai_q.put((False, f"{type(e).__name__}: {e}", None))
+        threading.Thread(target=work, daemon=True).start(); root.after(200, _ai_poll)
+        return True
+    RBtn(arow, "지금 답장 받기", lambda: ai_coach_now("manual"), padx=10, pady=4).pack(side="left", padx=(8, 0))
+    trow = tk.Frame(tcd, bg=C["card"]); trow.pack(anchor="w", pady=(10, 0))
 
     def save_report_today(show=False):
         """오늘 기록 텍스트를 쓴다. 실패해도 앱은 계속 — 로그에 남기고 (버튼으로 눌렀을 때만) 알린다"""
@@ -5654,6 +5857,10 @@ def main():
         except Exception: log_exc("save_upload_pack")
         try: save_thumb_page(data, today_key[0], cur_plays(), day_state.get("dt"))
         except Exception: log_exc("save_thumb_page")
+        if routine_complete(data["days"].get(today_key[0], blank_day()), day_state.get("dt"), today_key[0], data["pb"]):
+            try: auto_coach_now("done")
+            except Exception: log_exc("auto_coach_now")
+            if coach_cfg.get("ai_auto"): ai_coach_now("done")
         if show:
             if p: show_toast(f"기록 저장 ✓ 기록\\{p.name}")
             else: show_toast("기록 저장 실패 — aim_desk.log 를 확인하세요", "warn")
@@ -5729,7 +5936,7 @@ def main():
         replan_today()
         set_trainer_status(); show_toast("트레이너 목표·테마·메모를 지웠습니다")
 
-    RBtn(trow2, "답장 적용", apply_trainer, bg="#1B2A22", fg=C["ok"], padx=12, pady=5).pack(side="left")
+    RBtn(trow2, "답장 적용", apply_trainer, bg=C["ok_bg"], fg=C["ok"], padx=12, pady=5).pack(side="left")
     RBtn(trow2, "목표 지우기", clear_trainer, padx=10, pady=5).pack(side="left", padx=(8, 0))
     tk.Label(tcd, text="답장 형식 · 목표 Pasu 850 · 도전 Pasu 850 · 테마 내일 트래킹 · 메모 … · 목표 Pasu 없음",
              font=FS, bg=C["card"], fg=C["dim"], wraplength=px(268), justify="left").pack(anchor="w", pady=(5, 0))
@@ -5745,7 +5952,7 @@ def main():
     def sync_cut_btns():
         for v, b in cut_btns.items():
             on = v == DAY_CUTOFF_H[0]
-            b.restyle(bg=C["gold"] if on else C["card2"], fg="#10141A" if on else C["txt"])
+            b.restyle(bg=C["gold"] if on else C["card2"], fg=C["onfill"] if on else C["txt"])
     def set_cutoff(v):
         if DAY_CUTOFF_H[0] == v: return
         DAY_CUTOFF_H[0] = v; data["day_cutoff"] = v; save_data(data)
@@ -5851,7 +6058,7 @@ def main():
     reg_btns = {}
     def set_region(r_):
         reg_var.set(r_)
-        for k_, b_ in reg_btns.items(): b_.restyle(bg=C["gold"] if k_ == r_ else C["card2"], fg="#10141A" if k_ == r_ else C["txt"])
+        for k_, b_ in reg_btns.items(): b_.restyle(bg=C["gold"] if k_ == r_ else C["card2"], fg=C["onfill"] if k_ == r_ else C["txt"])
     for r_ in ("ap", "kr", "na", "eu"):
         b_ = RBtn(rw, r_, (lambda r_=r_: set_region(r_)), padx=7, pady=3); b_.pack(side="left", padx=(0, 3)); reg_btns[r_] = b_
     set_region(reg_var.get() if reg_var.get() in reg_btns else "ap")
@@ -5894,7 +6101,7 @@ def main():
     def sync_preset_btns():
         for k_, b_ in preset_btns.items():
             on = bcast_cfg().get("preset") == k_
-            b_.restyle(bg=C["gold"] if on else C["card2"], fg="#10141A" if on else C["txt"])
+            b_.restyle(bg=C["gold"] if on else C["card2"], fg=C["onfill"] if on else C["txt"])
     for k_, lbl in (("strip", "띠 1920×240"), ("card", "카드 1280×400"), ("full", "전체 1920×1080")):
         b_ = RBtn(prow, lbl, (lambda k_=k_: (set_bcast(preset=k_), sync_preset_btns())), padx=8, pady=4); b_.pack(side="left", padx=(0, 4)); preset_btns[k_] = b_
     sync_preset_btns()
@@ -5990,7 +6197,7 @@ def main():
     for i, f in enumerate(colf):
         f.grid(row=0, column=i, sticky="nsew", padx=(0, 12))
         ben_body.grid_columnconfigure(i, weight=1)
-    CATC = {"클리킹": C["val"], "트래킹": C["ow"], "스위칭": "#B98CFF"}
+    CATC = {"클리킹": C["val"], "트래킹": C["ow"], "스위칭": C["swt"]}
     for si, sub_ in enumerate(SUBS):
         holder = colf[si // 3]
         sc = card(holder, pad=(12, 9)); sc.pack(fill="x", pady=(0, 10))
@@ -6117,13 +6324,13 @@ def main():
             cv.create_polygon(x+skew, 1, x+cw+skew, 1, x+cw, h-1, x, h-1,
                               fill=fill, outline="")
             cv.create_text(x + (cw+skew)/2, h/2, text=str(t), font=FNS,
-                           fill="#10141A" if hit else C["dim"])
+                           fill=C["onfill"] if hit else C["dim"])
 
     def rank_pill(cv, name, color, w=None):
         cv.delete("all"); w = w or px(76)
         if not name or name == "—": return
         rrect(cv, 0, px(2), w, px(24), px(10), fill=color, outline="")
-        cv.create_text(w/2, px(13), text=name, font=(FAM, 9, "bold"), fill="#0B0E11")
+        cv.create_text(w/2, px(13), text=name, font=(FAM, 9, "bold"), fill=C["onfill"])
 
     # ── 차트 ──
     def draw_idx(cv, series):
@@ -6146,7 +6353,7 @@ def main():
         def X(i): return L + (W-L-R) * (0.5 if len(pts) < 2 else i/(len(pts)-1))
         def Y(v): return T + (H-T-B) * (1 - (v+3)/6)
         for v in (-2, 0, 2):
-            cv.create_line(L, Y(v), W-R, Y(v), fill="#222A32" if v else "#39434E")
+            cv.create_line(L, Y(v), W-R, Y(v), fill=C["grid"] if v else C["grid2"])
             cv.create_text(L-px(9), Y(v), text=f"{v:+d}" if v else "0", anchor="e",
                            fill=C["dim"], font=FNS)
         if not pts:
@@ -6173,9 +6380,10 @@ def main():
         L, R, T, B = px(70), px(18), px(38), px(22)
         top = max([520] + [e_ + 60 for _, e_ in bd])   # 골드 위로 외삽돼도 점이 차트 밖으로 나가지 않게
         def Y(v): return T + (H-T-B) * (1 - v/top)
-        for (t, n, c) in RANKS:
+        for (t, n, _c) in RANKS:
             if t > top: continue                                              # 차트 위로 나간 랭크 선은 제목과 겹친다
-            cv.create_line(L, Y(t), W-R, Y(t), fill="#2A333D", dash=(3, 4))
+            c = RANKC[RANK_IDX[n]]
+            cv.create_line(L, Y(t), W-R, Y(t), fill=C["chart_line"], dash=(3, 4))
             cv.create_text(L-px(10), Y(t), text=n, anchor="e", fill=c, font=FNS)
         if not bd:
             cv.create_text((L+W-R)/2, (T+H-B)/2, text="토요일 풀런이 쌓이면 계단이 생깁니다",
@@ -6321,14 +6529,14 @@ def main():
         _est = remaining_estimate(cp, rem) if rem else None
         _eta = (datetime.now() + timedelta(minutes=_est)).strftime("%H:%M") if _est else None
         cfg(est_lbl, text=(f"남은 {rem}판" + (f" ≈ {_est}분 · {_eta}쯤 끝" if _est else "") if rem else ("오늘 계획 끝" if pn else "")))
-        card_btn.restyle(bg=C["gold"] if (pn and not rem) else C["card2"], fg="#10141A" if (pn and not rem) else C["txt"])
+        card_btn.restyle(bg=C["gold"] if (pn and not rem) else C["card2"], fg=C["onfill"] if (pn and not rem) else C["txt"])
         pl_ = day_state.get("pl")
         if not pl_: run_btn.pack_forget()
         else:
             if not run_btn.winfo_ismapped(): run_btn.pack(anchor="e", before=lv_btns)
             if routine_complete(day, dt_, dkey, data["pb"]): run_btn.restyle(bg=C["card2"], fg=C["ok"], text="오늘 끝 ✓ · 한 번 더")
             elif seq_alive(): run_btn.restyle(bg=C["card2"], fg=C["txt"], text="자동 진행 중 · 순서 보기")
-            else: run_btn.restyle(bg=C["gold"], fg="#10141A", text=("▶ 벤치 18개 실행" if dt_ == "b" else "▶ 오늘 루틴 실행"))
+            else: run_btn.restyle(bg=C["gold"], fg=C["onfill"], text=("▶ 벤치 18개 실행" if dt_ == "b" else "▶ 오늘 루틴 실행"))
         sync_auto_mini()
 
     def refresh_today():
@@ -6689,6 +6897,7 @@ def main():
     refresh_files()
     show(data["win"].get("tab") if data["win"].get("tab") in frames else ("today" if training_days(data) else "cal"))   # 처음 켜면 계획부터
     if bcast_cfg().get("open", True) and not os.environ.get("AIMDESK_NO_BCAST"): root.after(400, open_broadcast)   # 녹화되는 화면은 늘 열려 있어야 한다
+    root.after(1500, lambda: auto_coach_now("start"))                 # 자동 코치: 어제까지의 기록으로 오늘 목표
     if LOAD_ERROR:
         root.after(500, lambda: messagebox.showwarning("에임 데스크 — 기록 파일", "\n\n".join(LOAD_ERROR)))
     if MIGRATED[0]:
@@ -6725,7 +6934,7 @@ def main():
         root.destroy()
     root.protocol("WM_DELETE_WINDOW", on_close)
     _DBG.update(root=root, pl_lbl=pl_lbl, trainer_txt=trainer_txt, apply_trainer=apply_trainer, clear_trainer=clear_trainer,
-                band_cv=band_cv, rec_now=rec_now, set_bcast=set_bcast, bcast_cfg=bcast_cfg, BCAST_PRESETS=BCAST_PRESETS, note_pb_flash=note_pb_flash, hdr_story=hdr_story, hdr_stage=hdr_stage, refresh_cal=refresh_cal, cal_state=cal_state, cbody=cbody, do_graduate=do_graduate, grad_btn=grad_btn, grad_title=grad_title, grad_lbl=grad_lbl, save_week_now=save_week_now, games_var=games_var, set_why=set_why, why_var=why_var, val_sync_now=val_sync_now, val_lbl=val_lbl, rid_var=rid_var, set_cutoff=set_cutoff, cut_btns=cut_btns, fstat=fstat, do_reset=do_reset, refresh_files=refresh_files, hdr_mi=hdr_mi, verdicts=lambda: verdicts(data, today_key[0], day_state.get("dt"), cur_plays(), day_state.get("hero_state")),
+                band_cv=band_cv, rec_now=rec_now, set_bcast=set_bcast, bcast_cfg=bcast_cfg, BCAST_PRESETS=BCAST_PRESETS, note_pb_flash=note_pb_flash, hdr_story=hdr_story, hdr_stage=hdr_stage, refresh_cal=refresh_cal, set_theme=set_theme, theme_btns=theme_btns, auto_coach_now=auto_coach_now, ai_coach_now=ai_coach_now, coach_lbl=coach_lbl, ai_lbl=ai_lbl, coach_cfg=coach_cfg, ai_key_var=ai_key_var, cal_state=cal_state, cbody=cbody, do_graduate=do_graduate, grad_btn=grad_btn, grad_title=grad_title, grad_lbl=grad_lbl, save_week_now=save_week_now, games_var=games_var, set_why=set_why, why_var=why_var, val_sync_now=val_sync_now, val_lbl=val_lbl, rid_var=rid_var, set_cutoff=set_cutoff, cut_btns=cut_btns, fstat=fstat, do_reset=do_reset, refresh_files=refresh_files, hdr_mi=hdr_mi, verdicts=lambda: verdicts(data, today_key[0], day_state.get("dt"), cur_plays(), day_state.get("hero_state")),
                 set_routine_open=set_routine_open, set_drawer=set_drawer, drawer=drawer, cur_lbl=cur_lbl, cur_score=cur_score, cur_word=cur_word,
                 auto_mini=auto_mini, live=live, show_sequence=show_sequence, tier_var=tier_var, rr_var=rr_var, commit_rank=commit_rank, trainer_mini=trainer_mini,
                 trainer_lbl=trainer_lbl, save_report_today=save_report_today, draw_ribbon=draw_ribbon, today_plan_n=today_plan_n, cv_sess=cv_sess, hdr_lv=hdr_lv, open_card=open_card, card_win=card_win, set_scale=set_scale, scale_btns=scale_btns, set_broadcast=set_broadcast, open_broadcast=open_broadcast, bcast=bcast, data=data, refresh=refresh, refresh_tab=refresh_tab, dirty=dirty, cur_tab=cur_tab, show=show,
@@ -6824,6 +7033,14 @@ if __name__ == "__main__":
             assert contrast_ratio(C[_k], C["card"]) >= 4.5, (_k, contrast_ratio(C[_k], C["card"]))
         assert contrast_ratio(_c0["dim"], _c0["card"]) >= 4.5                   # v6.1: 기본 팔레트의 dim 도 4.5:1 이상 (예전 3.3:1 은 1080p 에서 '없는 글씨'였다)
         C.update(_c0); RANKC[:] = _r0
+        # v6.3: 밝은 테마 — 카드 위 글자색 전부 4.5:1 이상, 고대비 모드도, 랭크색도. 방송 팔레트(BC)는 테마와 무관
+        assert apply_theme("light") == "light" and C["card"] == "#FFFFFF" and DAY_TYPE["b"][1] == C["gold"] and BC["bg"] == "#0B0E11"
+        for _k in ("txt", "sub", "hint", "dim", "wait", "val", "ow", "ok", "gold", "up", "flat", "down", "swt"):
+            assert contrast_ratio(C[_k], C["card"]) >= 4.5, ("light", _k, contrast_ratio(C[_k], C["card"]))
+        for _rc in RANKC: assert contrast_ratio(_rc, C["card"]) >= 4.5, ("light rank", _rc)
+        assert contrast_ratio(C["onfill"], C["gold"]) >= 4.5 and contrast_ratio(C["onfill"], C["ok"]) >= 4.5 and rank_of(450)[1] == RANKC_LIGHT[3]
+        assert apply_broadcast(True) is True and contrast_ratio(C["dim"], C["card"]) >= 5.5 and RANKC == RANKC_HC_LIGHT
+        assert apply_theme("dark") == "dark" and C == _c0 and RANKC == _r0 and rank_of(450)[1] == RANKC_DARK[3]
         assert contrast_ratio(C["hint"], C["card"]) >= 4.5 and contrast_ratio(C["txt"], C["card"]) >= 7 and contrast_ratio(C["dim"], C["card"]) >= 3.0
         assert shade("#14191F", 16) == "#24292f" and shade("#000000", -10) == "#000000"
         assert t_min("19.43.00") == 1183
@@ -7546,6 +7763,20 @@ if __name__ == "__main__":
             _p2, _adv, _idx = sunday_close(_st, "2026-10-11", dir_=_wd); assert _p2.name == "WEEK_2026-W41_결산.txt" and (_adv, _idx) == (False, 0) and _st["stage"]["ok_weeks"] == ["2026-W41"]
             assert _recap_streak(_st, "2026-10-11") == 2
         _measured(); bump_ver()
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK")
+        # ── v6.3: 자동 코치 · AI 코치 ──
+        _ac = _syn({i: 1.0 + 0.01 * i for i in range(12)}); bump_ver()             # 12 훈련일 — 평소 범위가 있는 상태
+        _lk = sorted(d for d in _ac["days"] if d != SAMPLE_DATE)[-1]
+        trainer_clear(_ac); _txt = auto_coach(_ac, _lk)
+        assert _txt.count("목표 ") >= 4 and parse_trainer(_txt, _lk)["errors"] == [], _txt
+        _p = trainer_apply(_ac, _txt, _lk); assert len(_p["targets"]) >= 4 and all(0 < v <= _ac["pb"][k] * 1.05 + 1 for k, v in _p["targets"].items()), _p["targets"]
+        _t2 = auto_coach(_ac, _lk); assert "테마" not in _t2 and "메모" not in _t2, _t2                                   # 신호 없는 날엔 테마·메모를 지어내지 않는다
+        _fresh(); assert auto_coach(_ac, _lk) == ""; _measured()                                                          # 출발선 전엔 침묵
+        _u, _h, _b = ai_coach_request("보고서", "sk-test")
+        assert _u.endswith("/v1/messages") and _h["x-api-key"] == "sk-test" and _h["anthropic-version"] == "2023-06-01" and _b["model"] == CLAUDE_MODEL and _b["messages"] == [{"role": "user", "content": "보고서"}] and "목표" in _b["system"] and _b["fallbacks"] == "default"
+        assert ai_coach_parse({"stop_reason": "end_turn", "content": [{"type": "text", "text": "목표 Pasu 850\n메모 ok"}]}) == ("목표 Pasu 850\n메모 ok", None)
+        assert ai_coach_parse({"stop_reason": "refusal", "stop_details": {"category": "x"}, "content": []})[0] is None and ai_coach_parse({"content": []})[1] == "빈 답장"
+        assert ai_coach(_ac, _lk, key="") == (False, "API 키 없음", None)
+        trainer_clear(_ac); bump_ver()
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK")
         sys.exit(0)
     main()

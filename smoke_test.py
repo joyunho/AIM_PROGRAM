@@ -241,6 +241,10 @@ D["show"]("tools"); pump(200); check("tools tab holds the stats folder and train
 fst = D["fstat"].cget("text")
 check("tools tab shows which data file is in use", D["fstat"].winfo_ismapped() and "훈련" in fst and "기준 측정" in fst, fst)
 check("fresh-start button exists", callable(D["do_reset"]))
+_want_theme = os.environ.get("AIMDESK_THEME") or "light"
+check("theme buttons exist; default theme is light (env can force dark)", set(D["theme_btns"]) == {"light", "dark"} and data.get("theme") == "light" and ad.THEME[0] == _want_theme and (ad.C["card"] == "#FFFFFF") == (_want_theme == "light"), f"{ad.THEME[0]} {ad.C['card']}")
+check("auto coach stays silent without a usual range (no invented targets)", D["auto_coach_now"]("manual") is False and not ad.TRAINER["targets"] and "아직" in D["coach_lbl"].cget("text"), D["coach_lbl"].cget("text"))
+check("AI coach without a key refuses softly", D["ai_coach_now"]("manual") is False and data["coach"].get("ai_key") == "")
 check("header no longer shows 미야기", D["hdr_mi"].cget("text") == "", D["hdr_mi"].cget("text"))
 check("header energy pill: 볼테익 N · 출발선 ±N (no rank word)", D["hdr_e"].cget("text").startswith("볼테익 ") and "출발선" in D["hdr_e"].cget("text") and not any(w in D["hdr_e"].cget("text") for w in ("Gold", "Silver", "Bronze", "Iron")), D["hdr_e"].cget("text"))
 check("header story line: DAY N · tier → goal", D["hdr_story"].cget("text").startswith("DAY ") and "→" in D["hdr_story"].cget("text"), D["hdr_story"].cget("text"))
