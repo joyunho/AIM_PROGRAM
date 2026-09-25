@@ -416,8 +416,53 @@ check("restart detected: new run starts at row 1 with the new Pasu, NEXT pressed
 prow = next(r for r in D["routine_rows"] if r[1] == "pasu"); check("bench row shows today's best + next rank gap", prow[5].cget("text").startswith("720") and "까지" in prow[5].cget("text"), prow[5].cget("text"))
 shot("8_bench_day")
 # ── 닫기: 창 정보 저장 ──
+# ── v7.6 — 어디서든 이어서: 클라우드 동기화 (가짜 GitHub · Contents API 흉내) ──
+import base64 as _b64, hashlib as _hl
+class FakeGH:
+    def __init__(s): s.files = {}; s.puts = 0
+    def __call__(s, method, path, token, body=None):
+        if token != "tok": return 401, {"message": "Bad credentials"}
+        if path == "/user": return 200, {"login": "joyunho"}
+        if path == "/repos/joyunho/aimdesk-data": return 200, {"private": True, "permissions": {"push": True}}
+        pre = "/repos/joyunho/aimdesk-data/contents/"
+        if not path.startswith(pre): return 404, {"message": "Not Found"}
+        nm = path[len(pre):]; cur = s.files.get(nm)
+        if method == "GET":
+            return (404, {"message": "Not Found"}) if cur is None else (200, {"content": _b64.b64encode(cur[0]).decode(), "sha": cur[1], "encoding": "base64"})
+        if cur is not None and body.get("sha") != cur[1]: return 409, {"message": "conflict"}
+        raw = _b64.b64decode(body["content"]); sha = _hl.sha1(raw + str(s.puts).encode()).hexdigest(); s.files[nm] = (raw, sha); s.puts += 1
+        return (200 if cur else 201), {"content": {"sha": sha}}
+_fg = FakeGH(); ad._GH["http"] = _fg
+def wait_sync(ms=8000):
+    end = time.time() + ms / 1000; pump(200)
+    while time.time() < end and D["sync_busy"][0]: pump(100)
+    pump(200)
+D["show"]("tools"); pump(150)
+check("v7.6: sync card starts disconnected", "연결 안 됨" in D["sync_lbl"].cget("text"), D["sync_lbl"].cget("text"))
+D["sync_tok_var"].set("tok"); D["sync_repo_var"].set("")
+check("v7.6: connect runs in the background", D["sync_connect_now"]() is True and D["sync_busy"][0]); wait_sync()
+_rf = _fg.files.get(ad.SYNC_FILE)
+check("v7.6: connect finds <id>/aimdesk-data, uploads, remembers the token", _rf is not None and D["sync_cfg"]["repo"] == "joyunho/aimdesk-data" and D["sync_cfg"]["token"] == "tok" and "연결됨" in D["sync_lbl"].cget("text") and TODAY.isoformat() in ad.sync_decode(_rf[0])["days"], D["sync_lbl"].cget("text"))
+_up = ad.sync_decode(_rf[0])
+check("v7.6: folder paths · window · token · API keys are not uploaded", all(k not in _up for k in ("stats_dir", "win", "sync", "out_dir")) and not (_up.get("coach") or {}).get("ai_key") and not (_up.get("valo_cfg") or {}).get("key"), sorted(_up)[:20])
+_o = ad.sync_decode(_rf[0]); _o["days"]["2026-08-20"] = {"plays": [["penta", "20.00.00", 300]], "count": {"penta": 1}, "first": {"penta": 300}, "best": {"penta": 300}}
+_fg.files[ad.SYNC_FILE] = (ad.sync_encode(_o), "other-pc")
+check("v7.6: sync now starts", D["sync_now"]("manual") is True); wait_sync()
+check("v7.6: another PC's day arrives on this PC", "2026-08-20" in data["days"] and data["days"]["2026-08-20"]["best"].get("penta") == 300 and "연결됨" in D["sync_lbl"].cget("text"), D["sync_lbl"].cget("text"))
+check("v7.6: settings help window opens", (D["open_sync_help"]() or True) and D["sync_help"]["win"] is not None and D["sync_help"]["win"].winfo_exists())
+D["sync_help"]["win"].destroy(); pump(100)
+# 공용 PC 모드: 토큰을 파일에 남기지 않고, 앱을 켜기 전 판은 뺀다
+D["sync_disconnect"](); pump(100)
+check("v7.6: disconnect keeps the records", not D["sync_cfg"]["token"] and not D["sync_cfg"]["repo"] and "2026-08-20" in data["days"])
+D["set_sync_remember"](False); D["sync_tok_var"].set("tok"); D["sync_connect_now"](); wait_sync()
+_fl = ad.SYNC_MEM.get("floor"); _tk = ad.today_date().isoformat(); _tp = data["days"].get(_tk, {}).get("plays") or []
+_cloud = {tuple(p_) for p_ in (ad.sync_decode(_fg.files[ad.SYNC_FILE][0])["days"].get(_tk, {}).get("plays") or [])}
+check("v7.6: public PC keeps the token only in memory; plays before the app started stay out unless they came from the cloud", ad.SYNC_MEM.get("public") and ad.SYNC_MEM.get("token") == "tok" and D["sync_cfg"]["token"] == "" and "공용 PC" in D["sync_lbl"].cget("text") and _fl and _fl[0] == _tk and all(ad.t_key(p_[1]) >= _fl[1] or tuple(p_) in _cloud for p_ in _tp), f"{D['sync_lbl'].cget('text')} {_fl} {len(_tp)}")
+_np = _fg.puts; D["show"]("today"); pump(150)
 D["on_close"]()
+check("v7.6: closing syncs once more (public PC) — cloud has today", _fg.puts >= _np and ad.today_date().isoformat() in ad.sync_decode(_fg.files[ad.SYNC_FILE][0])["days"], f"{_np} -> {_fg.puts}")
 saved = json.loads((TMP / "aim_desk_data.json").read_text(encoding="utf-8"))
+check("v7.6: the token is not written to the data file on a public PC", (saved.get("sync") or {}).get("token") == "" and '"tok"' not in json.dumps(saved), str(saved.get("sync")))
 check("on_close saved win.geo/tab/seq", saved["win"].get("tab") == "today" and "geo" in saved["win"] and saved["win"].get("seq", "").startswith("+"), str(saved["win"]))
 check("auto_mode persisted", saved.get("auto_mode") == "key")
 check("on_close wrote the bench-day report", (TMP / "기록" / "에임데스크_2026-09-05.txt").exists() and "벤치마크" in (TMP / "기록" / "에임데스크_2026-09-05.txt").read_text(encoding="utf-8-sig"))

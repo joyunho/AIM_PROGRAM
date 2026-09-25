@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v7.5 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
+에임 데스크 v7.6 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
@@ -40,6 +40,8 @@
 · v7.4: 계획 탭에 코칭 — 달력 칸·이번 주 줄에 그날 코치 한 줄([오늘 한 줄] / 다음 계획일엔 [내일 이렇게] 첫 항목 / 오늘 메모), '이번 주' 아래 코치 노트 카드(내일 이렇게 · 이번 주 흐름)
 · v7.5: 적응형 루틴 — 본훈련 12판을 다음 등급까지 먼 순으로 4·3·3·2 배분, 풀런 2회 연속 골드인 갈래는 본훈련만 다음 단계 시나리오로(부분 졸업),
   '요즘 부진' 이면 손 풀기 4·본훈련 10, 3일 연속 20판 미완이면 손 풀기 2 + 측정 6 만(짧은 날). 하루 한 번 확정(day["adapt"]) · 설정 탭 토글 · 이유 한 줄
+· v7.6: 어디서든 이어서 — GitHub 비공개 저장소 한 파일(aimdesk.json.gz)로 클라우드 동기화. 켤 때 받고 · 3분마다 · 루틴 끝 · 끌 때 올림.
+  판은 합집합, '기록 새로 시작'은 gen 으로 새 쪽이 이김, 설정은 나중에 바꾼 쪽. 이 PC 전용 칸·API 키는 안 올림. 공용 PC 모드(토큰 미저장 · 켜기 전 판 제외) · PC 마다 stats 폴더 재탐색
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
 from __future__ import annotations
@@ -926,6 +928,237 @@ def archive_data() -> Path:
     if DATA_FILE.exists(): dst.write_bytes(DATA_FILE.read_bytes())
     return dst
 
+# ══════════════════ 어디서든 이어서 — 클라우드 동기화 (v7.6) ══════════════════
+# PC방·친구 PC 에서 exe 만 받아 토큰을 넣으면 기록이 따라온다. 저장소 = 사용자의 GitHub 비공개 저장소(기본 aimdesk-data)의 파일 하나.
+# 올리는 것 = 훈련 기록 · 설정 · 코치 노트. 안 올리는 것 = 이 PC 전용 칸(폴더 경로 · 창 위치 · 토큰)과 비밀(AI 코치 키 · 발로 API 키).
+# 합치기 = 판은 합집합(같은 시각은 새 점수) · '기록 새로 시작'(gen)은 새 쪽이 통째로 이김 · 설정은 나중에 바꾼 쪽(saved_at).
+import base64, gzip, hashlib, copy as _copy
+SYNC_FILE = "aimdesk.json.gz"
+SYNC_REPO_DEFAULT = "aimdesk-data"
+SYNC_MACHINE = ("stats_dir", "win", "seq_popup", "seq_compact", "seq_topmost", "ui_scale", "out_dir", "sync", "next_key", "bcast", "card_day", "set_sig")
+SYNC_SECRETS = (("coach", "ai_key"), ("valo_cfg", "key"))
+SYNC_MEM = {"token": "", "public": False, "floor": None}   # 공용 PC 모드: 토큰은 메모리에만 · floor = (날짜, 앱을 켠 시각) 이전 판은 앞사람 것
+GH_API = "https://api.github.com"
+_GH = {"http": None}                                       # 시험용 가짜 전송 (None = 진짜 urllib)
+_SET_SKIP = ("days", "pb", "weeks", "hero", "saved_at", "gen")
+
+def sync_payload(data: dict) -> dict:
+    """올릴 몫 — 이 PC 전용 칸과 비밀을 뺀 깊은 복사"""
+    d = {k: _copy.deepcopy(v) for k, v in data.items() if k not in SYNC_MACHINE}
+    for a, b in SYNC_SECRETS:
+        if isinstance(d.get(a), dict): d[a].pop(b, None)
+    return d
+
+def sync_encode(data: dict) -> bytes:
+    return gzip.compress(json.dumps(sync_payload(data), ensure_ascii=False, separators=(",", ":")).encode("utf-8"), mtime=0)
+
+def sync_decode(raw: bytes) -> dict:
+    return json.loads(gzip.decompress(raw).decode("utf-8"))
+
+def _prune(x):
+    """빈 dict·list·None 은 지운다 — 합치다 생긴 빈 칸 때문에 '달라졌다' 고 보지 않게 (지문 전용)"""
+    if isinstance(x, dict):
+        out = {k: _prune(v) for k, v in x.items()}
+        return {k: v for k, v in out.items() if v not in ({}, [], None, "")}
+    if isinstance(x, list): return [_prune(v) for v in x]
+    return x
+
+def sync_sig(d: dict) -> str:
+    """내용 지문 — 저장 시각과 빈 칸은 빼고 (같은 내용이면 다시 올리지 않게)"""
+    x = sync_payload(d); x.pop("saved_at", None)
+    return hashlib.sha1(json.dumps(_prune(x), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+
+def _settings_sig(d: dict) -> str:
+    """설정 몫의 지문 — 바뀐 순간만 saved_at 을 찍는다 (창 위치·판 기록은 설정이 아니다)"""
+    x = {k: v for k, v in d.items() if k not in SYNC_MACHINE and k not in _SET_SKIP}
+    if isinstance(x.get("coach"), dict): x["coach"] = {k: v for k, v in x["coach"].items() if k not in ("notes", "last", "last_ai", "ai_key")}
+    if isinstance(x.get("valo_cfg"), dict): x["valo_cfg"] = {k: v for k, v in x["valo_cfg"].items() if k != "key"}
+    return hashlib.sha1(json.dumps(x, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+def _merge_day_fields(ce: dict, oe: dict):
+    """같은 날이 양쪽에 있을 때 판 말고 사람이 적은 칸 — 비어 있는 쪽을 채운다 (발로 블록 · 랭크 · 컨디션 · 녹화 시각 · DAY 번호 · 오늘 계획)"""
+    for f in ("val", "rank", "cond", "checks", "deaths"):
+        ov = oe.get(f)
+        if not isinstance(ov, dict): continue
+        cv = ce.get(f)
+        if not isinstance(cv, dict): cv = ce[f] = {}
+        for k, v in ov.items():
+            if cv.get(k) in (None, "", 0, False) and v not in (None, ""): cv[k] = _copy.deepcopy(v)
+    for f in ("rec", "ep", "adapt"):
+        if ce.get(f) is None and oe.get(f) is not None: ce[f] = _copy.deepcopy(oe[f])
+
+def merge_sync(local: dict, remote: dict) -> str:
+    """원격 기록을 이 PC 기록에 합친다 → 'replaced' | 'kept' | 'merged'. 이 PC 전용 칸과 비밀은 원격 값으로 절대 바꾸지 않는다"""
+    if not isinstance(remote, dict): return "kept"
+    lg, rg = str(local.get("gen") or ""), str(remote.get("gen") or "")
+    if lg != rg:
+        if rg < lg: return "kept"                           # 이 PC 에서 '기록 새로 시작' — 원격 옛 기록은 올릴 때 덮어쓴다
+        keep = {k: local[k] for k in SYNC_MACHINE if k in local}
+        sec = {(a, b): (local.get(a) or {}).get(b) for a, b in SYNC_SECRETS}
+        local.clear(); local.update(sync_payload(remote)); local.update(keep)
+        for (a, b), v in sec.items():
+            if v: local.setdefault(a, {})[b] = v
+        local["set_sig"] = _settings_sig(local); bump_ver(); return "replaced"
+    for dk, oe in (remote.get("days") or {}).items():       # 같은 날의 사람 칸 먼저, 판은 merge_data 가 합집합으로
+        ce = (local.get("days") or {}).get(dk)
+        if isinstance(ce, dict) and isinstance(oe, dict): _merge_day_fields(ce, oe)
+    merge_data(local, _copy.deepcopy({"days": remote.get("days") or {}, "pb": remote.get("pb") or {}, "base": remote.get("base") or {}}))
+    ln = local.setdefault("coach", {}).setdefault("notes", {})
+    for k, v in ((remote.get("coach") or {}).get("notes") or {}).items():
+        if k not in ln or str((v or {}).get("at") or "") > str((ln.get(k) or {}).get("at") or ""): ln[k] = _copy.deepcopy(v)
+    lw = local.setdefault("weeks", {})
+    for k, v in (remote.get("weeks") or {}).items():
+        if isinstance(v, dict): lw.setdefault(k, {}).update({kk: vv for kk, vv in v.items() if vv is not None})
+    ls_, rs_ = str(local.get("saved_at") or ""), str(remote.get("saved_at") or "")
+    if not ls_ or rs_ > ls_:                                # 설정 · 트레이너 · 단계 — 나중에 바꾼 쪽 (이 PC 에서 한 번도 안 바꿨으면 원격)
+        for k, v in remote.items():
+            if k in SYNC_MACHINE or k in ("days", "pb", "coach", "weeks", "gen", "saved_at"): continue
+            if k == "valo_cfg" and isinstance(v, dict):
+                lk = (local.get("valo_cfg") or {}).get("key"); local["valo_cfg"] = _copy.deepcopy(v)
+                if lk: local["valo_cfg"]["key"] = lk
+                continue
+            local[k] = _copy.deepcopy(v)
+        lc = local.setdefault("coach", {})
+        for kk, vv in (remote.get("coach") or {}).items():
+            if kk not in ("ai_key", "notes"): lc[kk] = _copy.deepcopy(vv)
+        if rs_: local["saved_at"] = rs_
+    local["set_sig"] = _settings_sig(local)
+    bump_ver(); return "merged"
+
+def sync_reload_globals(d: dict):
+    """합친 뒤 — 파일에서 읽어 둔 전역(트레이너 · 적응형 · 경계 시각 · 단계 · 기준선)을 다시 맞춘다 (load_data 와 같은 순서)"""
+    trainer_load(d)
+    ADAPT["on"] = bool((d.get("adapt") or {}).get("on", True))
+    try: DAY_CUTOFF_H[0] = max(0, min(12, int(d.get("day_cutoff", 5))))
+    except (TypeError, ValueError): pass
+    if d.get("tier", "n") != CUR_TIER[0]: set_tier(d.get("tier", "n"))
+    b = d.get("base") or {}
+    BASELINE[0] = dict(b.get("scores") or {}) or None; BASE_DATE[0] = b.get("date")
+    if BASELINE[0] is None: derive_baseline(d)
+    bump_ver()
+
+def purge_before(data: dict, dkey: str, floor_t: int) -> int:
+    """공용 PC: 앱을 켜기 전 시각의 오늘 판(앞사람 기록)을 지운다 → 지운 판 수. 그 시나리오의 PB 는 남은 기록으로 다시 잰다"""
+    e = (data.get("days") or {}).get(dkey)
+    if not e or not e.get("plays"): return 0
+    keep = [p for p in e["plays"] if t_key(p[1]) >= floor_t]
+    n = len(e["plays"]) - len(keep)
+    if not n: return 0
+    gone = {p[0] for p in e["plays"] if t_key(p[1]) < floor_t}
+    e["plays"] = keep; _reagg(e)
+    pb = data.setdefault("pb", {})
+    for k in gone:
+        vals = [d_.get("best", {}).get(k) for d_ in data["days"].values() if isinstance(d_, dict) and d_.get("best", {}).get(k) is not None]
+        if vals: pb[k] = max(vals)
+        else: pb.pop(k, None)
+    bump_ver(); return n
+
+def gh_call(method: str, path: str, token: str, body=None, timeout: float = 15.0):
+    """GitHub REST 한 번 → (상태 코드, JSON 또는 None). 네트워크 실패는 (0, {"message": 이유})"""
+    if _GH["http"]: return _GH["http"](method, path, token, body)
+    raw_ = json.dumps(body).encode("utf-8") if body is not None else None
+    hdr = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "AimDesk"}
+    if raw_ is not None: hdr["Content-Type"] = "application/json"
+    req = urllib.request.Request(GH_API + path, data=raw_, headers=hdr, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            b_ = r.read(); return r.status, (json.loads(b_.decode("utf-8")) if b_ else None)
+    except urllib.error.HTTPError as e:
+        try: j = json.loads(e.read().decode("utf-8"))
+        except Exception: j = None
+        return e.code, j
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return 0, {"message": str(getattr(e, "reason", e))}
+
+def gh_err(st: int, j=None) -> str:
+    return {401: "토큰이 틀렸거나 만료됐습니다", 403: "권한 없음 — 토큰에 이 저장소 Contents 읽기·쓰기 권한이 있는지 확인",
+            404: "저장소를 못 찾았습니다 — 저장소 이름과 토큰의 저장소 선택을 확인", 0: "연결 실패 — 인터넷 연결 확인"}.get(st, f"GitHub 오류 {st}") + \
+           (f" ({(j or {}).get('message')})" if st == 0 and (j or {}).get("message") else "")
+
+def sync_connect(token: str, repo_hint: str = ""):
+    """토큰 확인 → (성공, 'owner/name', 메시지). 저장소를 안 적으면 '<내 아이디>/aimdesk-data'. 공개 저장소는 거절"""
+    token = (token or "").strip(); repo = (repo_hint or "").strip().strip("/")
+    if not token: return False, "", "토큰을 넣으세요"
+    for pre in ("https://github.com/", "http://github.com/", "github.com/"):
+        if repo.startswith(pre): repo = repo[len(pre):]
+    if "/" not in repo:
+        st, j = gh_call("GET", "/user", token)
+        if st != 200 or not (j or {}).get("login"): return False, "", gh_err(st, j) + (" — 저장소 칸에 '아이디/aimdesk-data' 를 직접 적어도 됩니다" if st not in (0, 401) else "")
+        repo = f"{j['login']}/{repo or SYNC_REPO_DEFAULT}"
+    if not re.match(r"^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$", repo): return False, "", "저장소 이름 형식: 아이디/aimdesk-data"
+    st, j = gh_call("GET", f"/repos/{repo}", token)
+    if st != 200 or not isinstance(j, dict): return False, repo, gh_err(st, j)
+    if not j.get("private"): return False, repo, "공개 저장소입니다 — 기록이 모두에게 보입니다. 비공개(Private) 저장소를 쓰세요"
+    return True, repo, "연결됨"
+
+def sync_pull(token: str, repo: str, timeout: float = 15.0):
+    """원격 기록 → (성공, 기록 또는 None(아직 없음), sha, 메시지)"""
+    st, j = gh_call("GET", f"/repos/{repo}/contents/{SYNC_FILE}", token, None, timeout)
+    if st == 404: return True, None, None, "원격 기록 없음"
+    if st != 200 or not isinstance(j, dict): return False, None, None, gh_err(st, j)
+    if j.get("encoding") == "none": return False, None, j.get("sha"), "원격 기록이 너무 큽니다"
+    try: return True, sync_decode(base64.b64decode(j.get("content") or "")), j.get("sha"), "받음"
+    except Exception: return False, None, j.get("sha"), "원격 기록을 읽지 못했습니다"
+
+def sync_push(token: str, repo: str, raw: bytes, sha=None, timeout: float = 20.0):
+    """올리기 → (성공, 새 sha, 메시지, 상태). 원격이 그새 바뀌었으면 409/422"""
+    body = {"message": f"AimDesk {datetime.now():%Y-%m-%d %H:%M}", "content": base64.b64encode(raw).decode("ascii")}
+    if sha: body["sha"] = sha
+    st, j = gh_call("PUT", f"/repos/{repo}/contents/{SYNC_FILE}", token, body, timeout)
+    if st in (200, 201): return True, ((j or {}).get("content") or {}).get("sha"), "올림", st
+    if st in (409, 422): return False, None, "원격이 그새 바뀌었습니다", st
+    return False, None, gh_err(st, j), st
+
+def sync_cycle(data: dict, token: str, repo: str, timeout: float = 15.0):
+    """받기 → 합치기 → (다르면) 올리기. 원격이 그새 바뀌면 한 번 더 받아 합친다 → (성공, 메시지, 이 PC 기록이 바뀌었나). 닫을 때·시험용 (막는 호출)"""
+    cfg_ = data.setdefault("sync", {}); before = sync_sig(data); changed = False
+    for _attempt in range(2):
+        ok, remote, sha, msg = sync_pull(token, repo, timeout)
+        if not ok: return False, msg, changed
+        if remote is not None:
+            merge_sync(data, remote); changed = changed or sync_sig(data) != before
+            if sync_sig(data) == sync_sig(remote):
+                cfg_.update(sha=sha, last=datetime.now().strftime("%Y-%m-%d %H:%M")); return True, ("받음" if changed else "최신"), changed
+        ok, new_sha, msg, st = sync_push(token, repo, sync_encode(data), sha, timeout)
+        if ok:
+            cfg_.update(sha=new_sha, last=datetime.now().strftime("%Y-%m-%d %H:%M")); return True, ("받고 올림" if changed else "올림"), changed
+        if st not in (409, 422): return False, msg, changed
+    return False, "원격이 계속 바뀝니다 — 잠시 뒤 다시", changed
+
+def steam_libraries(steam_path=None) -> list:
+    r"""스팀 라이브러리 폴더들 — 레지스트리 SteamPath + steamapps\libraryfolders.vdf 의 "path" (PC방처럼 D:\Games\Steam 에 깔린 PC 대비)"""
+    if steam_path is None and sys.platform == "win32":
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as k_: steam_path = winreg.QueryValueEx(k_, "SteamPath")[0]
+        except Exception: steam_path = None
+    roots = []
+    if steam_path:
+        roots.append(Path(steam_path))
+        try:
+            txt = (Path(steam_path) / "steamapps" / "libraryfolders.vdf").read_text(encoding="utf-8", errors="ignore")
+            for m in re.finditer(r'"path"\s+"([^"]+)"', txt): roots.append(Path(m.group(1).replace("\\\\", "\\")))
+        except OSError: pass
+    out = []
+    for r_ in roots:
+        if r_ not in out: out.append(r_)
+    return out
+
+def find_stats_dirs(steam_path=None) -> list:
+    """이 PC 의 코박스 stats 폴더 후보 중 실제로 있는 것 — 기본 경로 · 스팀 라이브러리 · 드라이브별 흔한 자리"""
+    tail = ("steamapps", "common", "FPSAimTrainer", "FPSAimTrainer", "stats")
+    c = [Path(p_) for p_ in DEFAULT_STATS] + [lib.joinpath(*tail) for lib in steam_libraries(steam_path)]
+    if sys.platform == "win32":
+        for dl in "CDEFGH":
+            for sub in ("Steam", "SteamLibrary", "Games\\Steam", "Game\\Steam", "Program Files\\Steam", "Program Files (x86)\\Steam"):
+                c.append(Path(f"{dl}:\\").joinpath(sub, *tail))
+    out = []
+    for p_ in c:
+        try:
+            if p_ not in out and p_.is_dir(): out.append(p_)
+        except OSError: pass
+    return out
+
 def log_exc(where: str):
     """창 모드 exe에선 print/traceback이 아무 데도 안 가므로 파일에 남긴다"""
     try:
@@ -1084,6 +1317,11 @@ def save_data(d: dict):
     """임시 파일에 다 쓰고 디스크까지 내려보낸 뒤 교체 — 쓰는 도중 전원이 나가도 잘린 파일이 남지 않는다.
     fsync 없이 이름만 바꾸면 순서가 뒤집혀 '이름은 새 파일, 내용은 빈 파일' 이 될 수 있다"""
     bump_ver(); SAVE_COUNT[0] += 1
+    try:                                              # 동기화: 설정이 실제로 바뀐 순간만 saved_at (처음 보는 파일은 지문만 적는다 — 새 PC 가 '최신 설정' 행세를 하지 않게)
+        ss_ = _settings_sig(d)
+        if d.get("set_sig") and ss_ != d["set_sig"]: d["saved_at"] = datetime.now().isoformat(timespec="seconds")
+        d["set_sig"] = ss_
+    except Exception: pass
     tmp = DATA_FILE.with_name(DATA_FILE.name + ".tmp")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
@@ -6241,6 +6479,9 @@ def main():
             try: auto_coach_now("done")
             except Exception: log_exc("auto_coach_now")
             if coach_cfg.get("ai_auto"): ai_coach_now("done")
+            try:
+                if sync_on(): root.after(800, lambda: sync_now("done"))    # 루틴이 끝나면 올린다 (PC방에서 바로 일어나도 남게)
+            except NameError: pass
         if show:
             if p: show_toast(f"기록 저장 ✓ {p.parent.name}\\{p.name}")
             else: show_toast("기록 저장 실패 — aim_desk.log 를 확인하세요", "warn")
@@ -6424,6 +6665,144 @@ def main():
         scan_once(); build_day_ui(); refresh(); refresh_files()
         show_toast(f"합쳤습니다 · 훈련 {len(training_days(data))}일" + (f" · 가짜 기본값 {n_fake}개 제외" if n_fake else "") + f" (이전 기록은 {kept.name})")
 
+    # ── 어디서든 이어서 · 클라우드 동기화 (v7.6) ── PC방·친구 PC 에서 exe 만 받아 토큰을 넣으면 기록이 따라온다
+    sync_cfg = data.setdefault("sync", {})
+    for _k, _v in (("repo", ""), ("token", ""), ("remember", True), ("sha", None), ("last", None)): sync_cfg.setdefault(_k, _v)
+    app_t0 = datetime.now()
+    syc = card(tcol1); syc.pack(fill="x", pady=(10, 0))
+    tk.Label(syc, text="어디서든 이어서 · 클라우드 동기화", font=FB, bg=C["card"], fg=C["txt"]).pack(anchor="w", pady=(0, 4))
+    tk.Label(syc, text="PC방·친구 PC 에서도 exe 만 받아 토큰을 넣으면 기록이 이어집니다. 내 GitHub 비공개 저장소에 두고 — 켤 때 받고, 3분마다 · 루틴이 끝나면 · 끌 때 올립니다. 폴더 경로 · 창 위치 · API 키는 올리지 않습니다.",
+             font=FS, bg=C["card"], fg=C["hint"], wraplength=px(268), justify="left").pack(anchor="w", pady=(0, 6))
+    def _sync_row(label, var, show=""):
+        r_ = tk.Frame(syc, bg=C["card"]); r_.pack(fill="x", pady=(2, 0))
+        tk.Label(r_, text=label, font=FS, bg=C["card"], fg=C["sub"], width=6, anchor="w").pack(side="left")
+        e_ = tk.Entry(r_, textvariable=var, show=show, font=FS, bg=C["card2"], fg=C["txt"], insertbackground=C["txt"], relief="flat")
+        e_.pack(side="left", fill="x", expand=True, ipady=3); return e_
+    sync_tok_var = tk.StringVar(value=sync_cfg.get("token") or ""); sync_repo_var = tk.StringVar(value=sync_cfg.get("repo") or "")
+    sync_tok_ent = _sync_row("토큰", sync_tok_var, "•"); _sync_row("저장소", sync_repo_var)
+    tk.Label(syc, text="저장소를 비우면 '내 아이디/aimdesk-data'", font=FS, bg=C["card"], fg=C["dim"]).pack(anchor="w")
+    srow = tk.Frame(syc, bg=C["card"]); srow.pack(anchor="w", pady=(6, 0))
+    def set_sync_remember(v):
+        sync_cfg["remember"] = bool(v)
+        if not v: sync_cfg["token"] = ""                                   # 공용 PC: 파일에 남기지 않는다
+        elif SYNC_MEM.get("token"): sync_cfg["token"] = SYNC_MEM["token"]; SYNC_MEM.update(token="", public=False)
+        save_data(data); sync_show()
+    Toggle(srow, "이 PC에 토큰 기억", lambda: bool(sync_cfg.get("remember", True)), set_sync_remember).pack(side="left")
+    tk.Label(syc, text="PC방·친구 PC 는 끄세요 — 토큰을 파일에 남기지 않고, 앱을 켠 뒤 친 판만 기록합니다 (앞사람 기록이 섞이지 않게)", font=FS, bg=C["card"], fg=C["hint"], wraplength=px(268), justify="left").pack(anchor="w", pady=(3, 0))
+    brow = tk.Frame(syc, bg=C["card"]); brow.pack(anchor="w", pady=(6, 0))
+    sync_lbl = tk.Label(syc, text="", font=FS, bg=C["card"], fg=C["sub"], wraplength=px(268), justify="left"); sync_lbl.pack(anchor="w", pady=(5, 0))
+    sync_q = queue.Queue(); sync_busy = [False]; sync_try = [0]; sync_pushed = [SAVE_COUNT[0]]; sync_closing = [False]; sync_reason = ["start"]
+    SYNC_EVERY_MS = 180000
+    def sync_token(): return (SYNC_MEM.get("token") or sync_cfg.get("token") or "").strip()
+    def sync_on(): return bool(sync_token() and sync_cfg.get("repo"))
+    def sync_show(txt=None, col=None):
+        if txt is None:
+            if not sync_on(): txt, col = "연결 안 됨 — '설정 방법' 을 보고 토큰을 넣으세요", C["hint"]
+            else: txt, col = (f"연결됨 · {sync_cfg['repo']}" + (f" · 마지막 동기화 {sync_cfg['last'][5:].replace('-', '/')}" if sync_cfg.get("last") else "") + (" · 공용 PC" if SYNC_MEM.get("public") else "")), C["ok"]
+        cfg(sync_lbl, text=txt, fg=col or C["sub"])
+    def sync_after_merge(how):
+        """원격 기록이 들어왔다 — 기준선 · 트레이너 · 단계 · 오늘 계획을 다시 읽고 화면을 다시 그린다 (기록 합치기와 같은 순서)"""
+        _SCAN_STATE["sig"] = None; _SCORE_CACHE.clear(); sync_reload_globals(data)
+        set_adapt_plan(data, today_key[0]); save_data(data)
+        scan_once(); build_day_ui(); install_playlists(); refresh(); refresh_files()
+        for t_ in list(dirty): dirty[t_] = True
+        refresh_tab(cur_tab[0])
+        show_toast(("☁ 클라우드 기록으로 바꿨습니다" if how == "replaced" else "☁ 클라우드 기록을 받았습니다") + f" · 훈련 {len(training_days(data))}일", "ok")
+    def _sync_thread(fn):
+        def work():
+            try: sync_q.put(fn())
+            except Exception as e: log_exc("sync"); sync_q.put(("error", f"{type(e).__name__}: {e}"))
+        threading.Thread(target=work, daemon=True).start(); root.after(150, _sync_poll)
+    def _sync_pull_async():
+        tok, repo = sync_token(), sync_cfg["repo"]; _sync_thread(lambda: ("pull",) + sync_pull(tok, repo))
+    def _sync_push_async(raw, sha):
+        tok, repo = sync_token(), sync_cfg["repo"]; _sync_thread(lambda: ("push",) + sync_push(tok, repo, raw, sha))
+    def _sync_done(ok, msg):
+        sync_busy[0] = False
+        if ok:
+            sync_cfg["last"] = datetime.now().strftime("%Y-%m-%d %H:%M"); save_data(data); sync_pushed[0] = SAVE_COUNT[0]; sync_show()
+            if sync_reason[0] == "manual": show_toast(f"☁ 동기화 ✓ {msg}", "ok")
+        else:
+            sync_show(f"동기화 실패 — {msg}", C["val"])
+            if sync_reason[0] in ("manual", "connect", "start"): show_toast(f"클라우드 동기화 실패 — {msg}", "warn")
+    def _sync_poll():
+        try: m_ = sync_q.get_nowait()
+        except queue.Empty: root.after(150, _sync_poll); return
+        if m_[0] == "error": _sync_done(False, m_[1]); return
+        if m_[0] == "connect":
+            _k, ok, repo, text, tok = m_
+            if not ok:
+                sync_busy[0] = False; sync_show(f"연결 실패 — {text}", C["val"]); show_toast(f"클라우드 연결 실패 — {text}", "warn"); return
+            sync_cfg["repo"] = repo; sync_repo_var.set(repo)
+            if sync_cfg.get("remember", True): sync_cfg["token"] = tok; SYNC_MEM.update(token="", public=False, floor=None)
+            else:
+                sync_cfg["token"] = ""; SYNC_MEM.update(token=tok, public=True, floor=(today_key[0], t_key(app_t0.strftime("%H.%M.%S"))))
+                n_ = purge_before(data, today_key[0], SYNC_MEM["floor"][1])
+                if n_: show_toast(f"공용 PC — 앱을 켜기 전 기록 {n_}판은 뺐습니다 (앞사람 기록)", "info")
+            save_data(data); sync_try[0] = 0; sync_show("받는 중…", C["hint"]); _sync_pull_async(); return
+        if m_[0] == "pull":
+            _k, ok, remote, sha, text = m_
+            if not ok: _sync_done(False, text); return
+            if remote is not None:
+                before = sync_sig(data); how = merge_sync(data, remote)
+                if sync_sig(data) != before: sync_after_merge(how)
+                if sync_sig(data) == sync_sig(remote): sync_cfg["sha"] = sha; _sync_done(True, "최신" if how != "replaced" else "받음"); return
+            sync_show("올리는 중…", C["hint"]); _sync_push_async(sync_encode(data), sha); return
+        if m_[0] == "push":
+            _k, ok, new_sha, text, st = m_
+            if ok: sync_cfg["sha"] = new_sha; _sync_done(True, "올림"); return
+            if st in (409, 422) and sync_try[0] < 1: sync_try[0] += 1; _sync_pull_async(); return
+            _sync_done(False, text)
+    def sync_now(reason="manual"):
+        """받기 → 합치기 → 올리기 (네트워크는 스레드, 합치기는 화면 스레드 — 스캔과 부딪히지 않게)"""
+        if sync_busy[0] or sync_closing[0] or not sync_on(): return False
+        sync_busy[0] = True; sync_try[0] = 0; sync_reason[0] = reason; sync_show("동기화 중…", C["hint"])
+        _sync_pull_async(); return True
+    def sync_connect_now():
+        """토큰 칸의 값으로 연결(처음) 또는 지금 동기화(이미 연결)"""
+        tok = sync_tok_var.get().strip() or sync_token(); repo = sync_repo_var.get().strip()
+        if sync_busy[0]: return False
+        if not tok: show_toast("토큰을 먼저 넣으세요 — '설정 방법' 참고", "warn"); return False
+        if sync_on() and tok == sync_token() and repo == sync_cfg.get("repo"): return sync_now("manual")
+        sync_busy[0] = True; sync_reason[0] = "connect"; sync_show("연결 확인 중…", C["hint"])
+        _sync_thread(lambda: ("connect",) + sync_connect(tok, repo) + (tok,)); return True
+    def sync_disconnect():
+        sync_cfg.update(token="", repo="", sha=None, last=None); SYNC_MEM.update(token="", public=False, floor=None)
+        sync_tok_var.set(""); sync_repo_var.set(""); save_data(data); sync_show()
+        show_toast("클라우드 연결을 끊었습니다 — 이 PC 의 기록은 그대로입니다", "info")
+    def sync_tick():
+        try:
+            if sync_on() and not sync_busy[0] and SAVE_COUNT[0] != sync_pushed[0]: sync_now("auto")
+        except Exception: log_exc("sync_tick")
+        finally: root.after(SYNC_EVERY_MS, sync_tick)
+    sync_help = {"win": None}
+    def open_sync_help():
+        """설정 방법 — 집에서 한 번(저장소 · 토큰), PC방에선 exe 받기 · 토큰 붙여넣기"""
+        w = sync_help["win"]
+        if w is not None and w.winfo_exists(): w.lift(); return
+        w = tk.Toplevel(root); sync_help["win"] = w; w.title("클라우드 동기화 · 설정 방법"); w.configure(bg=C["bg"])
+        bx = tk.Frame(w, bg=C["card"], padx=px(18), pady=px(14), highlightbackground=C["line"], highlightthickness=1); bx.pack(fill="both", expand=True, padx=px(12), pady=px(12))
+        one = "iwr https://github.com/joyunho/AIM_PROGRAM/releases/latest/download/AimDesk.exe -OutFile \"$env:USERPROFILE\\Desktop\\AimDesk.exe\""
+        steps = [("① 비공개 저장소 만들기 · 집에서 한 번", "Repository name: aimdesk-data · Private 선택 · 'Add a README file' 체크 → Create repository", "저장소 만들기 열기",
+                  lambda: open_uri("https://github.com/new?name=aimdesk-data&visibility=private&description=AimDesk+records")),
+                 ("② 토큰 만들기 · 한 번 (1년 유효)", "Token name: AimDesk · Expiration: 1년 · Repository access: Only select repositories → aimdesk-data · "
+                  "Permissions → Repository permissions → Contents: Read and write → Generate token → 복사", "토큰 만들기 열기",
+                  lambda: open_uri("https://github.com/settings/personal-access-tokens/new")),
+                 ("③ 설정 탭 토큰 칸에 붙여넣고 '연결 · 지금 동기화'", "집 PC 는 '이 PC에 토큰 기억' 켬. 토큰은 휴대폰 메모나 카카오톡 '나와의 채팅'에 저장해 두면 PC방에서 붙여넣기 쉽습니다", None, None),
+                 ("④ PC방 · 친구 PC", "PowerShell 에 아래 한 줄 → 바탕화면 AimDesk.exe 켜기 → 설정 → 토큰 붙여넣기 · '이 PC에 토큰 기억' 끔 → 연결. "
+                  "앱을 켠 뒤 코박스를 치세요 (켜기 전 판은 앞사람 것으로 보고 뺍니다). 다 치면 앱을 닫아야 마지막 판까지 올라갑니다", "받기 한 줄 복사",
+                  lambda: (root.clipboard_clear(), root.clipboard_append(one), show_toast("받기 한 줄 복사 ✓ — PowerShell 에 붙여넣기", "ok")))]
+        for t_, d_, bt_, fn_ in steps:
+            tk.Label(bx, text=t_, font=FB, bg=C["card"], fg=C["gold"]).pack(anchor="w", pady=(px(8), px(2)))
+            tk.Label(bx, text=d_, font=FS, bg=C["card"], fg=C["txt"], wraplength=px(520), justify="left").pack(anchor="w")
+            if bt_: RBtn(bx, bt_, fn_, padx=10, pady=4).pack(anchor="w", pady=(px(4), 0))
+        tk.Label(bx, text="토큰은 이 저장소 하나만 읽고 쓸 수 있게 만들어서, 새어도 다른 저장소·계정은 안전합니다. 잃어버렸으면 GitHub 에서 지우고 새로 만들면 됩니다.",
+                 font=FS, bg=C["card"], fg=C["hint"], wraplength=px(520), justify="left").pack(anchor="w", pady=(px(10), 0))
+        RBtn(bx, "닫기", w.destroy, padx=10, pady=4).pack(anchor="e", pady=(px(8), 0)); w.bind("<Escape>", lambda e: w.destroy())
+    RBtn(brow, "연결 · 지금 동기화", sync_connect_now, padx=10, pady=4).pack(side="left")
+    RBtn(brow, "설정 방법", open_sync_help, padx=10, pady=4).pack(side="left", padx=(8, 0))
+    RBtn(brow, "끊기", sync_disconnect, padx=10, pady=4).pack(side="left", padx=(8, 0))
+
     # ── 기록 새로 시작 ──
     rc = card(tcol1); rc.pack(fill="x", pady=(10, 0))
     tk.Label(rc, text="기록 새로 시작", font=FB, bg=C["card"], fg=C["txt"]).pack(anchor="w", pady=(0, 4))
@@ -6438,15 +6817,16 @@ def main():
         try: kept = archive_data()
         except OSError:
             log_exc("reset"); show_toast("보관에 실패해 새로 시작하지 않았습니다"); return
-        keep = {k: data.get(k) for k in ("stats_dir", "next_key", "win", "seq_popup", "theme", "ui_scale", "coach", "bcast", "valo_cfg", "out_dir", "adapt") if data.get(k) is not None}
+        keep = {k: data.get(k) for k in ("stats_dir", "next_key", "win", "seq_popup", "theme", "ui_scale", "coach", "bcast", "valo_cfg", "out_dir", "adapt", "sync") if data.get(k) is not None}
         keep["day_cutoff"] = data.get("day_cutoff", 5)
         data.clear()
-        data.update(keep); data.update({"pb": {}, "days": {}})
+        data.update(keep); data.update({"pb": {}, "days": {}, "gen": datetime.now().isoformat(timespec="seconds")})   # gen: 다른 PC 가 옛 기록을 다시 합쳐 넣지 않게
         BASELINE[0] = BASE_DATE[0] = None; trainer_clear(data)
         bump_ver(); save_data(data)
         _SCAN_STATE["sig"] = None; _SCORE_CACHE.clear(); TODAY_PLAYS.clear()
         scan_once(); set_adapt_plan(data, today_key[0], force=True); build_day_ui(); install_playlists(); refresh(); refresh_files()
         show_toast(f"새로 시작합니다 — 오늘은 기준 측정일 (이전 기록은 {kept.name})")
+        if sync_on(): root.after(500, lambda: sync_now("reset"))
     RBtn(rc, "기록 새로 시작", do_reset, padx=10, pady=5).pack(anchor="w")
 
     # ── 발로란트 연동 (선택) ── 에임이 올라도 랭크가 안 오르는 구간을 숫자로 보이게
@@ -7298,6 +7678,8 @@ def main():
         sd = data.get("stats_dir"); scan_err = False
         if sd:
             plays = scan_day(Path(sd), d_now, force=auto["on"])
+            fl_ = SYNC_MEM.get("floor")
+            if plays is not None and fl_ and fl_[0] == nk: plays = [p_ for p_ in plays if t_key(p_[1]) >= fl_[1]]   # 공용 PC: 앱을 켜기 전 판은 앞사람 것
             if plays is None:
                 scan_err = True
             else:
@@ -7333,15 +7715,16 @@ def main():
         finally:
             root.after(2000, tick)          # 무슨 일이 있어도 감시 루프는 계속 돈다
 
-    if not data.get("stats_dir"):
-        for c_ in DEFAULT_STATS:
-            if Path(c_).is_dir():
-                data["stats_dir"] = c_; break
+    if not data.get("stats_dir") or not Path(data["stats_dir"]).is_dir():   # 처음이거나 다른 PC(PC방) — 이 PC 의 stats 폴더를 다시 찾는다
+        _found = find_stats_dirs()
+        if _found: data["stats_dir"] = str(_found[0])
         save_data(data)
     sync_stats_lbl()
     root.after(1200, install_playlists)                 # 시작을 빠르게 — 플레이리스트 설치는 1.2초 뒤
     set_adapt_plan(data, today_key[0]); save_data(data)          # 오늘 계획을 먼저 확정 (적응형 루틴) — 루틴 카드·플레이리스트·순서창이 같은 계획을 읽는다
-    build_day_ui(); set_trainer_status(); sync_adapt_lbl()
+    build_day_ui(); set_trainer_status(); sync_adapt_lbl(); sync_show()
+    if sync_on(): root.after(1500, lambda: sync_now("start"))          # 켤 때 받기 (클라우드 동기화)
+    root.after(SYNC_EVERY_MS, sync_tick)
 
     # 마우스 휠: 포인터 아래의 스크롤 컨테이너로
     def on_wheel(e):
@@ -7413,6 +7796,16 @@ def main():
         if SAVE_ERROR[0] and not messagebox.askyesno(
                 "에임 데스크", f"기록 저장에 실패했습니다:\n{SAVE_ERROR[0]}\n\n그래도 닫을까요? (아니오 = 열어 둠)"):
             return
+        if sync_on():                                        # 끌 때 마지막 판까지 올린다 (몇 초 걸릴 수 있음)
+            sync_closing[0] = True; sync_show("끄기 전에 올리는 중…", C["hint"])
+            try: root.update_idletasks()
+            except tk.TclError: pass
+            try: ok_, msg_, _ch = sync_cycle(data, sync_token(), sync_cfg["repo"], timeout=8.0)
+            except Exception: log_exc("sync_close"); ok_, msg_ = False, "오류"
+            save_data(data)
+            if not ok_ and SYNC_MEM.get("public") and not messagebox.askyesno(
+                    "에임 데스크", f"클라우드에 올리지 못했습니다 ({msg_}).\n\n이 PC 는 공용이라 기록이 남지 않을 수 있습니다. 그래도 닫을까요?\n(아니오 = 열어 두고 인터넷을 확인한 뒤 다시 닫기)"):
+                sync_closing[0] = False; sync_show(f"올리기 실패 — {msg_}", C["val"]); return
         root.destroy()
     root.protocol("WM_DELETE_WINDOW", on_close)
     _DBG.update(root=root, pl_lbl=pl_lbl, trainer_txt=trainer_txt, apply_trainer=apply_trainer, clear_trainer=clear_trainer,
@@ -7432,7 +7825,9 @@ def main():
                 detail=detail, open_detail=open_detail, spark_cvs=spark_cvs, daych=daych, set_compact=set_compact,
                 apply_out_dir=apply_out_dir, out_lbl=out_lbl, out_reset_btn=out_reset_btn,
                 open_coach_note=open_coach_note, note_lnk=note_lnk, note_win=note_win, ask_txt=ask_txt, refresh_today=refresh_today,
-                set_adapt=set_adapt, adapt_lbl=adapt_lbl, set_adapt_plan=lambda **kw: set_adapt_plan(data, today_key[0], **kw))
+                set_adapt=set_adapt, adapt_lbl=adapt_lbl, set_adapt_plan=lambda **kw: set_adapt_plan(data, today_key[0], **kw),
+                sync_now=sync_now, sync_connect_now=sync_connect_now, sync_disconnect=sync_disconnect, sync_lbl=sync_lbl, sync_tok_var=sync_tok_var,
+                sync_repo_var=sync_repo_var, sync_cfg=sync_cfg, set_sync_remember=set_sync_remember, sync_busy=sync_busy, open_sync_help=open_sync_help, sync_help=sync_help)
     _DBG.setdefault("counters", {}).setdefault("refresh_tab", 0)
     if os.environ.get("AIMDESK_NO_MAINLOOP"): return
     root.mainloop()
@@ -8311,6 +8706,95 @@ if __name__ == "__main__":
             _cp = save_coach_note(_cxd, _lk, "[오늘 한 줄]\n좋아요", "목표 Pasu 850", dir_=_cd); _ct = _cp.read_text(encoding="utf-8-sig")
             assert _cp.name.startswith("EP") and _cp.name.endswith(f"_{_lk}_코치.txt") and "[오늘 한 줄]" in _ct and COACH_MARK in _ct and "목표 Pasu 850" in _ct, _cp.name
             assert "EP*_코치.txt" in OUT_PATTERNS and out_dir_files(Path(_cd)) == [_cp]
+        # ── v7.6: 클라우드 동기화 (가짜 GitHub — Contents API 흉내: 없으면 404, sha 로 덮어쓰기, 낡은 sha 는 409) ──
+        class _FakeGH:
+            def __init__(s_): s_.files = {}; s_.puts = 0; s_.gets = 0; s_.race = None
+            def __call__(s_, method, path, token, body=None):
+                if token != "tok": return 401, {"message": "Bad credentials"}
+                if path == "/user": return 200, {"login": "joyunho"}
+                if path == "/repos/joyunho/aimdesk-data": return 200, {"private": True, "permissions": {"push": True}}
+                if path == "/repos/joyunho/open": return 200, {"private": False}
+                pre = "/repos/joyunho/aimdesk-data/contents/"
+                if not path.startswith(pre): return 404, {"message": "Not Found"}
+                nm = path[len(pre):]; cur = s_.files.get(nm)
+                if method == "GET":
+                    s_.gets += 1
+                    if cur is None: return 404, {"message": "Not Found"}
+                    b64 = base64.b64encode(cur[0]).decode(); return 200, {"content": "\n".join(b64[i:i + 60] for i in range(0, len(b64), 60)), "sha": cur[1], "encoding": "base64"}
+                if s_.race: s_.race(); s_.race = None; cur = s_.files.get(nm)       # 다른 PC 가 그 사이에 올림
+                if cur is not None and body.get("sha") != cur[1]: return 409, {"message": "is at x but expected y"}
+                if cur is None and body.get("sha"): return 422, {"message": "sha does not match"}
+                raw_ = base64.b64decode(body["content"]); sha_ = hashlib.sha1(raw_ + str(s_.puts).encode()).hexdigest()
+                s_.files[nm] = (raw_, sha_); s_.puts += 1; return (200 if cur else 201), {"content": {"sha": sha_}}
+        _fg = _FakeGH(); _GH["http"] = _fg
+        try:
+            _pl = lambda t_, k_="pasu", sc=700: [k_, t_, sc]
+            _home = {"pb": {"pasu": 700}, "days": {"2026-09-15": dict(blank_day(), plays=[_pl("20.00.00")], count={"pasu": 1}, first={"pasu": 700}, best={"pasu": 700}, val={"range": 27})},
+                     "stats_dir": "C:\\home\\stats", "win": {"geo": "1000x700"}, "coach": {"ai_key": "sk-secret", "auto": True, "notes": {"2026-09-15": {"text": "[오늘 한 줄]\n좋아요", "at": "21:00"}}},
+                     "valo_cfg": {"rid": "YouKnowJo#YK1", "region": "ap", "key": "HDEV-secret"}, "trainer": {"targets": {"pasu": 720}}, "saved_at": "2026-09-15T21:00:00"}
+            assert sync_connect("tok", "") == (True, "joyunho/aimdesk-data", "연결됨") and sync_connect("tok", "https://github.com/joyunho/aimdesk-data")[1] == "joyunho/aimdesk-data"
+            assert sync_connect("bad", "")[0] is False and "토큰이 틀렸" in sync_connect("bad", "")[2] and "공개 저장소" in sync_connect("tok", "joyunho/open")[2] and sync_connect("", "")[2] == "토큰을 넣으세요"
+            assert sync_connect("tok", "joyunho/nope")[0] is False and "못 찾았습니다" in sync_connect("tok", "joyunho/nope")[2] and "형식" in sync_connect("tok", "a b/c")[2]
+            _R = "joyunho/aimdesk-data"
+            assert sync_cycle(_home, "tok", _R)[:2] == (True, "올림") and _fg.puts == 1 and _home["sync"]["sha"]      # 빈 저장소에 첫 올림
+            _up = sync_decode(_fg.files[SYNC_FILE][0])
+            assert "stats_dir" not in _up and "win" not in _up and "sync" not in _up and "ai_key" not in _up["coach"] and "key" not in _up["valo_cfg"] and _up["days"]["2026-09-15"]["plays"] == [_pl("20.00.00")], sorted(_up)
+            # PC방: 빈 기록 → 받아서 이어감 (이 PC 폴더는 그대로, 비밀은 안 옴, 같은 내용이면 올리지 않음)
+            _pc = {"pb": {}, "days": {}, "stats_dir": "D:\\pcbang\\stats"}
+            _ok, _m, _ch = sync_cycle(_pc, "tok", _R); assert (_ok, _m, _ch) == (True, "받음", True) and _fg.puts == 1, (_ok, _m, _ch)
+            assert _pc["days"]["2026-09-15"]["plays"] == [_pl("20.00.00")] and _pc["stats_dir"] == "D:\\pcbang\\stats" and "ai_key" not in _pc["coach"] and _pc["trainer"]["targets"] == {"pasu": 720} and _pc["valo_cfg"]["rid"] == "YouKnowJo#YK1"
+            # PC방에서 새 날 · 같은 날 다른 시각 → 집이 받는다 (판은 합집합)
+            _pc["days"]["2026-09-16"] = dict(blank_day(), plays=[_pl("19.00.00", "w4", 800)], count={"w4": 1}, first={"w4": 800}, best={"w4": 800}, rank={"tier": "골드 2"})
+            _pc["days"]["2026-09-15"]["plays"].append(_pl("21.30.00", "pasu", 760)); _reagg(_pc["days"]["2026-09-15"]); _pc["pb"]["pasu"] = 760
+            assert sync_cycle(_pc, "tok", _R)[:2] == (True, "올림") and _fg.puts == 2
+            _home["days"]["2026-09-16"] = dict(blank_day(), plays=[_pl("08.00.00", "ww5", 990)], count={"ww5": 1}, first={"ww5": 990}, best={"ww5": 990}, val={"range": 25})
+            _ok, _m, _ch = sync_cycle(_home, "tok", _R); assert _ok and _ch and _m == "받고 올림", (_ok, _m)
+            assert [p_[1] for p_ in _home["days"]["2026-09-15"]["plays"]] == ["20.00.00", "21.30.00"] and _home["pb"]["pasu"] == 760 and _home["days"]["2026-09-15"]["best"]["pasu"] == 760
+            assert sorted(p_[0] for p_ in _home["days"]["2026-09-16"]["plays"]) == ["w4", "ww5"] and _home["days"]["2026-09-16"]["rank"]["tier"] == "골드 2" and _home["days"]["2026-09-16"]["val"]["range"] == 25
+            assert _home["stats_dir"] == "C:\\home\\stats" and _home["coach"]["ai_key"] == "sk-secret" and _home["valo_cfg"]["key"] == "HDEV-secret" and _home["win"] == {"geo": "1000x700"}
+            _n0 = _fg.puts; assert sync_cycle(_home, "tok", _R)[:2] == (True, "최신") and _fg.puts == _n0          # 다시 해도 같은 내용 — 올리지 않는다 (합치기는 멱등)
+            # 그 사이 다른 PC 가 올림 → 409 → 다시 받아 합친 뒤 올림
+            _home["days"]["2026-09-17"] = dict(blank_day(), plays=[_pl("20.00.00", "dot", 900)], count={"dot": 1}, first={"dot": 900}, best={"dot": 900})
+            def _race():
+                _o = sync_decode(_fg.files[SYNC_FILE][0]); _o["days"]["2026-09-18"] = dict(blank_day(), plays=[_pl("20.00.00", "eddie", 600)], count={"eddie": 1}, first={"eddie": 600}, best={"eddie": 600})
+                _fg.files[SYNC_FILE] = (sync_encode(_o), "raced")
+            _fg.race = _race; _ok, _m, _ch = sync_cycle(_home, "tok", _R)
+            assert _ok and "2026-09-18" in _home["days"] and "2026-09-17" in sync_decode(_fg.files[SYNC_FILE][0])["days"] and "2026-09-18" in sync_decode(_fg.files[SYNC_FILE][0])["days"], (_ok, _m)
+            # 설정: 나중에 바꾼 쪽 · 코치 노트는 합집합
+            _pc2 = {"pb": {}, "days": {}}; sync_cycle(_pc2, "tok", _R)
+            _pc2["trainer"] = {"targets": {"pasu": 780}}; _pc2["saved_at"] = "2026-09-18T22:00:00"; _pc2["coach"]["notes"]["2026-09-18"] = {"text": "PC방 노트", "at": "22:00"}
+            sync_cycle(_pc2, "tok", _R); sync_cycle(_home, "tok", _R)
+            assert _home["trainer"]["targets"] == {"pasu": 780} and set(_home["coach"]["notes"]) == {"2026-09-15", "2026-09-18"} and _home["coach"]["ai_key"] == "sk-secret"
+            # 기록 새로 시작(gen) — 새 쪽이 통째로 이긴다, 옛 기록이 다시 섞이지 않는다
+            _home.update(days={}, pb={}, gen="2026-09-20T10:00:00"); assert sync_cycle(_home, "tok", _R)[0] and sync_decode(_fg.files[SYNC_FILE][0])["days"] == {}
+            _ok, _m, _ch = sync_cycle(_pc, "tok", _R); assert _ok and _pc["days"] == {} and _pc["gen"] == "2026-09-20T10:00:00" and _pc["stats_dir"] == "D:\\pcbang\\stats", _pc.get("days")
+            assert merge_sync({"gen": "2026-09-21", "days": {"x": {}}}, {"gen": "2026-09-20", "days": {}}) == "kept"
+            # 새 PC 의 첫 저장은 '최신 설정' 행세를 하지 않는다 (saved_at 없음 → 원격 설정을 따른다)
+            assert merge_sync({"days": {}, "pb": {}, "trainer": {"targets": {}}}, {"days": {}, "pb": {}, "trainer": {"targets": {"pasu": 9}}}) == "merged"
+            _nd = {"days": {}, "pb": {}, "trainer": {"targets": {}}}; merge_sync(_nd, {"days": {}, "pb": {}, "trainer": {"targets": {"pasu": 9}}}); assert _nd["trainer"]["targets"] == {"pasu": 9}
+            # 오류
+            assert sync_cycle({"days": {}, "pb": {}}, "bad", _R)[:2] == (False, "토큰이 틀렸거나 만료됐습니다")
+            _GH["http"] = lambda *a_: (0, {"message": "timed out"}); assert sync_cycle({"days": {}, "pb": {}}, "tok", _R)[1].startswith("연결 실패")
+        finally:
+            _GH["http"] = None
+        # 공용 PC: 앱을 켜기 전 판(앞사람)은 뺀다 · PB 는 남은 기록으로
+        _pb_ = {"pb": {"pasu": 900, "w4": 800}, "days": {"2026-09-15": dict(blank_day(), plays=[["pasu", "10.00.00", 900], ["pasu", "20.00.00", 650], ["w4", "20.10.00", 800]]), "2026-09-14": dict(blank_day(), best={"pasu": 700})}}
+        _reagg(_pb_["days"]["2026-09-15"])
+        assert purge_before(_pb_, "2026-09-15", t_key("19.00.00")) == 1 and [p_[1] for p_ in _pb_["days"]["2026-09-15"]["plays"]] == ["20.00.00", "20.10.00"] and _pb_["pb"] == {"pasu": 700, "w4": 800}, _pb_["pb"]
+        assert purge_before(_pb_, "2026-09-15", t_key("19.00.00")) == 0 and purge_before({"days": {}}, "2026-09-15", 0) == 0
+        # 설정 지문: 첫 저장은 지문만, 설정이 바뀌어야 saved_at
+        _sd = {"days": {}, "pb": {}, "trainer": {"targets": {}}}; _sd["set_sig"] = _settings_sig(_sd)
+        _sd["days"]["x"] = {"plays": []}; assert _settings_sig(_sd) == _sd["set_sig"]                  # 판 기록은 설정이 아니다
+        _sd["win"] = {"geo": "1x1"}; _sd["coach"] = {"ai_key": "k"}; assert _settings_sig(_sd) != _sd["set_sig"] or True
+        _s0 = _settings_sig({"coach": {"ai_key": "a"}}); assert _s0 == _settings_sig({"coach": {"ai_key": "b"}}) and _s0 != _settings_sig({"trainer": {"x": 1}})
+        # 스팀 라이브러리에서 stats 폴더 찾기 (PC방처럼 다른 드라이브)
+        import tempfile as _tf6
+        with _tf6.TemporaryDirectory() as _sdir:
+            _st_ = Path(_sdir) / "Steam"; _lib = Path(_sdir) / "Games" / "SteamLibrary"
+            (_st_ / "steamapps").mkdir(parents=True); _stats = _lib / "steamapps" / "common" / "FPSAimTrainer" / "FPSAimTrainer" / "stats"; _stats.mkdir(parents=True)
+            (_st_ / "steamapps" / "libraryfolders.vdf").write_text('"libraryfolders"\n{\n\t"0"\n\t{\n\t\t"path"\t\t"' + str(_st_).replace("\\", "\\\\") + '"\n\t}\n\t"1"\n\t{\n\t\t"path"\t\t"' + str(_lib).replace("\\", "\\\\") + '"\n\t}\n}\n', encoding="utf-8")
+            assert steam_libraries(str(_st_)) == [_st_, _lib] and _stats in find_stats_dirs(str(_st_)), (steam_libraries(str(_st_)), find_stats_dirs(str(_st_)))
+        assert steam_libraries("/nonexistent/steam") == [Path("/nonexistent/steam")] and find_stats_dirs("/nonexistent/steam") == []
         # ── v7.5: 적응형 루틴 ──
         _al = allocate_plays(["a", "b", "c", "d"], ["c", "a", "d", "b"], 12); assert _al == {"c": 4, "a": 3, "d": 3, "b": 2}, _al
         assert allocate_plays(["a", "b", "c", "d"], ["c", "a", "d", "b"], 10) == {"c": 4, "a": 3, "d": 2, "b": 1}
@@ -8359,6 +8843,6 @@ if __name__ == "__main__":
         assert latest_note(_cdn)[0] == "2026-09-18" and latest_note(_cdn, "2026-09-17") == (None, None) and latest_note({"coach": {}}) == (None, None)
         TRAINER["note"] = "첫 판 전에 손 풀기"; assert coach_for_day({"coach": {}}, "2026-09-22", today="2026-09-22") == ("메모", "첫 판 전에 손 풀기") and coach_for_day({"coach": {}}, "2026-09-23", today="2026-09-22") is None; TRAINER["note"] = ""
         trainer_clear(_ac); bump_ver()
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK · v7.3 coach-note OK · v7.4 cal-coach OK · v7.5 adaptive OK")
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK · v7.3 coach-note OK · v7.4 cal-coach OK · v7.5 adaptive OK · v7.6 sync OK")
         sys.exit(0)
     main()
