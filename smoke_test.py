@@ -70,6 +70,53 @@ def btn(top, label):
             except tk.TclError: pass
     return None
 def texts(top): return [w.cget("text") for w in walk(top) if isinstance(w, tk.Label)]
+# v8 §12 — 금지 낱말 걷기: 오늘은 보이는 Label + band_cv/rib_cv 의 글, 나머지 다섯 페이지는 보이는 Label + 보이는 Canvas 의 모든 text 아이템.
+# 위젯으로 뺀 것: grow_title(총 에너지) · fstat(기준 측정) · pl_lbl(코박스 UI 의 '탭') · 벤치의 볼테익 링크 두 개(외부 이름) · AI 노트 픽스처 글(사용자 내용)
+_FORBID = ("프로브", "측정 중", "관문", "단계", "볼테익", "노비스", "판정까지", "판별", "도구 탭", "▲", "▼", "휴식일", "벤치마크", "웜업", "워밍업", "에너지",
+           "탭·", " 탭 ", "빈 칸은 PB", "베스트", "습니다")   # v8 fixer: 본창엔 '탭'·PB·베스트·~습니다 도 없다 (pl_lbl · 접힌 코박스 안내는 코박스 UI 라 예외)
+_FORBID_PG = tuple(f for f in _FORBID if f not in ("단계", "판정까지"))
+NOTE_FIX = "[오늘 한 줄]\n오늘 5판 어제와 비슷한 하루였습니다. 둘째 문장.\n[내일 이렇게]\n1) Popcorn 첫 판은 팔로 붙이기. 2) 판 사이 손 털기.\n[이번 주 흐름]\n관문 3/10 페이스입니다.\n[한마디]\n내일도 봅시다"
+_NOTE_LINES = [l_ for l_ in NOTE_FIX.split("\n") if l_ and not l_.startswith("[")]
+_NOTE_LINES += [s_.strip() for l_ in list(_NOTE_LINES) for s_ in l_.split(". ") if len(s_.strip()) > 6]   # 첫 문장만 인용되는 자리(계획 주간 줄의 '코치 · …')도 사용자 글
+def note_text(x):
+    """AI 코치 노트 픽스처의 글(사용자 내용)인가 — 낱말 검사에서 뺀다"""
+    y = x.strip().lstrip("•").strip().rstrip("…")
+    return bool(y) and (y in NOTE_FIX or any(l_ in x for l_ in _NOTE_LINES))
+def jargon(top, forbid, exempt=(), canvases=None):
+    """보이는 Label 글 + 보이는 Canvas text 아이템 중 금지 낱말이 든 글 (canvases 를 주면 그 캔버스만)"""
+    bad = []; ex = {id(w) for w in exempt}
+    for w in walk(top):
+        if id(w) in ex: continue
+        try:
+            if isinstance(w, tk.Label) and w.winfo_viewable():
+                x = w.cget("text")
+                if x and not note_text(x) and any(f in x for f in forbid): bad.append(x)
+            elif isinstance(w, tk.Canvas) and w.winfo_viewable() and (canvases is None or any(w is c for c in canvases)):
+                for i in w.find_all():
+                    if w.type(i) != "text": continue
+                    x = w.itemcget(i, "text")
+                    if x and not note_text(x) and any(f in x for f in forbid): bad.append(x)
+        except tk.TclError: pass
+    return bad
+def volt_btns():
+    """벤치의 볼테익 링크 RBtn 두 개 (외부 이름 — 예외)"""
+    out = []
+    for w in walk(D["frames"]["bench"]):
+        if isinstance(w, tk.Canvas) and hasattr(w, "lbl") and hasattr(w, "cmd"):
+            try:
+                if "볼테익" in w.itemcget(w.lbl, "text"): out.append(w)
+            except tk.TclError: pass
+    return out
+def jargon_walk(tag):
+    """오늘 + 다섯 페이지를 차례로 보이며 금지 낱말 검사 (픽스처마다 한 번씩: 목요일 · 실력 재는 날 · 쉬는 날)"""
+    D["show"]("today"); pump(350)
+    bad = jargon(D["frames"]["today"], _FORBID, (), canvases=(D["band_cv"], D["day_state"]["rib_cv"]))
+    check(f"v8 {tag}: no jargon on visible 오늘 labels + band/ribbon canvas texts", not bad, str(bad)[:200])
+    ex = [D["grow_title"], D["fstat"], D["pl_lbl"]] + volt_btns()
+    for n_ in ("cal", "grow", "bench", "log", "tools"):
+        D["show"](n_); pump(350)
+        bad = jargon(D["frames"][n_], _FORBID_PG, ex)
+        check(f"v8 {tag}: no jargon on visible {n_} labels + canvas texts", not bad, str(bad)[:200])
 def scan():
     ad._SCAN_STATE["sig"] = None; D["scan_once"](); pump(150)
 def wait_fired(n, ms=6000):
@@ -91,6 +138,21 @@ check("status bar shows 0판 warn", "0판" in D["status_lbl"].cget("text"), D["s
 b = btn(root, "▶ 오늘 루틴 실행"); check("routine button exists (v-day)", b is not None)
 _gold0 = [w for w in walk(D["frames"]["today"]) if isinstance(w, tk.Canvas) and hasattr(w, "bgc") and w.winfo_viewable() and w.bgc == ad.C["gold"]]
 check("v7: before the run, the run button is the only gold surface on 오늘", len(_gold0) == 1 and _gold0[0] is D["run_btn"], str(len(_gold0)))
+# v8 §12 (e)(j) 모듈 표기 함수 · (f) S0 금색 면 하나 · (a) 처음 시작 카드
+check("v8 (e): fmt_delta signs — −15 (U+2212) · +3.4%", ad.fmt_delta(-15) == "−15" and ad.fmt_delta(3.44, pct=True) == "+3.4%" and ad.fmt_delta(0) == "±0", f"{ad.fmt_delta(-15)} {ad.fmt_delta(3.44, pct=True)}")
+check("v8 (j): screen_word maps 노비스 → 입문", ad.screen_word("노비스 졸업 2/9") == "입문 졸업 2/9", ad.screen_word("노비스 졸업 2/9"))
+_gold0m = [w for w in walk(D["frames"]["today"]) if isinstance(w, tk.Canvas) and hasattr(w, "bgc") and w.winfo_ismapped() and w.bgc == ad.C["gold"]]
+check("v8 (f): exactly one mapped gold canvas on 오늘 in S0", len(_gold0m) == 1 and _gold0m[0] is D["run_btn"], str(len(_gold0m)))
+check("v8 (a): setup card hidden when stats folder + baseline are present", not D["setup_card"].winfo_ismapped() and D["setup_state"]()["needed"] is False and D["run_btn"].enabled, str(D["setup_state"]()))
+_end = time.time() + 3
+while time.time() < _end and not D["pl_lbl"].cget("text").startswith("플레이리스트"): pump(100)     # 시작 1.2초 뒤의 install_playlists 가 빈 폴더 창에 걸리지 않게
+_sd = data["stats_dir"]; data["stats_dir"] = ""; D["sync_setup"](); pump(150)
+check("v8 (a): stats folder gone → setup card shows, run button disabled, rail ! badge", D["setup_card"].winfo_ismapped() and D["run_btn"].enabled is False and D["setup_state"]()["s1"] is False and D["nav_badge"]["tools"].winfo_manager() != "", f"{D['setup_card'].winfo_ismapped()} {D['run_btn'].enabled}")
+data["stats_dir"] = _sd; D["sync_setup"](); pump(150)
+check("v8 (a): folder restored → card hidden again, run button enabled", not D["setup_card"].winfo_ismapped() and D["run_btn"].enabled is True and not D["nav_badge"]["tools"].winfo_manager(), str(D["run_btn"].enabled))
+D["show"]("bench"); pump(300); _bs0 = D["ben_src"].cget("text")
+check("v8 (h): before any play the bench source is the BASE day → 출발선 · 8/29 · 9/9 갈래", _bs0 == "출발선 · 8/29 · 9/9 갈래" and D["ben_src"].winfo_ismapped(), _bs0)
+D["show"]("today"); pump(200)
 c0 = D["counters"]["refresh_tab"]
 D["refresh"](); check("refresh() on today leaves grow dirty", D["dirty"]["grow"] is True and len(D["cv_idx"].find_all()) == 0)
 D["tabbtns"]["grow"].event_generate("<Button-1>"); pump(400)        # 첫 표시 뒤 캔버스 <Configure> 디바운스(80ms)까지 기다린다
@@ -106,7 +168,7 @@ check("resize storm coalesced (<=3 redraws)", D["counters"]["refresh_tab"] - c1 
 D["show"]("today"); pump(100)
 # 스크롤
 root.geometry("960x660"); pump(300)
-ls = D["left_scroll"]
+ls = D["cols"]        # v8: WIDE 아래에선 자세히 두 열(왼쪽 카드 + 랭크·트레이너)이 바깥 스크롤 cols 하나로 움직인다 (왼쪽 카드는 내용 높이로 맞춤)
 check("verdict band and live strip visible at minsize", D["band_cv"].winfo_ismapped() and D["live"].winfo_ismapped() and len([i for i in D["band_cv"].find_all() if D["band_cv"].type(i) == "text"]) >= 2, str(len(D["band_cv"].find_all())))
 D["set_routine_open"](True); pump(300)
 check("routine card overflows at minsize → thumb shown", ls.shown and ls.thumb.winfo_ismapped(), f"{ls.body.winfo_reqheight()} vs {ls.cv.winfo_height()}")
@@ -141,11 +203,15 @@ check("after CSV#1: NEXT pressed once", fired == ["KEY:F10"], str(fired))
 check("start instruction gone after first play", "코박스에서 시작하세요" not in D["seq_win"]["auto_lbl"].cget("text"))
 check("tab guide hidden after first play", not D["seq_win"]["guide"].winfo_manager())
 check("status bar counts 1판 ok", "1판" in D["status_lbl"].cget("text") and D["status_dot"].itemcget(1, "fill") == ad.C["ok"], D["status_lbl"].cget("text"))
+import re as _re
+_stx = D["status_lbl"].cget("text")
+check("v8 (d): status line shows 마지막 판 HH:MM, never a HH:MM:SS clock", "마지막 판" in _stx and _re.search(r"\d\d:\d\d:\d\d", _stx) is None and _re.search(r"마지막 판 \d\d:\d\d", _stx) is not None, _stx)
 tx = texts(top); check("row shows the score, no misleading ▲▼ delta", "3000" in tx and not any(x.startswith(("▲", "▼")) for x in tx), str([x for x in tx if x.startswith(("▲", "▼"))]))
 csv("VT Floating Heads Novice S5", "10.01.00", 600); scan(); wait_fired(2)      # v6 웜업: ground → float (출발선 430 → 600 신기록)
 check("after CSV#2: NEXT pressed again", fired == ["KEY:F10"] * 2, str(fired))
 check("new personal best labelled 최고", "최고" in texts(top))
 check("PB toast rendered with bench context", D["toast"].winfo_ismapped() and any("Control" in t or "Gold" in t or "Silver" in t for t in texts(D["toast"])), str(texts(D["toast"]))[:160])
+check("v8 (c): toast is placed (not packed) while it has items", D["toast"].winfo_manager() == "place" and len(D["tq"].items) >= 1, D["toast"].winfo_manager())
 check("plays persisted in day", len(data["days"][TODAY.isoformat()]["plays"]) == 2 and data["days"][TODAY.isoformat()]["sess"]["start"] == "10.00.00")
 D["show_toast"]("a"); D["show_toast"]("b"); D["show_toast"]("c"); pump(50)
 check("toast queue caps at 3", len(D["toast"].winfo_children()) == 3)
@@ -190,7 +256,7 @@ def shot(name):
 D["show"]("today"); root.geometry("1100x780"); pump(300)
 check("streak label", "연속" in D["hdr_streak"].cget("text"), D["hdr_streak"].cget("text"))
 check("week strip drawn (7 cells)", len([i for i in D["wk_cv"].find_all() if D["wk_cv"].type(i) == "polygon"]) == 7)
-sec0 = D["section_labels"][0][0].cget("text"); check("warmup section shows progress 2/2", sec0.endswith("2/2"), sec0)
+sec0 = D["section_labels"][0][5].cget("text"); check("warmup section shows progress 2/2", sec0.startswith("2/2"), sec0)   # v8: 개수는 줄 오른쪽 cnt(fmt_frac) 한 번 — 제목 라벨엔 없다
 # v7.5 — 적응형 루틴: 본훈련 12판이 약한 순으로 4·3·3·2, 이유 한 줄, 같은 판 3연속 없음
 _sec2 = D["section_labels"][2][1]; _why = [w.cget("text") for w in walk(D["frames"]["today"]) if isinstance(w, tk.Label) and w.cget("text").startswith("적응 · ")]
 _main = [k for k in D["seq_win"]["seq"]][8:] if D["seq_win"]["seq"] else []
@@ -205,13 +271,15 @@ sess = D["day_state"]["sess_lbl"].cget("text"); check("session line shows the se
 rib = D["day_state"]["rib_lbl"].cget("text"); check("ribbon line counts today's plays", rib.startswith("오늘 5/") and ("최고" in rib or "평소" in rib), rib)
 check("ribbon cells match the plan", len(D["day_state"]["rib_cells"]) == D["today_plan_n"]() == 20, str(len(D["day_state"]["rib_cells"])))
 check("training level shown in header", D["hdr_lv"].cget("text").startswith("Lv."), D["hdr_lv"].cget("text"))
-_FORBID = ("프로브", "측정 중", "관문", "단계", "볼테익", "노비스", "판정까지", "판별")
 _vis = [w.cget("text") for w in walk(D["frames"]["today"]) if isinstance(w, tk.Label) and w.winfo_viewable()]
 check("v7: no jargon on visible 오늘 labels", not any(any(f in x for f in _FORBID) for x in _vis), str([x for x in _vis if any(f in x for f in _FORBID)])[:200])
+_bad_cv = jargon(D["frames"]["today"], _FORBID, (), canvases=(D["band_cv"], D["day_state"]["rib_cv"]))
+check("v8: no jargon in the 오늘 band/ribbon canvas texts", not _bad_cv, str(_bad_cv)[:200])
 _gold_btns = [w for w in walk(D["frames"]["today"]) if isinstance(w, tk.Canvas) and hasattr(w, "bgc") and w.winfo_viewable() and w.bgc == ad.C["gold"]]
 _rb_txt = D["run_btn"].itemcget(D["run_btn"].lbl, "text")
 check("v7: while auto-running nothing is gold and the button reads 자동 진행 중 (at most one gold surface)", len(_gold_btns) <= 1 and (_rb_txt.startswith("자동 진행 중") or (len(_gold_btns) == 1 and D["run_btn"] in _gold_btns)), f"{len(_gold_btns)} {_rb_txt}")
 check("v7: count reads 5/20 in the hero", D["cnt_lbl"].cget("text") == "5/20" and D["cnt_lbl"].winfo_viewable(), D["cnt_lbl"].cget("text"))
+check("v8 (b): rail badge on 오늘 reads 5/20", D["nav_badge"]["today"].cget("text") == "5/20" and D["nav_badge"]["today"].winfo_ismapped(), D["nav_badge"]["today"].cget("text"))
 D["set_routine_open"](False); pump(300)
 check("v7: three todo rows + 발로란트 row inside the hero, 자세히 closed", len(D["section_labels"]) == 3 and D["day_state"]["val_row"].winfo_viewable() and not D["cols"].winfo_ismapped(), f"{len(D['section_labels'])} {D['cols'].winfo_ismapped()}")
 D["set_routine_open"](True); pump(300)
@@ -260,6 +328,16 @@ D["set_scale"](None); pump(60)
 check("auto scale restores", data.get("ui_scale") is None and D["scale_btns"][None].bgc == ad.C["gold"])
 coach = [l.cget("text") for l in D["day_state"]["coach"]]; check("coach card has lines", any(coach), str(coach)[:160])
 D["show"]("tools"); pump(200); check("tools tab holds the stats folder and trainer cards", D["pl_lbl"].winfo_ismapped() and D["trainer_txt"].winfo_ismapped())
+_ST_LBLS = ("coach_lbl", "ai_lbl", "sync_lbl", "val_lbl", "trainer_lbl", "adapt_lbl")
+def vis_ok():
+    """설정 상태 라벨은 글이 없으면 자리도 없다 (_vis) — pl_lbl 은 늘 보인다"""
+    return [(k_, D[k_].cget("text")[:30], D[k_].winfo_ismapped()) for k_ in _ST_LBLS if D[k_].winfo_ismapped() != (D[k_].cget("text") != "")]
+check("v8 (k): every 설정 status label is unmapped iff its text is empty; pl_lbl always mapped", not vis_ok() and D["pl_lbl"].winfo_ismapped(), str(vis_ok()))
+D["tools_goto"]("syc"); pump(400)
+_syc = D["grp"]["syc"]; _tcv = D["tools_scroll"].cv
+_in_view = _tcv.winfo_rooty() <= _syc.winfo_rooty() < _tcv.winfo_rooty() + _tcv.winfo_height()
+check("v8 (l): tools_goto('syc') selects 설정 and brings the 클라우드 card into view (gold outline)", D["cur_tab"][0] == "tools" and (_tcv.yview()[0] > 0 or _in_view) and _syc.cget("highlightbackground") == ad.C["gold"], f"{D['cur_tab'][0]} yview={_tcv.yview()} in_view={_in_view}")
+pump(1300); check("v8 (l): the gold outline fades back to line after 1.2s", _syc.cget("highlightbackground") == ad.C["line"])
 # v5.0 — 기록 파일이 어디에 있는지 화면에 보여야 한다 (안 보여서 기록을 통째로 잃었다)
 fst = D["fstat"].cget("text")
 check("tools tab shows which data file is in use", D["fstat"].winfo_ismapped() and "훈련" in fst and "기준 측정" in fst, fst)
@@ -270,7 +348,7 @@ check("auto coach stays silent without a usual range (no invented targets)", D["
 check("AI coach without a key refuses softly", D["ai_coach_now"]("manual") is False and data["coach"].get("ai_key") == "")
 # v7.3 — 코치 노트: 노트가 있으면 오늘 탭 링크 · 노트 창 (제목 줄 금색) · '코치에게' 글은 저장된다
 check("v7.3: no note yet → link hidden, window refuses softly", not D["note_lnk"].winfo_ismapped() and D["open_coach_note"]() is False)
-data["coach"]["notes"][TODAY.isoformat()] = {"text": "[오늘 한 줄]\n오늘 5판 어제와 비슷한 하루였습니다. 둘째 문장.\n[내일 이렇게]\n1) Popcorn 첫 판은 팔로 붙이기. 2) 판 사이 손 털기.\n[이번 주 흐름]\n관문 3/10 페이스입니다.\n[한마디]\n내일도 봅시다", "apply": "메모 첫 판 전에 손 풀기", "at": "10:07"}
+data["coach"]["notes"][TODAY.isoformat()] = {"text": NOTE_FIX, "apply": "메모 첫 판 전에 손 풀기", "at": "10:07"}
 D["show"]("today"); pump(100); D["refresh_today"](); pump(200)
 check("v7.3: today's note shows the 코치 노트 link in the hero", D["note_lnk"].winfo_ismapped())
 check("v7.3: note window opens with the note text and the applied lines", D["open_coach_note"]() is True and D["note_win"]["win"].winfo_exists() and "AI 코치 노트" in D["note_win"]["title"].cget("text") and "내일도 봅시다" in D["note_win"]["txt"].get("1.0", "end") and "메모 첫 판 전에 손 풀기" in D["note_win"]["txt"].get("1.0", "end") and D["note_win"]["txt"].tag_ranges("h"), D["note_win"]["title"].cget("text"))
@@ -280,7 +358,7 @@ check("v7.3: '코치에게' text is saved", data["coach"].get("ask") == "손목�
 # v7.4 — 계획 탭: 달력 칸·이번 주 줄에 코치 한 줄, 코치 노트 카드
 D["show"]("cal"); pump(400)
 _cal_txt = [w.cget("text") for w in walk(D["cbody"]) if isinstance(w, tk.Label)]
-check("v7.4: calendar shows today's 코치 one-liner and tomorrow's 내일 이렇게", sum(1 for x in _cal_txt if "코치 · 오늘 5판" in x) >= 2 and sum(1 for x in _cal_txt if "내일 이렇게 · Popcorn" in x) >= 2, str([x for x in _cal_txt if "코치" in x or "내일 이렇게" in x])[:200])
+check("v7.4: calendar shows today's 코치 one-liner and tomorrow's 내일 이렇게", sum(1 for x in _cal_txt if "코치 · 오늘 5판" in x) >= 1 and sum(1 for x in _cal_txt if "내일 이렇게 · Popcorn" in x) >= 1, str([x for x in _cal_txt if "코치" in x or "내일 이렇게" in x])[:200])
 check("v7.4: 코치 노트 card lists 내일 이렇게 items and the full-note link", any(x.startswith("코치 노트 · ") for x in _cal_txt) and "• Popcorn 첫 판은 팔로 붙이기" in _cal_txt and "전체 노트 보기 →" in _cal_txt and any("관문 3/10" in x for x in _cal_txt), str([x for x in _cal_txt if x.startswith("•")]))
 D["show"]("tools"); pump(100)
 check("header no longer shows 미야기", D["hdr_mi"].cget("text") == "", D["hdr_mi"].cget("text"))
@@ -320,19 +398,30 @@ check("계획 tab: month navigation rebuilds the grid", any(x == "2026년 10월"
 shot("0_cal")
 D["show"]("bench"); pump(200)
 check("bench advice names the weakest link", D["advice_lbl"].cget("text").startswith("약한 고리"), D["advice_lbl"].cget("text")[:120])
-check("bench gate card: 노비스 졸업 n/9 + graduation rule, no button before 9/9", D["grad_title"].cget("text").startswith("노비스 졸업 ") and "졸업 버튼" in D["grad_lbl"].cget("text") and not D["grad_btn"].winfo_ismapped(), D["grad_title"].cget("text") + " | " + D["grad_lbl"].cget("text")[:90])
+check("bench gate card: 노비스 졸업 n/9 + graduation rule, no button before 9/9", D["grad_title"].cget("text").startswith("입문 졸업 ") and "졸업 버튼" in D["grad_lbl"].cget("text") and not D["grad_btn"].winfo_ismapped(), D["grad_title"].cget("text") + " | " + D["grad_lbl"].cget("text")[:90])
 check("graduation refused before 9/9 (tier stays 노비스)", D["do_graduate"](confirm=False, restart=False) is False and data.get("tier", "n") == "n" and ad.CUR_TIER[0] == "n")
 wk = [k for k, (_, _, cardf) in D["ben_rows"].items() if cardf.cget("highlightbackground") == ad.C["gold"]]
 check("weakest card highlighted (one)", len(wk) == 1, str(wk))
 gaps = [c[3].cget("text") for c in D["ben_rows"]["react"][1]]; check("gap label for today's Ground", any(g.startswith("Gold") for g in gaps), str(gaps))
+_bs = D["ben_src"].cget("text")
+check("v8 (h): with today's plays the bench source is today → YYYY-MM-DD · n/9 갈래 (never 기준 측정)", _bs == f"{TODAY.isoformat()} · 4/9 갈래" and "기준 측정" not in _bs and D["ben_src"].winfo_ismapped(), _bs)
 shot("2_bench")
 D["show"]("grow"); pump(200); shot("3_grow")
 D["show"]("log"); pump(200)
 c00 = D["hist_cells"][0][0].cget("text"); check("log first row is today", c00.startswith(TODAY.strftime("%m-%d")), c00)
+check("v8 (g): 죽음 column removed from the 14-day table (12 cells per row, column 7 unmapped)", len(D["hist_cells"][0]) == 12 and all(len(r_) == 12 for r_ in D["hist_cells"]) and not D["hist_cells"][0][7].winfo_ismapped() and not D["hist_heads"][7].winfo_ismapped() and D["hist_cells"][0][0].winfo_ismapped(), str(len(D["hist_cells"][0])))
+_types = [r_[1].cget("text") for r_ in D["hist_cells"]]
+check("v8 (h): every 유형 cell uses the screen words 훈련·약점·실력·쉼·출발선", all(t_ in ("훈련", "약점", "실력", "쉼", "출발선", "", "—") for t_ in _types) and "훈련" in _types and "출발선" in _types, str(_types))
 D["select_day"](0); pump(50)
 check("detail shows today's Pasu", D["det_lines"][0].cget("text").startswith("Pasu") and "700" in D["det_lines"][0].cget("text"), D["det_lines"][0].cget("text"))
 check("growth card title", "총 에너지" in D["grow_title"].cget("text"), D["grow_title"].cget("text"))
+check("v8 (i): with a baseline the growth table shows and the empty line is hidden", not D["grow_empty"].winfo_ismapped() and D["grow_grid"].winfo_ismapped())
+_bl = ad.BASELINE[0]; ad.BASELINE[0] = None; ad.bump_ver(); D["dirty"]["log"] = True; D["refresh_tab"]("log"); pump(200)     # growth 표는 DATA_VER 메모 — 자료가 바뀌면 늘 bump_ver
+check("v8 (i): no baseline → growth card says 출발선 재기 전 and shows the empty line", D["grow_empty"].winfo_ismapped() and D["grow_title"].cget("text") == "시작 대비 · 출발선 재기 전", D["grow_title"].cget("text"))
+ad.BASELINE[0] = _bl; ad.bump_ver(); D["dirty"]["log"] = True; D["refresh_tab"]("log"); pump(200)
+check("v8 (i): baseline restored → title back to 총 에너지", "총 에너지" in D["grow_title"].cget("text") and not D["grow_empty"].winfo_ismapped(), D["grow_title"].cget("text"))
 shot("4_log")
+jargon_walk("목요일")                                    # 5판 · 코치 노트 · 트레이너 — 평상시 화면 전체
 class KE: pass
 ke = KE(); ke.widget = root; ke.keysym = "2"; ke.state = 0
 D["on_key"](ke); pump(50); check("shortcut 2 → grow tab", D["cur_tab"][0] == "grow")
@@ -356,7 +445,7 @@ D["set_compact"](False); pump(100)
 D["set_routine_open"](True); pump(150)
 D["routine_rows"][0][8].event_generate("<Button-1>"); pump(150)
 dw = D["detail"]; check("detail popup opened for ground", dw["win"] is not None and dw["win"].winfo_exists() and dw["key"] == "ground")
-check("detail summary has PB and today count", "오늘 1판" in dw["sum"].cget("text") and "베스트 3000" in dw["sum"].cget("text"), dw["sum"].cget("text"))
+check("detail summary has PB and today count", "오늘 1판" in dw["sum"].cget("text") and "오늘 최고 3000" in dw["sum"].cget("text") and dw["sum"].cget("text").startswith("최고 3000"), dw["sum"].cget("text"))   # v8 §10: PB·베스트 → 최고
 dw["win"].geometry("+1180+560"); pump(120); shot("7_detail")
 check("UI scale applied to daych", D["daych"].winfo_reqwidth() == ad.px(70), f"{D['daych'].winfo_reqwidth()} vs {ad.px(70)}")
 check("window fits screen", root.winfo_width() <= root.winfo_screenwidth())
@@ -415,6 +504,9 @@ n1 = len(fired); csv("VT Pasu Novice S5", "11.30.00", 720); scan(); wait_fired(n
 check("restart detected: new run starts at row 1 with the new Pasu, NEXT pressed", fired[n1:] == ["KEY:F10"] and D["seq_win"]["base"].get("pasu") == 1 and D["seq_win"]["rows"][0][4].cget("text") == "720", f"{fired[n1:]} base={D['seq_win']['base']} row0={D['seq_win']['rows'][0][4].cget('text')}")
 prow = next(r for r in D["routine_rows"] if r[1] == "pasu"); check("bench row shows today's best + next rank gap", prow[5].cget("text").startswith("720") and "까지" in prow[5].cget("text"), prow[5].cget("text"))
 shot("8_bench_day")
+D["show"]("bench"); pump(300); _bs2 = D["ben_src"].cget("text")
+check("v8 (h): on the bench day the source line is today's progress 오늘 · n/18판 · n/9 갈래", _bs2.startswith("오늘 · ") and "/18판" in _bs2 and _bs2.endswith("/9 갈래"), _bs2)
+jargon_walk("실력 재는 날")                                 # 토요일 픽스처 — 벤치 2판 친 상태
 # ── 닫기: 창 정보 저장 ──
 # ── v7.6 — 어디서든 이어서: 클라우드 동기화 (가짜 GitHub · Contents API 흉내) ──
 import base64 as _b64, hashlib as _hl
@@ -458,6 +550,13 @@ D["set_sync_remember"](False); D["sync_tok_var"].set("tok"); D["sync_connect_now
 _fl = ad.SYNC_MEM.get("floor"); _tk = ad.today_date().isoformat(); _tp = data["days"].get(_tk, {}).get("plays") or []
 _cloud = {tuple(p_) for p_ in (ad.sync_decode(_fg.files[ad.SYNC_FILE][0])["days"].get(_tk, {}).get("plays") or [])}
 check("v7.6: public PC keeps the token only in memory; plays before the app started stay out unless they came from the cloud", ad.SYNC_MEM.get("public") and ad.SYNC_MEM.get("token") == "tok" and D["sync_cfg"]["token"] == "" and "공용 PC" in D["sync_lbl"].cget("text") and _fl and _fl[0] == _tk and all(ad.t_key(p_[1]) >= _fl[1] or tuple(p_) in _cloud for p_ in _tp), f"{D['sync_lbl'].cget('text')} {_fl} {len(_tp)}")
+# ── v8 — 쉬는 날(월요일) 픽스처: 주간 결산 링크 · 띠 문장 · 낱말 걷기, 끝나면 토요일로 되돌린다 (on_close 검사는 벤치 데이 기준) ──
+os.environ["AIMDESK_TODAY"] = "2026-08-31"; scan(); pump(800); D["show"]("today"); pump(300)
+_band_txt = [D["band_cv"].itemcget(i, "text") for i in D["band_cv"].find_all() if D["band_cv"].type(i) == "text"]
+check("v8 (m): Monday fixture is a 쉬는 날 — week-pack link shown, hero says 쉬는 날, no badge, no run button", D["day_state"]["dt"] == "r" and D["week_lnk"].winfo_ismapped() and (any("쉬는 날" in t_ for t_ in _band_txt) or "쉬는 날" in D["cur_lbl"].cget("text")) and not D["nav_badge"]["today"].winfo_ismapped() and not D["run_btn"].winfo_viewable(), f"{D['day_state']['dt']} lnk={D['week_lnk'].winfo_ismapped()} badge={D['nav_badge']['today'].winfo_ismapped()} run={D['run_btn'].winfo_viewable()} {D['cur_lbl'].cget('text')} {_band_txt[:3]}")
+jargon_walk("쉬는 날")
+os.environ["AIMDESK_TODAY"] = "2026-09-05"; scan(); pump(800); D["show"]("today"); pump(300)
+check("v8: back to the bench day after the rest-day walk", D["day_state"]["dt"] == "b" and not D["week_lnk"].winfo_ismapped(), str(D["day_state"]["dt"]))
 _np = _fg.puts; D["show"]("today"); pump(150)
 D["on_close"]()
 check("v7.6: closing syncs once more (public PC) — cloud has today", _fg.puts >= _np and ad.today_date().isoformat() in ad.sync_decode(_fg.files[ad.SYNC_FILE][0])["days"], f"{_np} -> {_fg.puts}")
