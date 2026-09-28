@@ -3048,7 +3048,8 @@ OW_HERO_KO = {"cassidy": "캐서디", "soldier-76": "솔저 76", "ashe": "애쉬
               "torbjorn": "토르비욘", "sombra": "솜브라", "venture": "벤처", "freja": "프레야", "ana": "아나", "illari": "일라리", "kiriko": "키리코", "mercy": "메르시",
               "zenyatta": "젠야타", "lucio": "루시우", "moira": "모이라", "baptiste": "바티스트", "brigitte": "브리기테", "lifeweaver": "라이프위버", "juno": "주노",
               "reinhardt": "라인하르트", "dva": "D.Va", "winston": "윈스턴", "orisa": "오리사", "sigma": "시그마", "zarya": "자리야", "roadhog": "로드호그",
-              "wrecking-ball": "레킹볼", "doomfist": "둠피스트", "junker-queen": "정커퀸", "ramattra": "라마트라", "mauga": "마우가", "hazard": "해저드"}
+              "wrecking-ball": "레킹볼", "doomfist": "둠피스트", "junker-queen": "정커퀸", "ramattra": "라마트라", "mauga": "마우가", "hazard": "해저드",
+              "sierra": "시에라", "shion": "시온", "anran": "안란", "vendetta": "벤데타", "emre": "엠레", "wuyang": "우양", "jetpack-cat": "제트팩 캣", "mizuki": "미즈키"}
 OW_MIN_GAMES = 10                  # 주력 영웅 시즌 판 수가 이보다 적으면 관문은 '자료 없음'
 
 def ow_hero_name(k: str) -> str:
@@ -3836,10 +3837,10 @@ _VAL_STAGES = [{"name": "출발선", "motto": "재고 시작한다", "span": "2�
                {"name": "다이아 1 → 어센던트 1", "motto": "복기가 실력을 만든다", "span": "4~8개월"},
                {"name": "어센던트 1 → 불멸 1", "motto": "RR 은 승리에서만 나온다", "span": "6~18개월 · 미도달 가능"}]
 _OW_STAGES = [{"name": "출발선", "motto": "재고 시작한다", "span": "2주"},
-              {"name": "골드 → 플래티넘", "motto": "크로스헤어가 곧 랭크", "span": "2~4개월"},
-              {"name": "플래티넘 → 다이아", "motto": "에임이 아니라 자리", "span": "3~6개월"},
-              {"name": "다이아 → 마스터", "motto": "복기가 실력을 만든다", "span": "4~8개월"},
-              {"name": "마스터 → 그랜드마스터", "motto": "승리는 팀에서 나온다", "span": "6~18개월 · 미도달 가능"}]
+              {"name": "다이아 5 → 다이아 3", "motto": "영웅 셋 · 죽음 8.5", "span": "1~3개월"},
+              {"name": "다이아 3 → 다이아 1", "motto": "에임이 아니라 자리", "span": "2~4개월"},
+              {"name": "다이아 1 → 마스터 5", "motto": "복기가 실력을 만든다", "span": "3~6개월"},
+              {"name": "마스터 5 → 마스터 3", "motto": "승리는 팀에서 나온다", "span": "6~12개월 · 미도달 가능"}]
 _G0 = [("aim", "base"), ("aim", "train_days", 10), ("game", "block_days", 8, 10), ("rank", "rank_days", 5, 14)]   # 출발선 관문 — 두 게임 같다
 GAMES = {
  "valorant": {
@@ -3885,7 +3886,7 @@ GAMES = {
  "ow2": {
   "key": "ow2", "name": "오버워치 2", "en": "Overwatch 2", "short": "옵치", "exe": "AimDesk-OW2", "title": "에임 데스크 · 오버워치 2", "brand": "에임 데스크",
   "port": 47654, "repo": "aimdesk-data-ow2", "day_word": "옵치 데이", "index": "oi", "api": "ow",
-  "series": {"title": "Road to Grandmaster", "tier": "골드 3", "goal": "그랜드마스터"},
+  "series": {"title": "Road to Master", "tier": "다이아몬드 5", "goal": "마스터"},
   "ranks": ["Bronze", "Silver", "Gold", "Platinum", "Diamond", "Master", "Grandmaster", "Champion"],
   "rank_ko": {"Bronze": "브론즈", "Silver": "실버", "Gold": "골드", "Platinum": "플래티넘", "Diamond": "다이아몬드", "Master": "마스터",
               "Grandmaster": "그랜드마스터", "Champion": "챔피언", "Unranked": "언랭"},
@@ -3896,32 +3897,38 @@ GAMES = {
   "probe": ["aether", "raw", "snake", "pasu", "eddie", "cts"],            # 측정 6개 — 히트스캔에 닿는 트래킹 3(리액티브·컨트롤·프리시전) + 클리킹 1 + 스위칭 2 (웜업 ground·float 와 겹치지 않게)
   "weak_cats": ("트래킹", "스위칭"), "trk_desc": "붙어서 따라가는 손 — 히트스캔의 핵심",
   "cycle": ["trk", "swt", "clk", "mix", "weak", "swt", "trk", "weak", "flk", "clk"],
+  "main_heroes": ["sierra", "cassidy", "soldier-76"],                     # 설정 → 오버워치 2 전적의 주력 영웅 기본값 (ow_cfg.heroes) — 시에라 1픽 · 캐서디 2픽 · 솔저 3픽/DM 측정
   "block": {"title": "오버워치 2 · 15분", "word": "옵치 블록", "skip": "옵치 블록 건너뜀",
-            "plan": "훈련장 트래킹 3분 → 훈련장 플릭 3분 → 데스매치 9분",
-            "lines": ("훈련장 트래킹 3 → 훈련장 플릭 3 → 데스매치 9",
-                      "3분 · 훈련장 · 솔저 76 — 움직이는 봇을 끊지 않고 따라가기 (트래킹)",
-                      "3분 · 훈련장 · 캐서디/애쉬 — 봇 머리에 한 발씩 · 스트레이프 뒤 정지 → 발사 (플릭)",
-                      "9분 · 데스매치 1판 · 히트스캔 한 명 고정 · 크로스헤어 머리 높이 → 처치 · 죽음 · 명중률 · 치명타 %"),
-            "fields": (("dm_k", "데스매치 처치", 3, "int"), ("dm_d", "죽음", 3, "int"), ("acc", "명중률 %", 4, "float"), ("crit", "치명타 %", 4, "float")),
+            "plan": "훈련장 솔저 트래킹 3분 → 훈련장 캐서디 클리킹 3분 → 데스매치 솔저 9분",
+            "lines": ("훈련장 트래킹 3 (솔저 76) → 훈련장 클리킹 3 (캐서디) → 데스매치 9 (솔저 76 고정)",
+                      "3분 · 훈련장 · 솔저 76 — 움직이는 봇 2마리를 번갈아 · 머리 높이에서 끊지 않고 30발 탄창 다 비우기 · 스프린트 뒤 바로 사격 · 헬릭스 금지 (트래킹)",
+                      "3분 · 훈련장 · 캐서디 — A/D 스트레이프 → 반대키 탭 → 정지 → 봇 머리 1발 · 연속 6발 헤드를 3번 채우기 · 페닝 금지 (클리킹)",
+                      "9분 · 데스매치 1판 · 솔저 76 고정 · 크로스헤어 머리 높이 · 3발 빗나가면 뒤로 · 죽음 12 넘기지 않기 · 헬릭스는 마무리용만 → 처치 · 죽음 · 명중률 · 치명타 %"),
+            "fields": (("dm_k", "데스매치 처치 (솔저)", 3, "int"), ("dm_d", "죽음", 3, "int"), ("acc", "솔저 명중률 %", 4, "float"), ("crit", "치명타 %", 4, "float")),
             "done": ("dm_k", "acc"),
             "fmt": (("dm", ""), ("acc", "명중 {:.0f}%"), ("crit", "치명타 {:.0f}%")),
             "week": (("acc", "명중 중앙 {:.0f}%"), ("crit", "치명타 {:.0f}%")),
-            "coach_link": "데스매치 처치/죽음 · 명중률 % · 치명타 %"},
+            "coach_link": "솔저 76 데스매치 처치/죽음 · 명중률 % · 치명타 % · 시즌 딜러 죽음/10분 · 영웅 셋 비중"},
   "stages": _OW_STAGES,
   "gates": [_G0,
-            [("aim", "grad_n"), ("game", "med", "acc", 40, "명중률 14일 중앙 ≥ 40%", "%"), ("game", "med", "crit", 12, "치명타 명중률 ≥ 12%", "%"),
-             ("game", "aim_death", 40), ("rank", "hold", "Platinum 5", 14, "플래티넘 5 · 14일 강등 없음")],
-            [("aim", "sub500", 6), ("game", "med", "acc", 45, "명중률 ≥ 45%", "%"), ("game", "med", "crit", 15, "치명타 ≥ 15%", "%"),
-             ("game", "kd", 1.2, "데스매치 K/D 14일 중앙 ≥ 1.2"), ("rank", "hold", "Diamond 5", 14, "다이아 5 · 14일 유지"), ("rank", "recap", 8)],
-            [("aim", "energy", 650, True), ("game", "med", "acc", 48, "명중률 ≥ 48%", "%"), ("game", "med", "crit", 17, "치명타 ≥ 17%", "%"),
-             ("game", "kd", 1.3, "데스매치 K/D ≥ 1.3"), ("rank", "hold", "Master 5", 30, "마스터 5 · 30일 유지")],
-            [("aim", "energy", 700, False), ("game", "med", "acc", 50, "명중률 ≥ 50%", "%"), ("game", "med", "crit", 18, "치명타 ≥ 18%", "%"),
-             ("game", "kd", 1.4, "데스매치 K/D ≥ 1.4"), ("rank", "hold", "Grandmaster 5", 30, "그랜드마스터 5 · 30일 강등 없음")]],
-  "stage_plain": ["출발선 18판 · 훈련 10일 · 오버워치 15분 8번 · 랭크 카드 5번", "코박스 9갈래 골드 · 명중률 40% · 치명타 12% · 플래 5 2주",
-                  "중급 표 500 · 명중률 45% · 치명타 15% · K/D 1.2 · 다이아 5 2주 · 결산 8주", "중급 표 650 · 명중률 48% · K/D 1.3 · 마스터 5 30일",
-                  "중급 표 700 · 명중률 50% · K/D 1.4 · 그마 5 30일"],
-  "coach": {"section": "[오버워치로 연결]", "goal_obj": "그랜드마스터를", "probe_names": "Aether·Raw Control·Snake Track·Pasu·EddieTS·ControlTS"},
-  "tags": "에임 훈련, 코박스, KovaaK's, 오버워치 2, Overwatch 2, 히트스캔, 골드, 그랜드마스터, Road to Grandmaster, 볼테익, Voltaic, aim training, 에임 연습, 매일 훈련",
+            [("aim", "grad_n"), ("game", "med", "acc", 40, "솔저 DM 명중률 14일 중앙 ≥ 40%", "%"), ("game", "med", "crit", 9, "솔저 DM 치명타 ≥ 9%", "%"),
+             ("game", "aim_death", 40), ("game", "ow_deaths", "damage", 8.5, "시즌 딜러 죽음 ≤ 8.5/10분"), ("rank", "hold", "Diamond 3", 14, "다이아 3 · 14일 강등 없음")],
+            [("aim", "sub500", 6), ("game", "med", "acc", 43, "솔저 DM 명중률 ≥ 43%", "%"), ("game", "med", "crit", 11, "솔저 DM 치명타 ≥ 11%", "%"),
+             ("game", "kd", 1.2, "데스매치 K/D 14일 중앙 ≥ 1.2"), ("game", "ow_deaths", "damage", 8.0, "시즌 딜러 죽음 ≤ 8.0/10분"), ("game", "ow_epl", "cassidy", 1.8, "캐서디 시즌 목숨당 처치 ≥ 1.8"),
+             ("rank", "hold", "Diamond 1", 14, "다이아 1 · 14일 유지"), ("rank", "recap", 8)],
+            [("aim", "energy", 650, True), ("game", "med", "acc", 45, "솔저 DM 명중률 ≥ 45%", "%"), ("game", "med", "crit", 12, "솔저 DM 치명타 ≥ 12%", "%"),
+             ("game", "kd", 1.3, "데스매치 K/D ≥ 1.3"), ("game", "ow_deaths", "damage", 7.5, "시즌 딜러 죽음 ≤ 7.5/10분"), ("game", "ow_acc", "cassidy", 48, "캐서디 시즌 명중률 ≥ 48%"),
+             ("game", "ow_win", "damage", 53, "시즌 딜러 승률 ≥ 53%"), ("rank", "hold", "Master 5", 30, "마스터 5 · 30일 유지")],
+            [("aim", "energy", 700, False), ("game", "med", "acc", 47, "솔저 DM 명중률 ≥ 47%", "%"), ("game", "med", "crit", 13, "솔저 DM 치명타 ≥ 13%", "%"),
+             ("game", "kd", 1.4, "데스매치 K/D ≥ 1.4"), ("game", "ow_deaths", "damage", 7.0, "시즌 딜러 죽음 ≤ 7.0/10분"), ("game", "ow_epl", "sierra", 3.0, "시에라 시즌 목숨당 처치 ≥ 3.0"),
+             ("game", "ow_win", "damage", 55, "시즌 딜러 승률 ≥ 55%"), ("rank", "hold", "Master 3", 30, "마스터 3 · 30일 강등 없음")]],
+  "stage_plain": ["출발선 18판 · 훈련 10일 · 옵치 블록 8/10일 · 랭크 카드 5번 · 영웅 셋 잠금 · 전적 연동 켜기",
+                  "코박스 9갈래 골드 · 솔저 DM 명중 40% · 치명타 9% · 에임 죽음 ≤ 40% · 시즌 딜러 죽음 8.5/10분 · 다이아 3 2주",
+                  "중급 표 500 · 6갈래 · 명중 43% · 치명타 11% · K/D 1.2 · 죽음 8.0 · 캐서디 목숨당 1.8 · 다이아 1 2주 · 결산 8주",
+                  "중급 표 650 · 9갈래 600 · 명중 45% · 치명타 12% · K/D 1.3 · 죽음 7.5 · 캐서디 시즌 48% · 승률 53% · 마스터 5 30일",
+                  "중급 표 700 · 명중 47% · 치명타 13% · K/D 1.4 · 죽음 7.0 · 시에라 목숨당 3.0 · 승률 55% · 마스터 3 30일"],
+  "coach": {"section": "[오버워치로 연결]", "goal_obj": "마스터를", "probe_names": "Aether·Raw Control·Snake Track·Pasu·EddieTS·ControlTS"},
+  "tags": "에임 훈련, 코박스, KovaaK's, 오버워치 2, Overwatch 2, 히트스캔, 다이아몬드, 마스터, Road to Master, 볼테익, Voltaic, aim training, 에임 연습, 매일 훈련",
  },
 }
 GAME = GAMES["valorant"]
@@ -9451,6 +9458,9 @@ def main():
     show(data["win"].get("tab") if data["win"].get("tab") in frames else "today")   # 마지막에 보던 페이지, 없으면 오늘
     if bcast_cfg().get("open", True) and not os.environ.get("AIMDESK_NO_BCAST"): root.after(400, open_broadcast)   # 녹화되는 화면은 늘 열려 있어야 한다
     root.after(1500, lambda: auto_coach_now("start"))                 # 자동 코치: 어제까지의 기록으로 오늘 목표
+    if GAME["api"] == "ow" and callable(_DBG.get("ow_sync_now")) and (data.get("ow_cfg") or {}).get("tag") \
+            and str((data.get("ow") or {}).get("at") or "")[:10] != datetime.now().strftime("%Y-%m-%d"):
+        root.after(2500, _DBG["ow_sync_now"])                          # v9.1 — 하루 한 번 오버워치 전적 (설정에 배틀태그가 있을 때)
     if LOAD_ERROR:
         root.after(500, lambda: messagebox.showwarning("에임 데스크 — 기록 파일", "\n\n".join(LOAD_ERROR)))
     if MIGRATED[0]:
@@ -10570,7 +10580,7 @@ if __name__ == "__main__":
         _snap = (json.dumps(STAGES, ensure_ascii=False), COACH_SYSTEM, tuple(COACH_SECTIONS), list(VAL_ORDER), dict(VAL_TIER_KO), list(PROBE), list(CYCLE), dict(DTYPE_SHORT), dict(WHY_KO), SYNC_REPO_DEFAULT, json.dumps(blank_day()["val"], sort_keys=True))
         assert GAME["key"] == "valorant" and game_default({}) in GAMES and game_default({"game": "ow2"}) == "ow2" and game_default({"game": "x"}) in ("valorant", "ow2")
         set_game("ow2")
-        assert GAME["key"] == "ow2" and STAGES[4]["name"] == "마스터 → 그랜드마스터" and SERIES["title"] == "Road to Grandmaster" and SYNC_REPO_DEFAULT == "aimdesk-data-ow2"
+        assert GAME["key"] == "ow2" and STAGES[4]["name"] == "마스터 5 → 마스터 3" and STAGES[1]["name"] == "다이아 5 → 다이아 3" and SERIES["title"] == "Road to Master" and SYNC_REPO_DEFAULT == "aimdesk-data-ow2" and GAME["main_heroes"] == ["sierra", "cassidy", "soldier-76"]
         assert norm_val_tier("그마 1") == "Grandmaster 1" and norm_val_tier("골드 5") == "Gold 5" and norm_val_tier("Immortal 1") is None and ko_tier("Champion") == "챔피언"
         assert val_rank_ord("골드 5") < val_rank_ord("골드 1") < val_rank_ord("플래 5") and val_rank_ord("Platinum 5") == 31 and val_rank_ord("Master 3") == 53   # 5 가 낮다
         assert PROBE == ["aether", "raw", "snake", "pasu", "eddie", "cts"] and len(PROBE) == 6 and not (set(PROBE) & {k_ for k_, _n in WARMUP}) and CYCLE[0] == "trk" and DAY_TYPE["v"][0] == "옵치 데이" and DTYPE_SHORT["v"] == "옵치"
@@ -10587,16 +10597,18 @@ if __name__ == "__main__":
             _og["days"][_dk] = dict(blank_day(), plays=[["w4", "12.00.00", 800]], count={"w4": 1}, first={"w4": 800}, best={"w4": 800},
                                     val={"dm_k": 20, "dm_d": 10, "acc": 46.0, "crit": 16.0, "skip": False}, rank={"tier": "골드 3", "rr": 20, "games": 2, "why": "pos"})
         _gg = {g_["label"]: g_ for g_ in stage_gates(_og, "2026-09-14", 2)}
-        assert _gg["명중률 ≥ 45%"]["ok"] is True and _gg["명중률 ≥ 45%"]["val"] == "46%" and _gg["치명타 ≥ 15%"]["ok"] is True and _gg["데스매치 K/D 14일 중앙 ≥ 1.2"]["val"] == "2.00", _gg
-        assert _gg["다이아 5 · 14일 유지"]["ok"] is False and [g_["k"] for g_ in stage_gates(_og, "2026-09-14", 0)] == ["aim", "aim", "game", "rank"] and stage_gates(_og, "2026-09-14", 0)[2]["label"] == "옵치 블록 8/10일"
-        _wp2 = week_pack(_og, "2026-09-13"); assert "[Road to Grandmaster]" in _wp2 and "옵치 블록 7/7일 · 명중 중앙 46% · 치명타 16%" in _wp2 and "진행률 +140%" in _wp2 and "그랜드마스터 갈 때까지" in _wp2, _wp2
-        assert story_line(_og, "2026-09-14").startswith("DAY 14 · 골드 3 → 그랜드마스터") and "오버워치 2 블록: DM 20/10 (K/D 2.00) · 명중 46% · 치명타 16%" in daily_report(_og, "2026-09-14")
-        assert "오버워치 2, Overwatch 2" in upload_pack(_og, "2026-09-14") and "목표 그랜드마스터" in upload_pack(_og, "2026-09-14")
+        assert _gg["솔저 DM 명중률 ≥ 43%"]["ok"] is True and _gg["솔저 DM 명중률 ≥ 43%"]["val"] == "46%" and _gg["솔저 DM 치명타 ≥ 11%"]["ok"] is True and _gg["데스매치 K/D 14일 중앙 ≥ 1.2"]["val"] == "2.00", _gg
+        assert _gg["다이아 1 · 14일 유지"]["ok"] is False and _gg["시즌 딜러 죽음 ≤ 8.0/10분"]["ok"] is None and _gg["캐서디 시즌 목숨당 처치 ≥ 1.8"]["val"] == "자료 없음", _gg
+        assert [g_["k"] for g_ in stage_gates(_og, "2026-09-14", 0)] == ["aim", "aim", "game", "rank"] and stage_gates(_og, "2026-09-14", 0)[2]["label"] == "옵치 블록 8/10일"
+        assert len(GAMES["ow2"]["gates"]) == 5 and all(len(sp) in (2, 3, 4, 5, 6) for st_ in GAMES["ow2"]["gates"] for sp in st_)
+        _wp2 = week_pack(_og, "2026-09-13"); assert "옵치 블록 7/7일 · 명중 중앙 46% · 치명타 16%" in _wp2 and "진행률 +140%" in _wp2 and "마스터 갈 때까지" in _wp2 and "[Road to Master]" in _wp2, _wp2
+        assert story_line(_og, "2026-09-14").startswith("DAY 14 · 골드 3 → 마스터") and "오버워치 2 블록: DM 20/10 (K/D 2.00) · 명중 46% · 치명타 16%" in daily_report(_og, "2026-09-14")
+        assert "오버워치 2, Overwatch 2" in upload_pack(_og, "2026-09-14") and "목표 마스터" in upload_pack(_og, "2026-09-14") and "Road to Master" in upload_pack(_og, "2026-09-14")
         set_game("valorant")
         assert (json.dumps(STAGES, ensure_ascii=False), COACH_SYSTEM, tuple(COACH_SECTIONS), list(VAL_ORDER), dict(VAL_TIER_KO), list(PROBE), list(CYCLE), dict(DTYPE_SHORT), dict(WHY_KO), SYNC_REPO_DEFAULT, json.dumps(blank_day()["val"], sort_keys=True)) == _snap
         assert val_rank_ord("Gold 2") == 32 and DAY_TYPE["v"][0] == "발로 데이" and GAMES["valorant"]["port"] != GAMES["ow2"]["port"]
         # ── v9.1: 오버워치 전적 (OverFast) — 파서 · 주력 영웅 가중 평균 · 동기화(가짜 GET) · 관문 ──
-        assert ow_tag("YouKnow#31605") == "YouKnow-31605" and ow_tag("no-hash") is None and ow_tag("a#b") is None and ow_hero_name("soldier-76") == "솔저 76" and ow_hero_name("jetpack-cat") == "Jetpack Cat"
+        assert ow_tag("YouKnow#31605") == "YouKnow-31605" and ow_tag("no-hash") is None and ow_tag("a#b") is None and ow_hero_name("soldier-76") == "솔저 76" and ow_hero_name("jetpack-cat") == "제트팩 캣" and ow_hero_name("some-new-hero") == "Some New Hero"
         _sumj = {"username": "YouKnow", "competitive": {"pc": {"season": 23, "tank": {"division": "platinum", "tier": 5}, "damage": {"division": "diamond", "tier": 5}, "support": {"division": "platinum", "tier": 4}, "open": None}, "console": None}}
         _sm = parse_ow_summary(_sumj); assert _sm == {"season": 23, "ranks": {"damage": "Diamond 5", "tank": "Platinum 5", "support": "Platinum 4"}, "name": "YouKnow"}, _sm
         _carj = {"all-heroes": {"game": {"time_played": 11873, "games_played": 21, "games_won": 12}, "average": {"deaths_avg_per_10_min": 8.39}, "combat": {}},
