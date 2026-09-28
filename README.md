@@ -1,6 +1,6 @@
 # 에임 데스크 (AimDesk)
 
-발로란트 에임 향상을 위한 코박스(KovaaK's) 훈련 데스크 — **"골드 2 → 불멸" 매일 올리는 시리즈의 촬영·기록 도구**.
+발로란트 · 오버워치 2 에임 향상을 위한 코박스(KovaaK's) 훈련 데스크 — **"골드 2 → 불멸" 매일 올리는 시리즈의 촬영·기록 도구** (v9.0 부터 오버워치 2용 exe 가 따로 있습니다).
 코박스 `stats` 폴더를 2초마다 읽어 오늘 친 판 수 · 점수 · 신기록을 자동 기록하고, 볼테익(Voltaic) S5 벤치마크와 같은 수식으로 에너지·랭크를,
 그날 첫 판으로 컨디션을 계산합니다. 하루가 끝나면 **기록 파일 · 유튜브 업로드 팩(제목·설명·명장면·챕터·태그) · 썸네일 페이지**가 자동으로 저장되고,
 월요일은 쉬는 날 — 앱을 켜면 **지난 주 결산**이 저장되고, 토요일엔 **보스전(벤치 18판)** 이 옵니다. 랭크는 **골드 2 → 불멸 다섯 단계**의 관문 숫자로 따라갑니다. v8.0 은 왼쪽 레일 + 페이지 템플릿 하나로 여섯 화면을 한 디자인으로 다시 지었고, 처음 켜면 **처음 시작 · 세 가지** 카드가 안내합니다.
@@ -9,11 +9,18 @@
 
 **완성된 exe** (파이썬 설치 불필요) — `main` 에 푸시될 때마다 GitHub Actions 가 Windows 에서 자동 빌드합니다.
 
-- 주소: https://github.com/joyunho/AIM_PROGRAM/releases/latest/download/AimDesk.exe
+- 발로란트용: https://github.com/joyunho/AIM_PROGRAM/releases/latest/download/AimDesk.exe
+- 오버워치 2용 (v9.0): https://github.com/joyunho/AIM_PROGRAM/releases/latest/download/AimDesk-OW2.exe — 같은 프로그램, 게임 프로필만 다릅니다 (아래 '두 게임' 절)
 - PowerShell 한 줄 (바탕화면 `AimDesk` 폴더에 받고 SmartScreen 차단 해제):
 
 ```powershell
 $d="$env:USERPROFILE\Desktop\AimDesk"; New-Item -ItemType Directory -Force $d | Out-Null; Invoke-WebRequest "https://github.com/joyunho/AIM_PROGRAM/releases/latest/download/AimDesk.exe" -OutFile "$d\AimDesk.exe"; Unblock-File "$d\AimDesk.exe"; explorer $d
+```
+
+오버워치 2용은 **다른 폴더**에 받으세요 (기록 파일이 게임마다 따로 쌓입니다):
+
+```powershell
+$d="$env:USERPROFILE\Desktop\AimDesk-OW2"; New-Item -ItemType Directory -Force $d | Out-Null; Invoke-WebRequest "https://github.com/joyunho/AIM_PROGRAM/releases/latest/download/AimDesk-OW2.exe" -OutFile "$d\AimDesk-OW2.exe"; Unblock-File "$d\AimDesk-OW2.exe"; explorer $d
 ```
 
 **소스로 직접 빌드** (git + 파이썬 필요):
@@ -28,11 +35,11 @@ git clone https://github.com/joyunho/AIM_PROGRAM.git && cd AIM_PROGRAM && make_e
 
 | 파일 | 역할 |
 |---|---|
-| `aim_desk.py` | 프로그램 전체 (파이썬 3.9+, 표준 라이브러리만 사용) |
+| `aim_desk.py` | 프로그램 전체 (파이썬 3.9+, 표준 라이브러리만 사용). 발로란트용·오버워치 2용 exe 가 이 파일 하나에서 나옵니다 (`GAMES` 표 · `set_game`) |
 | `make_exe.bat` | 더블클릭 → PyInstaller로 `AimDesk.exe` 생성 + 바탕화면 바로가기 |
 | `app.ico` | exe · 바탕화면 아이콘 (v7.1 — 금색 A 모노그램 + 조준점, 256~16px 6장). 창 아이콘(`ICON_B64`)도 같은 그림 |
 | `smoke_test.py` | Xvfb 헤드리스 GUI 스모크 테스트 215개 (exe 에 포함되지 않음). 동시에 여러 개 돌리려면 `AIMDESK_LOCK_PORT` 를 달리 |
-| `.github/workflows/build-exe.yml` | main 푸시 시 exe 자동 빌드 → `latest` 릴리스에 업로드, Linux 에서 GUI 스모크 테스트 |
+| `.github/workflows/build-exe.yml` | main 푸시 시 exe 두 개(`AimDesk.exe` · `AimDesk-OW2.exe`) 자동 빌드 → `latest` 릴리스에 업로드, Linux 에서 GUI 스모크 테스트 (발로란트 · 150% · 오버워치 2) |
 | `기록/에임데스크_YYYY-MM-DD.txt` | (실행하면 생김) 그날 기록 텍스트 — 트레이너에게 보내는 파일 |
 | `기록/EP014_YYYY-MM-DD_업로드.txt` | 그날 영상의 제목 후보 3 · 설명 · 명장면(mm:ss) · 챕터 · 태그 · 고정 댓글 — 복사해서 붙이면 끝 |
 | `기록/EP014_YYYY-MM-DD_썸네일.html` | 브라우저에서 열면 1280×720 썸네일 3장 — 버튼으로 PNG 저장 (인터넷 불필요) |
@@ -40,7 +47,7 @@ git clone https://github.com/joyunho/AIM_PROGRAM.git && cd AIM_PROGRAM && make_e
 | `기록/WEEK_YYYY-Www_결산.txt` | 주간 결산 (쉬는 날인 월요일에 지난 주를 마감) — 이번 주 숫자 · 관문 · 특별편 · 다음 주 테마 · 주간 영상 제목 후보 |
 
 실행: `python aim_desk.py` 또는 빌드한 `AimDesk.exe`. 자가 점검: `python aim_desk.py --selftest`.
-GUI 테스트: `AIMDESK_DATA_DIR=/tmp/x xvfb-run -a python3 smoke_test.py` (실제 기록 파일은 건드리지 않음). 배율 확인: `AIMDESK_SCALE=1.5`. 방송창 없이: `AIMDESK_NO_BCAST=1`.
+GUI 테스트: `AIMDESK_DATA_DIR=/tmp/x xvfb-run -a python3 smoke_test.py` (실제 기록 파일은 건드리지 않음). 배율 확인: `AIMDESK_SCALE=1.5`. 방송창 없이: `AIMDESK_NO_BCAST=1`. 오버워치 2 프로필로: `AIMDESK_GAME=ow2` (소스로 실행할 때도 같은 변수).
 
 ## 하루 흐름 (v6.0)
 
@@ -203,6 +210,28 @@ exe 를 다른 폴더에서 실행하면 기록 파일이 **조용히 다른 자
 - exe 옆이 아닌 곳에 쓰게 되면 exe 옆에 `aim_desk_기록위치.txt` 를 남겨, 폴더를 열어 봤을 때 어디로 갔는지 알 수 있게 합니다.
 - **백업이 날짜별로 남습니다** (`aim_desk_data.bak-YYYYMMDD.json`, 8개). 예전에는 백업이 한 칸뿐이라 실행할 때마다 덮어써서, 손상 안내문이 가리키는 "직전 정상본"이 이미 사라진 뒤였습니다. 지금 파일이 백업보다 빈약하면 아예 덮어쓰지 않습니다.
 - 저장은 `fsync` 로 디스크까지 내려보낸 뒤 교체합니다. 이름만 바꾸면 전원이 나갔을 때 "이름은 새 파일, 내용은 빈 파일"이 될 수 있습니다.
+
+## 두 게임 — 발로란트용 · 오버워치 2용 (v9.0)
+
+같은 파일에서 exe 가 두 개 나옵니다. **exe 이름이 게임을 정합니다** — `AimDesk.exe` 는 발로란트, `AimDesk-OW2.exe` 는 오버워치 2. 처음 켤 때 기록 파일에 `game` 이 적히므로 나중에 exe 이름을 바꿔도 프로필은 그대로이고, 설정 → 화면의 **게임** 칸으로 바꿀 수도 있습니다 (바꾸면 다시 켜집니다). 기록 파일은 게임마다 따로 쓰는 게 맞으므로 두 exe 는 **다른 폴더**에 두세요. 두 개를 동시에 켤 수 있고(잠금 포트가 다름), 방송창 제목은 둘 다 `AimDesk Broadcast` 라 OBS 장면은 그대로 씁니다. 클라우드 동기화의 기본 저장소도 다릅니다 (`aimdesk-data` · `aimdesk-data-ow2`).
+
+게임에 묶인 것은 전부 `GAMES` 표 한 곳에서 읽습니다 — 코드의 나머지는 게임을 모릅니다. 발로란트 쪽 출력(기록 파일 · 주간 결산 · 업로드 팩 · 관문 · 방송 문구)은 v8.0.2 와 글자까지 같습니다.
+
+| | 발로란트 (`AimDesk.exe`) | 오버워치 2 (`AimDesk-OW2.exe`) |
+|---|---|---|
+| 측정 6개 (매일 첫 판) | 클리킹 3 + 스위칭 3 — 1w4ts · Pasu · Popcorn · EddieTS · DriftTS · ControlTS | 트래킹 3 + 클리킹 1 + 스위칭 2 — Aether · Raw Control · Snake Track · Pasu · EddieTS · ControlTS |
+| 컨디션 지수 | 클리킹·스위칭 갈래 z 평균 (`발로 +0.4`) | 트래킹 갈래 z 평균 (`옵치 +0.4`) |
+| 본훈련 10일 주기 | 클리킹 4 · 스위칭 2 · 약점 2 · 플릭 1 · 순회 1 (트래킹은 트레이너 지정 때만) | 트래킹 2 · 스위칭 2 · 클리킹 2 · 약점 2 · 플릭 1 · 순회 1 |
+| 약점 집중 | 클리킹·스위칭 중 가장 낮은 두 갈래 | 트래킹·스위칭 중 가장 낮은 두 갈래 |
+| 15분 블록 | 사격장 3 → 카운터 스트레이프 3 → 데스매치 9 · 숫자: 사격 /30 · 킬 · 데스 · 헤드샷 % | 훈련장 트래킹 3 → 훈련장 플릭 3 → 데스매치 9 · 숫자: 처치 · 죽음 · 명중률 % · 치명타 % |
+| 랭크 사다리 | 아이언 → 레디언트, 1 < 2 < 3 · RR | 브론즈 → 챔피언, 5 < 4 < … < 1 · 진행률 % |
+| 다섯 단계 | 골드 2 → 불멸 (관문: 헤드샷 % · 사격 /30 · ACS · 승률 · 티어 유지) | 골드 3 → 그랜드마스터 (관문: 명중률 % · 치명타 % · 데스매치 K/D · 티어 유지) |
+| 죽은 이유 | 에임 · 피크·위치 · 정보·판단 · 유틸 | 에임 · 위치·거리 · 정보·판단 · 궁·협동 |
+| 전적 연동 | HenrikDev API (선택) | 공개 API 가 없어 카드는 안내 한 줄 — 랭크·진행률은 랭크 카드에 손으로 |
+| AI 코치 | 발로란트 에임 코치 · `[발로란트로 연결]` | 오버워치 2 에임 코치(히트스캔 기준) · `[오버워치로 연결]` |
+| 업로드 팩 | Road to Immortal · 발로란트 태그 | Road to Grandmaster · 오버워치 2 태그 |
+
+오버워치 2 의 출발 티어(골드 3)와 다섯 단계의 랭크는 기본값입니다 — 기록 파일의 `series.tier` · `series.goal` 로 주인공 줄의 말을 바꿀 수 있고, 관문의 티어는 `GAMES["ow2"]["gates"]` 한 표에 있습니다.
 
 ## 화면 리뉴얼 — 좌측 레일 · 한 화면 한 질문 (v8.0)
 

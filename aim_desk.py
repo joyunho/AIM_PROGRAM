@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v8.0.2 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
+에임 데스크 v9.0 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
@@ -52,6 +52,10 @@
 · v8.0.2: 코박스 확인(kovaaks_running)을 tasklist(외부 프로세스 · 최대 5초 · WMI 가 막히면 종료도 안 됨) 대신 kernel32 Toolhelp32 스냅샷(수 ms)으로 —
   메인 스레드가 외부 프로세스를 기다리는 자리가 사라진다 (스냅샷이 안 되면 tasklist 는 스레드에서, 마지막 값만 쓴다) · after 콜백이 메인 스레드를 1.5초 넘게 붙잡으면
   aim_desk.log 에 'slow callback' 한 줄 · 멈춤 감시 문턱 6초 → 3초 · 켤 때마다 'start ok Ns' 한 줄(창이 뜨기까지 걸린 시간)
+· v9.0: 두 게임 — 발로란트용(AimDesk.exe)과 오버워치 2용(AimDesk-OW2.exe)이 같은 파일에서 나온다. 게임에 묶인 말과 숫자(15분 블록의 네 칸 ·
+  다섯 단계와 관문 · 랭크 사다리 · 측정 6개와 본훈련 주기 · 코치 프롬프트 · 업로드 팩 태그 · 방송 문구)는 전부 GAMES 표에서 읽고,
+  exe 이름(또는 기록 파일의 game · 설정 → 화면의 게임 칸)이 프로필을 정한다 (set_game). 오버워치 2 는 트래킹 위주 측정·주기, 명중률·치명타 관문,
+  브론즈~챔피언 사다리(5→1), 훈련장·데스매치 15분 블록. 발로란트 쪽 출력은 v8.0.2 와 같다
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
 from __future__ import annotations
@@ -191,7 +195,7 @@ def _train_ord(d: date) -> int:
 
 def weak_theme(pb: dict):
     """약점 집중 — 발로란트에 닿는 클리킹·스위칭 서브카테고리 중 가장 약한 둘에서 12판. 기록이 모자라면 None"""
-    subs = [(s_, subE(s_, pb or {})) for s_ in SUBS if s_[1] in ("클리킹", "스위칭")]
+    subs = [(s_, subE(s_, pb or {})) for s_ in SUBS if s_[1] in GAME["weak_cats"]]
     subs = [(s_, e) for s_, e in subs if e is not None]
     if len(subs) < 2: return None
     subs.sort(key=lambda x: x[1])
@@ -560,7 +564,7 @@ def daily_report(data: dict, dkey: str, plays=None, dt: str = None) -> str:
         if e_day is not None: line += f" · 오늘 베스트 기준 {e_day} ({n_day}/9)"
     L.append(line)
     _vl = fmt_val(day)
-    if _vl: L.append("발로란트 블록: " + _vl)
+    if _vl: L.append(f"{GAME['name']} 블록: " + _vl)
     cond = day.get("cond") or {}; chk = day.get("checks") or {}; dth = day.get("deaths") or {}
     sl = cond.get("sleep")
     try: sl_txt = f"{float(sl):g}h" if sl is not None else "미입력"
@@ -579,7 +583,7 @@ def daily_report(data: dict, dkey: str, plays=None, dt: str = None) -> str:
           "  " + fmt_verdict_line("요즘", V["recent"])]
     chg = day_changes(data, dkey)
     if chg: L.append("오늘 바뀐 것:"); L += [f"  - {x}" for x in chg]
-    L += ["", "[단계]  (골드 2 → 불멸 다섯 단계 — 관문은 앱이 읽는 숫자. 두 주 연속 다 차면 다음 단계)"] + ["  " + x for x in stage_lines(data, dkey)]
+    L += ["", f"[단계]  ({GAME['series']['tier']} → {GAME['series']['goal']} 다섯 단계 — 관문은 앱이 읽는 숫자. 두 주 연속 다 차면 다음 단계)"] + ["  " + x for x in stage_lines(data, dkey)]
     # ── 판별 기록 ──
     L += ["", "[판별 기록]  시각 · 시나리오 · 점수 · 판정 · 어제까지 평소 범위(판 단위)"]
     if not plays: L.append("  (오늘 판 없음)")
@@ -616,7 +620,8 @@ def daily_report(data: dict, dkey: str, plays=None, dt: str = None) -> str:
         if not e or not e.get("first"): continue
         vals = " ".join(_cell(e["first"].get(k)) for k in PROBE)
         p = ps.get(dk); idx = []
-        if p and p.get("vi") is not None: idx.append(f"발로 {p['vi']:+.1f}")
+        _pi = probe_idx(p) if p else None
+        if _pi is not None: idx.append(f"{GAME['short']} {_pi:+.1f}")
 
         L.append(f"  {dk[5:]} {DOWK[date.fromisoformat(dk).weekday()]}  {vals}" + (" · " + " ".join(idx) if idx else "")); n_pr += 1
     if not n_pr: L.append("  (기록 없음)")
@@ -945,7 +950,7 @@ def archive_data() -> Path:
 import base64, gzip, hashlib, copy as _copy
 SYNC_FILE = "aimdesk.json.gz"
 SYNC_REPO_DEFAULT = "aimdesk-data"
-SYNC_MACHINE = ("stats_dir", "win", "seq_popup", "seq_compact", "seq_topmost", "ui_scale", "out_dir", "sync", "next_key", "bcast", "card_day", "set_sig")
+SYNC_MACHINE = ("stats_dir", "win", "seq_popup", "seq_compact", "seq_topmost", "ui_scale", "out_dir", "sync", "next_key", "bcast", "card_day", "set_sig", "game")   # game: 이 exe 몫 (v9.0)
 SYNC_SECRETS = (("coach", "ai_key"), ("valo_cfg", "key"))
 SYNC_MEM = {"token": "", "public": False, "floor": None}   # 공용 PC 모드: 토큰은 메모리에만 · floor = (날짜, 앱을 켠 시각) 이전 판은 앞사람 것
 GH_API = "https://api.github.com"
@@ -1303,6 +1308,7 @@ def load_data() -> dict:
     trainer_load(d); load_out_dir(d)
     ADAPT["on"] = bool(d.setdefault("adapt", {"on": True}).get("on", True))
     set_tier(d.setdefault("tier", "n"))                  # 지금 훈련 중인 벤치 단계 (n/i/a)
+    set_game(game_default(d)); d["game"] = GAME["key"]     # v9.0 — 이 exe 의 게임 (환경변수 → 파일 → exe 이름)
     d.setdefault("series", {}).setdefault("ep_offset", 0)   # DAY N 시작 오프셋 (새로 시작할 때 이어 셀 수 있게)
     d.setdefault("valo_cfg", {"rid": "", "region": "ap", "key": ""})
     _bc = d.setdefault("bcast", {}); _bc.setdefault("preset", "card"); _bc.setdefault("frameless", False); _bc.setdefault("chroma", False); _bc.setdefault("open", True)
@@ -1325,7 +1331,7 @@ def blank_day() -> dict:
             "cond": {"sleep":None,"feel":5},
             "rank": {"tier": "", "rr": None},                  # 랭크 피드백(선택): 오늘 티어·RR 변화 — 실제 게임에서 어떻게 변하는지 보려고
             "rec": {"start": None, "src": None},               # 녹화 시작 시각 (routine=루틴 실행 · manual=버튼) — 명장면·챕터의 0:00
-            "val": {"range": None, "dm_k": None, "dm_d": None, "dm_hs": None, "skip": False},   # 발로란트 블록 15분 — 숫자만 (v6.0)
+            "val": {**{k_: None for k_, _l, _w, _t in GAME["block"]["fields"]}, "skip": False},   # 15분 블록 — 숫자만 (v6.0 · v9.0 게임별 칸)
             "checks": {}}                                       # v4 에서 미야기·랭크 체크 제거 — 옛 파일 호환용 빈 칸
 
 def merge_plays(existing, plays):
@@ -2112,8 +2118,8 @@ def fmt_seq_summary(played, total, n_pb, rel, probe, idx, est_min, block_txt=Non
             m = sum(rel) / len(rel) * 100; parts.append(f"{'▲' if m >= 0 else '▼'}{abs(m):.1f}%")
     if probe:
         pr = f"프로브 {probe[0]}/{probe[1]}"
-        vi, oi = idx
-        if vi is not None: pr += f" 발로 {vi:+.1f}"
+        vi, oi = idx; _pi = oi if GAME["index"] == "oi" else vi
+        if _pi is not None: pr += f" {GAME['short']} {_pi:+.1f}"
 
         parts.append(pr)
     remaining = total - played
@@ -2235,8 +2241,8 @@ def history_rows(data: dict, upto: str, series, pbd: dict, n: int = 14):
 
 def fmt_history_row(r: dict):
     idx = "—"
-    if r["vi"] is not None:
-        idx = f"{r['vi']:+.1f}"
+    if probe_idx(r) is not None:
+        idx = f"{probe_idx(r):+.1f}"
     return [f"{r['date'][5:7]}-{r['date'][8:10]} {r['dow']}", DTYPE_SHORT[r["dtype"]],
             str(r["plays"]) if r["trained"] else "·", str(r["minutes"]) if (r["trained"] and r["minutes"] is not None) else ("—" if r["trained"] else "·"),
             f"{r['probe']}/{len(PROBE)}" if r["trained"] else "", idx if r["trained"] else "",
@@ -3164,8 +3170,9 @@ def val_rank_ord(t: str):
     """티어 문자열의 순서값 (비교용). 'Gold 2' → 32 · '골드 2' → 32 · 'Immortal 1' → 71 · 모르면 None"""
     n = norm_val_tier(t)
     if not n: return None
-    parts = n.split()
-    return VAL_ORDER.index(parts[0]) * 10 + (int(parts[1]) if len(parts) > 1 else 0)
+    parts = n.split(); div = int(parts[1]) if len(parts) > 1 else 0
+    if div and GAME["div_low_is_high"]: div = 6 - div                   # 오버워치: 5(낮음) … 1(높음) → 1 … 5
+    return VAL_ORDER.index(parts[0]) * 10 + div
 
 def day_val_tier(data: dict, dkey: str):
     """그날의 발로란트 티어·RR — 손으로 적은 값이 먼저, 없으면 그날 불러온 스냅샷"""
@@ -3262,9 +3269,9 @@ def story_line(data: dict, dkey: str) -> str:
         if dk > dkey: continue
         t, rr = day_val_tier(data, dk)
         if t: break
-    tier = ko_tier(t) if t else ((data.get("series") or {}).get("tier") or "골드 2")
+    tier = ko_tier(t) if t else ((data.get("series") or {}).get("tier") or GAME["series"]["tier"])
     cur, _b = streak(training_days(data), date.fromisoformat(dkey))
-    goal = (data.get("series") or {}).get("goal") or "불멸"
+    goal = (data.get("series") or {}).get("goal") or GAME["series"]["goal"]
     return f"DAY {ep} · {tier} → {goal}" + (f" · 연속 {cur}일" if cur >= 2 else "")
 
 def _best_pb_line(data: dict, dkey: str, plays):
@@ -3289,19 +3296,19 @@ def upload_pack(data: dict, dkey: str, plays=None, dt: str = None) -> str:
     ms = milestones(data, dkey, plays); pbl = _best_pb_line(data, dkey, plays)
     n_pb = sum(1 for _k, _s, kind in day_verdicts(data, dkey, plays) if kind == "pb")
     ss = session_summary(plays, {}); mins = ss.get("minutes")
-    vt, vrr = day_val_tier(data, dkey); vline = (ko_tier(vt) + (f" · {vrr}RR" if vrr is not None else "")) if vt else "골드 2"
+    vt, vrr = day_val_tier(data, dkey); vline = (ko_tier(vt) + (f" · {rr_after(vrr)}" if vrr is not None else "")) if vt else GAME["series"]["tier"]
     e_pb, _ = totalE(data.get("pb") or {}); eline = f"총 에너지 {e_pb} {rank_of(e_pb)[0]}" if e_pb is not None else "기준 측정 전"
     # 오늘 가장 큰 일: 특별편 > 랭크 변동 > 신기록 > 에너지 > 테마
     big = ms[0][1] if ms else (pbl or eline)
     who = (data.get("valo_cfg") or {}).get("rid") or SERIES["who"]
     t1 = _cut(f"[{SERIES['title']}] DAY {ep} · {vline.split(' · ')[0]} 에임 훈련 — {Vd['word']} {Vd['glyph']} {Vd['num']}" + (f" · 신기록 {n_pb}개" if n_pb else ""))
-    t2 = _cut(f"{vline.split(' · ')[0]}가 불멸 갈 때까지 매일 코박스 DAY {ep} | {big}")
+    t2 = _cut(f"{vline.split(' · ')[0]}가 {GAME['series']['goal']} 갈 때까지 매일 코박스 DAY {ep} | {big}")
     t3 = _cut(f"DAY {ep} | {theme} {len(plays)}판" + (f" {mins}분" if mins else "") + f" · {Vr['word']}")
     if dt == "b" and e_pb is not None: t1 = _cut(f"[{SERIES['title']}] DAY {ep} {theme} — 볼테익 {e_pb} {rank_of(e_pb)[0]}")
     L = [f"[제목 후보]  (100자 이내 · 하나 골라 복사)", f"1. {t1}", f"2. {t2}", f"3. {t3}", ""]
     gw, gn, gc = fmt_gate(gate_status(data.get("pb") or {}))
     L += ["[설명]", f"{SERIES['title']} · {story_line(data, dkey)} · {dkey} ({DOWK[d.weekday()]})" + (f" · {ms[0][1]}" if ms else ""),
-          f"발로란트 {vline} · 목표 불멸", f"오늘 {Vd['word']} {Vd['glyph']} {Vd['num']} · 요즘 {Vr['word']} · 성장 {Vg['word']}",
+          f"{GAME['name']} {vline} · 목표 {GAME['series']['goal']}", f"오늘 {Vd['word']} {Vd['glyph']} {Vd['num']} · 요즘 {Vr['word']} · 성장 {Vg['word']}",
           f"루틴 {theme} · {len(plays)}판" + (f" · {mins}분" if mins else "") + (f" · 신기록 {n_pb}개" if n_pb else ""), eline + f" · {TIER_KO[CUR_TIER[0]]} 벤치마크",
           f"{gw} — {gc}" if gc else gw]
     ch_ = day_changes(data, dkey)
@@ -3313,7 +3320,7 @@ def upload_pack(data: dict, dkey: str, plays=None, dt: str = None) -> str:
     L += [f"{fmt_mmss(h['off'])}  {h['text']:<40} [{fmt_mmss(h['in'])}–{fmt_mmss(h['out'])}]" for h in hl] or ["(판이 없습니다)"]
     ch = chapters(data, dkey, plays)
     L += ["", "[챕터]  (설명 맨 아래에 그대로)"] + ([f"{fmt_mmss(o)} {t}" for o, t in ch] or ["(챕터 3개를 못 만들었습니다 — 판이 더 있어야 합니다)"])
-    L += ["", "[태그]", "에임 훈련, 코박스, KovaaK's, 발로란트, Valorant, 골드, 불멸, Road to Immortal, 볼테익, Voltaic, aim training, 에임 연습, 매일 훈련"]
+    L += ["", "[태그]", GAME["tags"]]
     nxt = nearest_rankup(data.get("pb") or {})
     L += ["", "[고정 댓글]", f"DAY {ep} · {Vd['word']} {Vd['num']}" + (f" · 신기록 {n_pb}개" if n_pb else "") +
           (f" · 다음 목표: {sname(nxt[1])} {nxt[2]}점이면 {nxt[3]}" if nxt else "") + " · 기록 파일은 앱이 자동 저장합니다"]
@@ -3325,7 +3332,7 @@ def thumb_data(data: dict, dkey: str, plays=None, dt: str = None) -> dict:
     dt = dt or day_type_of(dkey); ep = episode_no(data, dkey)
     V = verdicts(data, dkey, dt, plays); Vd = V["day"]
     theme = main_theme(dkey, data.get("pb"))[1] if dt == "v" else bench_label(dkey)
-    vt, _rr = day_val_tier(data, dkey); sub = f"{ko_tier(vt) if vt else '골드 2'} · {theme}"
+    vt, _rr = day_val_tier(data, dkey); sub = f"{ko_tier(vt) if vt else GAME['series']['tier']} · {theme}"
     ms = milestones(data, dkey, plays); pbl = _best_pb_line(data, dkey, plays)
     e_pb, _ = totalE(data.get("pb") or {})
     if ms: big, word, colk = ms[0][1].replace("★ ", ""), "특별편", "gold"
@@ -3484,50 +3491,74 @@ def stage_idx(data: dict) -> int: return int((data.get("stage") or {}).get("idx"
 
 def _gate_item(kind, label, ok, val): return {"k": kind, "label": label, "ok": ok, "val": val}
 
+def _val_kd_med(data: dict, dkey: str, days: int = 14):
+    """최근 days 일 데스매치 K/D 의 중앙값 → (값, 개수). 죽음 0 인 날은 처치 수 그대로 (오버워치 관문, v9.0)"""
+    d0 = (date.fromisoformat(dkey) - timedelta(days=days - 1)).isoformat(); vals = []
+    for dk, e in (data.get("days") or {}).items():
+        if d0 <= dk <= dkey:
+            v = e.get("val") or {}; k_, d_ = v.get("dm_k"), v.get("dm_d")
+            if k_ is None: continue
+            vals.append(float(k_) / d_ if d_ else float(k_))
+    return _median(vals), len(vals)
+
 def stage_gates(data: dict, dkey: str, idx: int = None):
-    """현재 단계의 관문 목록 — ok 는 True/False, 자료가 아직 없으면 None (닫힌 것으로 세되 '자료 없음'으로 보인다)"""
+    """현재 단계의 관문 목록 — ok 는 True/False, 자료가 아직 없으면 None (닫힌 것으로 세되 '자료 없음'으로 보인다).
+    관문은 GAME["gates"][idx] 의 (갈래, 종류, …) 줄에서 만든다 (v9.0) — 발로란트 표는 v8 의 관문과 글자까지 같다"""
     idx = stage_idx(data) if idx is None else idx
     pb = data.get("pb") or {}; days = data.get("days") or {}
     ge = lambda v, th: (None if v is None else v >= th); le = lambda v, th: (None if v is None else v <= th)
     fv = lambda v, u="", nd=0: "자료 없음" if v is None else f"{v:.{nd}f}{u}"
-    G = []
-    if idx == 0:
-        tds = sorted(d for d in training_days(data) if d <= dkey and (BASE_DATE[0] is None or d >= BASE_DATE[0]))
-        G.append(_gate_item("aim", "출발선 측정 18판", BASE_DATE[0] is not None, BASE_DATE[0] or "아직"))
-        G.append(_gate_item("aim", "훈련 10일", len(tds) >= 10, f"{len(tds)}/10일"))
-        last10 = [d for d in tds if d != BASE_DATE[0]][-10:]; nv = sum(1 for d in last10 if val_done(days[d]))
-        G.append(_gate_item("game", "발로 블록 8/10일", nv >= 8, f"{nv}/10일"))
-        d0 = (date.fromisoformat(dkey) - timedelta(days=13)).isoformat()
-        nr = sum(1 for d in days if d0 <= d <= dkey and day_val_tier(data, d)[0])
-        G.append(_gate_item("rank", "랭크 카드 5일 (14일 안)", nr >= 5, f"{nr}/5일"))
-    elif idx == 1:
-        g = gate_status(pb, "n"); grad = CUR_TIER[0] != "n" or g["n"] >= 9
-        G.append(_gate_item("aim", "노비스 졸업 (9갈래 골드)", grad, "졸업 ✓" if CUR_TIER[0] != "n" else f"{g['n']}/9"))
-        hs, src = _hs_pct(data, dkey); G.append(_gate_item("game", "DM HS% 14일 중앙 ≥ 25", ge(hs, 25), fv(hs, "%") + (f" ({src})" if src else "")))
-        rg, _n = _val_field_med(data, dkey, "range"); G.append(_gate_item("game", "사격 ≥ 24/30", ge(rg, 24), fv(rg, "/30")))
-        ar, n = _aim_death_ratio(data, dkey); G.append(_gate_item("game", "'에임' 죽음 ≤ 40%", le(ar, 40), fv(ar, "%") + (f" ({n}일)" if n else "")))
-        hd = held_days(data, dkey, val_rank_ord("Platinum 1")); G.append(_gate_item("rank", "플래티넘 1 · 14일 강등 없음", hd >= 14, f"{hd}/14일"))
-    elif idx == 2:
-        ok6 = sum(1 for s in SUBS_T["i"] if (subE(s, pb) or 0) >= 500)
-        G.append(_gate_item("aim", "인터미디어트 500 · 6갈래", ok6 >= 6, f"{ok6}/6갈래"))
-        hs, src = _hs_pct(data, dkey); G.append(_gate_item("game", "HS% ≥ 30", ge(hs, 30), fv(hs, "%")))
-        rg, _n = _val_field_med(data, dkey, "range"); G.append(_gate_item("game", "사격 ≥ 27/30", ge(rg, 27), fv(rg, "/30")))
-        rc = _api_recent(data, 20); acs = rc["acs"] if rc else None; G.append(_gate_item("game", "최근 20판 ACS ≥ 220", ge(acs, 220), fv(acs)))
-        hd = held_days(data, dkey, val_rank_ord("Diamond 1")); G.append(_gate_item("rank", "다이아 1 · 14일 유지", hd >= 14, f"{hd}/14일"))
-        rs = _recap_streak(data, dkey); G.append(_gate_item("rank", "주간 결산 8주 연속", rs >= 8, f"{rs}/8주"))
-    elif idx == 3:
-        e_i, _n = tier_energy(pb, "i"); all600 = bool(_n == 9 and all((subE(s, pb) or 0) >= 600 for s in SUBS_T["i"]))
-        G.append(_gate_item("aim", "인터 650 · 9갈래 600", (e_i or 0) >= 650 and all600, fv(e_i) + (" · 9갈래 ✓" if all600 else f" · {sum(1 for s in SUBS_T['i'] if (subE(s, pb) or 0) >= 600)}/9")))
-        hs, src = _hs_pct(data, dkey); G.append(_gate_item("game", "HS% ≥ 27", ge(hs, 27), fv(hs, "%")))
-        rc = _api_recent(data, 20); acs = rc["acs"] if rc else None; G.append(_gate_item("game", "ACS ≥ 230", ge(acs, 230), fv(acs)))
-        r4 = _api_recent(data, 40); win = r4["win"] if r4 else None; G.append(_gate_item("game", "최근 40판 승률 ≥ 53%", ge(win, 53), fv(win, "%")))
-        hd = held_days(data, dkey, val_rank_ord("Ascendant 1")); G.append(_gate_item("rank", "어센던트 1 · 30일 유지", hd >= 30, f"{hd}/30일"))
-    else:
-        e_i, _n = tier_energy(pb, "i"); G.append(_gate_item("aim", "인터 700", (e_i or 0) >= 700, fv(e_i)))
-        hs, src = _hs_pct(data, dkey); G.append(_gate_item("game", "HS% ≥ 28", ge(hs, 28), fv(hs, "%")))
-        rc = _api_recent(data, 20); acs = rc["acs"] if rc else None; G.append(_gate_item("game", "ACS ≥ 240", ge(acs, 240), fv(acs)))
-        r6 = _api_recent(data, 60); win = r6["win"] if r6 else None; G.append(_gate_item("game", "최근 60판 승률 ≥ 55%", ge(win, 55), fv(win, "%")))
-        hd = held_days(data, dkey, val_rank_ord("Immortal 1")); G.append(_gate_item("rank", "불멸 1 · 30일 강등 없음", hd >= 30, f"{hd}/30일"))
+    G = []; tds = None
+    def _tds():
+        nonlocal tds
+        if tds is None: tds = sorted(d for d in training_days(data) if d <= dkey and (BASE_DATE[0] is None or d >= BASE_DATE[0]))
+        return tds
+    specs = GAME["gates"][min(idx, len(GAME["gates"]) - 1)]
+    for sp in specs:
+        k, kind, a = sp[0], sp[1], sp[2:]
+        if kind == "base":
+            G.append(_gate_item(k, "출발선 측정 18판", BASE_DATE[0] is not None, BASE_DATE[0] or "아직"))
+        elif kind == "train_days":
+            n = a[0]; G.append(_gate_item(k, f"훈련 {n}일", len(_tds()) >= n, f"{len(_tds())}/{n}일"))
+        elif kind == "block_days":
+            need, of = a; last = [d for d in _tds() if d != BASE_DATE[0]][-of:]; nv = sum(1 for d in last if val_done(days[d]))
+            G.append(_gate_item(k, f"{GAME['block']['word']} {need}/{of}일", nv >= need, f"{nv}/{of}일"))
+        elif kind == "rank_days":
+            need, win = a; d0 = (date.fromisoformat(dkey) - timedelta(days=win - 1)).isoformat()
+            nr = sum(1 for d in days if d0 <= d <= dkey and day_val_tier(data, d)[0])
+            G.append(_gate_item(k, f"랭크 카드 {need}일 ({win}일 안)", nr >= need, f"{nr}/{need}일"))
+        elif kind == "grad_n":
+            g = gate_status(pb, "n"); grad = CUR_TIER[0] != "n" or g["n"] >= 9
+            G.append(_gate_item(k, "노비스 졸업 (9갈래 골드)", grad, "졸업 ✓" if CUR_TIER[0] != "n" else f"{g['n']}/9"))
+        elif kind == "hs":
+            th, label, with_src = a; hs, src = _hs_pct(data, dkey)
+            G.append(_gate_item(k, label, ge(hs, th), fv(hs, "%") + (f" ({src})" if src and with_src else "")))
+        elif kind == "med":
+            field, th, label, unit = a; v_, _n = _val_field_med(data, dkey, field)
+            G.append(_gate_item(k, label, ge(v_, th), fv(v_, unit)))
+        elif kind == "aim_death":
+            th = a[0]; ar, n = _aim_death_ratio(data, dkey)
+            G.append(_gate_item(k, f"'에임' 죽음 ≤ {th}%", le(ar, th), fv(ar, "%") + (f" ({n}일)" if n else "")))
+        elif kind == "hold":
+            tier, nd_, label = a; hd = held_days(data, dkey, val_rank_ord(tier)); G.append(_gate_item(k, label, hd >= nd_, f"{hd}/{nd_}일"))
+        elif kind == "sub500":
+            n = a[0]; ok6 = sum(1 for s_ in SUBS_T["i"] if (subE(s_, pb) or 0) >= 500)
+            G.append(_gate_item(k, f"인터미디어트 500 · {n}갈래", ok6 >= n, f"{ok6}/{n}갈래"))
+        elif kind == "acs":
+            nr_, th, label = a; rc = _api_recent(data, nr_); acs = rc["acs"] if rc else None; G.append(_gate_item(k, label, ge(acs, th), fv(acs)))
+        elif kind == "recap":
+            n = a[0]; rs = _recap_streak(data, dkey); G.append(_gate_item(k, f"주간 결산 {n}주 연속", rs >= n, f"{rs}/{n}주"))
+        elif kind == "energy":
+            th, need_all = a; e_i, _n = tier_energy(pb, "i")
+            if need_all:
+                all600 = bool(_n == 9 and all((subE(s_, pb) or 0) >= 600 for s_ in SUBS_T["i"]))
+                G.append(_gate_item(k, f"인터 {th} · 9갈래 600", (e_i or 0) >= th and all600,
+                                    fv(e_i) + (" · 9갈래 ✓" if all600 else f" · {sum(1 for s_ in SUBS_T['i'] if (subE(s_, pb) or 0) >= 600)}/9")))
+            else: G.append(_gate_item(k, f"인터 {th}", (e_i or 0) >= th, fv(e_i)))
+        elif kind == "win":
+            nr_, th, label = a; r_ = _api_recent(data, nr_); win = r_["win"] if r_ else None; G.append(_gate_item(k, label, ge(win, th), fv(win, "%")))
+        elif kind == "kd":
+            th, label = a; kd, _n = _val_kd_med(data, dkey); G.append(_gate_item(k, label, ge(kd, th), fv(kd, "", 2)))
     return G
 
 def stage_status(data: dict, dkey: str) -> dict:
@@ -3580,8 +3611,9 @@ def week_pack(data: dict, dkey: str) -> str:
         if e1 is not None:
             L.append(f"  볼테익 {'—' if e0 is None else e0} → {e1}" + (f" ({e1 - e0:+d})" if e0 is not None else "") + (f" · 출발선 {e1 - eb:+d}" if eb is not None else ""))
         L += ["  " + t for t, _st in weekly_recap(data, dkey)[1:]]
-        nv = sum(1 for d in days if val_done(days_[d])); rg, _n = _val_field_med(data, dkey, "range", 7); hs, _n2 = _val_field_med(data, dkey, "dm_hs", 7)
-        L.append(f"  발로 블록 {nv}/{len(days)}일" + (f" · 사격 중앙 {rg:.0f}/30" if rg is not None else "") + (f" · DM HS% {hs:.0f}" if hs is not None else ""))
+        nv = sum(1 for d in days if val_done(days_[d]))
+        _bw = [fm.format(v_) for f_, fm in GAME["block"]["week"] for v_ in [_val_field_med(data, dkey, f_, 7)[0]] if v_ is not None]
+        L.append(" · ".join([f"  {GAME['block']['word']} {nv}/{len(days)}일"] + _bw))
         t0 = prev_val_tier(data, wk[0]); t1 = None; rrs = games = 0; whys = {}
         for d in wk:
             if d > dkey: continue
@@ -3592,7 +3624,7 @@ def week_pack(data: dict, dkey: str) -> str:
             games += int(rk.get("games") or 0)
             if rk.get("why"): whys[rk["why"]] = whys.get(rk["why"], 0) + 1
         if t1 or games:
-            L.append("  랭크 " + (f"{ko_tier(t0)} → " if t0 and t0 != t1 else "") + (ko_tier(t1) if t1 else "미기록") + f" · RR {rrs:+d} · 판 {games}"
+            L.append("  랭크 " + (f"{ko_tier(t0)} → " if t0 and t0 != t1 else "") + (ko_tier(t1) if t1 else "미기록") + f" · {fmt_rr_line(rrs)} · 판 {games}"
                      + (" · 죽은 이유 " + " ".join(f"{WHY_KO.get(k, k)} {v}" for k, v in sorted(whys.items(), key=lambda kv: -kv[1])) if whys else ""))
         for d in days: stars += [m for _c, m in milestones(data, d)]
     L += ["", "[관문]"] + stage_lines(data, dkey)
@@ -3602,10 +3634,10 @@ def week_pack(data: dict, dkey: str) -> str:
     s = stage_status(data, dkey); vt = None
     for d in reversed(wk):
         if d <= dkey and day_val_tier(data, d)[0]: vt = day_val_tier(data, d)[0]; break
-    tier = ko_tier(vt) if vt else "골드 2"
+    tier = ko_tier(vt) if vt else GAME["series"]["tier"]
     L += ["", "[제목 후보]  (주간 영상)",
           _cut(f"[{SERIES['title']}] {wid[-3:]} 결산 — {tier} · 관문 {s['n_ok']}/{s['total']}" + (f" · {stars[0]}" if stars else "")),
-          _cut(f"{tier}가 불멸 갈 때까지 · 이번 주 {len(days)}일 {sum(len(day_plays(data, d)) for d in days)}판 · 신기록 {sum(1 for d in days for _k, _s, kd in day_verdicts(data, d) if kd == 'pb')}") if days else _cut(f"{tier}가 불멸 갈 때까지 · 쉬어 간 주")]
+          _cut(f"{tier}가 {GAME['series']['goal']} 갈 때까지 · 이번 주 {len(days)}일 {sum(len(day_plays(data, d)) for d in days)}판 · 신기록 {sum(1 for d in days for _k, _s, kd in day_verdicts(data, d) if kd == 'pb')}") if days else _cut(f"{tier}가 {GAME['series']['goal']} 갈 때까지 · 쉬어 간 주")]
     return "\n".join(L)
 
 def save_week_pack(data: dict, dkey: str, dir_=None) -> Path:
@@ -3635,25 +3667,177 @@ def week_close(data: dict, dkey: str, dir_=None):
 CLAUDE_API = "https://api.anthropic.com/v1/messages"
 CLAUDE_MODEL = "claude-opus-5"
 COACH_MARK = "=== 앱 적용 ==="                         # 답장에서 이 줄 뒤가 앱이 읽는 줄 (앞은 사람이 읽는 코치 노트)
-COACH_SECTIONS = ("[오늘 한 줄]", "[잘된 것]", "[아쉬운 것]", "[내일 이렇게]", "[발로란트로 연결]", "[이번 주 흐름]", "[한마디]")
-COACH_SYSTEM = ("당신은 발로란트 에임 코치다. 선수는 골드 2에서 불멸을 목표로 매일 코박스(KovaaK's) 20판 + 발로란트 15분을 치고 그 과정을 유튜브에 매일 올린다. "
-                "아래 [오늘 기록]은 훈련 앱이 만든 것이다. 기록에 있는 숫자만 근거로 쓰고 없는 숫자는 지어내지 않는다. 앱이 계산한 판정·범위는 다시 판정하지 말고 근거로만 쓴다.\n"
-                "선수에게 직접 말하듯 존댓말로. 빈말·과장 없이 구체적으로 — 시나리오 이름과 숫자를 인용한다. 판 수·순서·요일 계획은 앱이 정하니 바꾸라고 하지 않는다.\n\n"
-                "답은 두 부분이다.\n"
-                "1) 코치 노트 — 아래 제목 7개를 이 순서로 그대로 쓰고, 제목마다 2~4문장 (전체 700~1200자):\n"
-                "[오늘 한 줄]  오늘 세션을 한 문장으로 (판 수 · 판정 · 가장 눈에 띈 숫자). 지난 코치 노트가 있으면 그 조언대로 됐는지 먼저 짚는다\n"
-                "[잘된 것]  2~3개 — 어떤 시나리오가 왜 좋았는지, 평소 범위·PB 대비 숫자로\n"
-                "[아쉬운 것]  2~3개 — 원인 가설까지 (첫 판이 낮으면 손 풀기 부족, 후반 하락은 피로, 특정 갈래만 낮으면 그 손놀림)\n"
-                "[내일 이렇게]  3~5개 — 시나리오별로 '무엇을 의식할지' (크로스헤어 배치 · 오버플릭 · 감도 · 호흡 · 판 사이 쉬기 · 첫 판 루틴)\n"
-                "[발로란트로 연결]  1~2개 — 사격장 /30 · 데스매치 K/D · 헤드샷 % 와 코박스 숫자를 잇는 조언. 발로 블록 숫자가 없으면 그렇다고 말한다\n"
-                "[이번 주 흐름]  주간 결산·관문(단계) 대비 어디쯤인지, 이번 주 남은 날에 집중할 것\n"
-                "[한마디]  격려 한 줄\n"
-                "선수가 [선수가 코치에게] 에 쓴 말이 있으면 해당 제목 안에서 반드시 답한다.\n\n"
-                f"2) 그 다음 줄에 {COACH_MARK} 를 쓰고, 그 뒤에는 앱이 읽는 줄만 쓴다 (다른 문장 금지):\n"
-                "목표 <시나리오> <점수>   ← 측정 6개(1w4ts·Pasu·Popcorn·EddieTS·DriftTS·ControlTS) 중 바꿀 것만. 한 번에 3% 넘게 올리지 말고, 못 넘은 목표는 유지\n"
-                "도전 <시나리오> <점수>   ← 오늘의 도전 하나 (선택)\n"
-                "테마 내일 <클리킹|트래킹|스위칭|전체|약점>   ← 바꿀 이유가 있을 때만\n"
-                "메모 <한 줄>   ← 내일 가장 중요한 한 가지, 30자 안팎")
+def coach_sections(G: dict) -> tuple:
+    return ("[오늘 한 줄]", "[잘된 것]", "[아쉬운 것]", "[내일 이렇게]", G["coach"]["section"], "[이번 주 흐름]", "[한마디]")
+
+def coach_system_text(G: dict) -> str:
+    """AI 코치 시스템 프롬프트 — 게임 프로필의 말(이름 · 출발 티어 · 목표 · 15분 블록 숫자 · 측정 6개)만 다르고 나머지는 같다 (v9.0)"""
+    c = G["coach"]; b = G["block"]
+    return (f"당신은 {G['name']} 에임 코치다. 선수는 {G['series']['tier']}에서 {c['goal_obj']} 목표로 매일 코박스(KovaaK's) 20판 + {G['name']} 15분을 치고 그 과정을 유튜브에 매일 올린다. "
+            "아래 [오늘 기록]은 훈련 앱이 만든 것이다. 기록에 있는 숫자만 근거로 쓰고 없는 숫자는 지어내지 않는다. 앱이 계산한 판정·범위는 다시 판정하지 말고 근거로만 쓴다.\n"
+            "선수에게 직접 말하듯 존댓말로. 빈말·과장 없이 구체적으로 — 시나리오 이름과 숫자를 인용한다. 판 수·순서·요일 계획은 앱이 정하니 바꾸라고 하지 않는다.\n\n"
+            "답은 두 부분이다.\n"
+            "1) 코치 노트 — 아래 제목 7개를 이 순서로 그대로 쓰고, 제목마다 2~4문장 (전체 700~1200자):\n"
+            "[오늘 한 줄]  오늘 세션을 한 문장으로 (판 수 · 판정 · 가장 눈에 띈 숫자). 지난 코치 노트가 있으면 그 조언대로 됐는지 먼저 짚는다\n"
+            "[잘된 것]  2~3개 — 어떤 시나리오가 왜 좋았는지, 평소 범위·PB 대비 숫자로\n"
+            "[아쉬운 것]  2~3개 — 원인 가설까지 (첫 판이 낮으면 손 풀기 부족, 후반 하락은 피로, 특정 갈래만 낮으면 그 손놀림)\n"
+            "[내일 이렇게]  3~5개 — 시나리오별로 '무엇을 의식할지' (크로스헤어 배치 · 오버플릭 · 감도 · 호흡 · 판 사이 쉬기 · 첫 판 루틴)\n"
+            f"{c['section']}  1~2개 — {b['coach_link']} 와 코박스 숫자를 잇는 조언. {b['word']} 숫자가 없으면 그렇다고 말한다\n"
+            "[이번 주 흐름]  주간 결산·관문(단계) 대비 어디쯤인지, 이번 주 남은 날에 집중할 것\n"
+            "[한마디]  격려 한 줄\n"
+            "선수가 [선수가 코치에게] 에 쓴 말이 있으면 해당 제목 안에서 반드시 답한다.\n\n"
+            f"2) 그 다음 줄에 {COACH_MARK} 를 쓰고, 그 뒤에는 앱이 읽는 줄만 쓴다 (다른 문장 금지):\n"
+            f"목표 <시나리오> <점수>   ← 측정 6개({c['probe_names']}) 중 바꿀 것만. 한 번에 3% 넘게 올리지 말고, 못 넘은 목표는 유지\n"
+            "도전 <시나리오> <점수>   ← 오늘의 도전 하나 (선택)\n"
+            "테마 내일 <클리킹|트래킹|스위칭|전체|약점>   ← 바꿀 이유가 있을 때만\n"
+            "메모 <한 줄>   ← 내일 가장 중요한 한 가지, 30자 안팎")
+
+# ══════════════════ 게임 프로필 (v9.0) — 발로란트 · 오버워치 2 ══════════════════
+# 게임에 묶인 말과 숫자는 전부 여기 있다. set_game() 이 모듈 상수(STAGES · SERIES · VAL_* · COACH_* · DAY_TYPE · DTYPE_SHORT · PROBE_BASE · CYCLE …)를
+# 그 게임의 것으로 바꾼다 — 읽는 40여 곳은 게임을 모른다. 두 exe(AimDesk.exe · AimDesk-OW2.exe)는 같은 파일에서 나오고 exe 이름이 기본 게임을 정한다.
+# 관문(gates) 한 줄 = (갈래, 종류, …): 종류마다 stage_gates 가 라벨·값을 만든다. 발로란트 표는 v8 의 관문과 글자까지 같다.
+_VAL_STAGES = [{"name": "출발선", "motto": "재고 시작한다", "span": "2주"},
+               {"name": "골드 2 → 플래티넘 1", "motto": "크로스헤어가 곧 랭크", "span": "2~4개월"},
+               {"name": "플래티넘 → 다이아 1", "motto": "에임이 아니라 타이밍", "span": "3~6개월"},
+               {"name": "다이아 1 → 어센던트 1", "motto": "복기가 실력을 만든다", "span": "4~8개월"},
+               {"name": "어센던트 1 → 불멸 1", "motto": "RR 은 승리에서만 나온다", "span": "6~18개월 · 미도달 가능"}]
+_OW_STAGES = [{"name": "출발선", "motto": "재고 시작한다", "span": "2주"},
+              {"name": "골드 → 플래티넘", "motto": "크로스헤어가 곧 랭크", "span": "2~4개월"},
+              {"name": "플래티넘 → 다이아", "motto": "에임이 아니라 자리", "span": "3~6개월"},
+              {"name": "다이아 → 마스터", "motto": "복기가 실력을 만든다", "span": "4~8개월"},
+              {"name": "마스터 → 그랜드마스터", "motto": "승리는 팀에서 나온다", "span": "6~18개월 · 미도달 가능"}]
+_G0 = [("aim", "base"), ("aim", "train_days", 10), ("game", "block_days", 8, 10), ("rank", "rank_days", 5, 14)]   # 출발선 관문 — 두 게임 같다
+GAMES = {
+ "valorant": {
+  "key": "valorant", "name": "발로란트", "en": "Valorant", "short": "발로", "exe": "AimDesk", "title": "에임 데스크", "brand": "에임 데스크",
+  "port": 47653, "repo": "aimdesk-data", "day_word": "발로 데이", "index": "vi", "api": True,
+  "series": {"title": "Road to Immortal", "tier": "골드 2", "goal": "불멸"},
+  "ranks": ["Iron", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Ascendant", "Immortal", "Radiant"],
+  "rank_ko": {"Iron": "아이언", "Bronze": "브론즈", "Silver": "실버", "Gold": "골드", "Platinum": "플래티넘", "Diamond": "다이아몬드",
+              "Ascendant": "어센던트", "Immortal": "불멸", "Radiant": "레디언트", "Unrated": "언레이티드", "Unranked": "언랭"},
+  "rank_rev": {"플래": "Platinum", "다이아": "Diamond", "어센": "Ascendant", "이모탈": "Immortal", "레디": "Radiant", "언랭": "Unranked"},
+  "div_low_is_high": False,                                              # 골드 3 > 골드 2 > 골드 1
+  "rr": {"label": "RR 변화", "line": "RR {:+d}", "after": "{}RR"},
+  "why": (("aim", "에임"), ("pos", "피크·위치"), ("dec", "정보·판단"), ("util", "유틸")),
+  "probe": ["w4", "pasu", "popcorn", "eddie", "drift", "cts"],           # 측정 6개 — 발로란트에 닿는 클리킹 3 + 스위칭 3
+  "weak_cats": ("클리킹", "스위칭"), "trk_desc": "붙어서 따라가는 손 (트레이너가 지정할 때만)",
+  "cycle": ["clk", "swt", "spd", "mix", "weak", "spd", "clk", "weak", "flk", "swt"],
+  "block": {"title": "발로란트 · 15분", "word": "발로 블록", "skip": "발로 블록 건너뜀",
+            "plan": "사격장 3분 → 카운터 스트레이프 3분 → 데스매치 9분",
+            "lines": ("사격장 3 → 카운터 스트레이프 3 → 데스매치 9",
+                      "3분 · 사격장 하드 · 스트레이핑 켬 · 30개 ×2회 → 맞힌 수",
+                      "3분 · 카운터 스트레이프 — A/D 이동 → 반대키 탭 → 정지 → 헤드 1발",
+                      "9분 · 데스매치 1판 · 밴달 · 크로스헤어 머리 높이 · 3발 초과 금지 → K · D · HS%"),
+            "fields": (("range", "사격장 맞힌 수 /30", 3, "int"), ("dm_k", "데스매치 킬", 3, "int"), ("dm_d", "데스", 3, "int"), ("dm_hs", "헤드샷 %", 4, "float")),
+            "done": ("range", "dm_k"),
+            "fmt": (("range", "사격 {}/30"), ("dm", ""), ("dm_hs", "HS {:.0f}%")),
+            "week": (("range", "사격 중앙 {:.0f}/30"), ("dm_hs", "DM HS% {:.0f}")),
+            "coach_link": "사격장 /30 · 데스매치 K/D · 헤드샷 %"},
+  "stages": _VAL_STAGES,
+  "gates": [_G0,
+            [("aim", "grad_n"), ("game", "hs", 25, "DM HS% 14일 중앙 ≥ 25", True), ("game", "med", "range", 24, "사격 ≥ 24/30", "/30"),
+             ("game", "aim_death", 40), ("rank", "hold", "Platinum 1", 14, "플래티넘 1 · 14일 강등 없음")],
+            [("aim", "sub500", 6), ("game", "hs", 30, "HS% ≥ 30", False), ("game", "med", "range", 27, "사격 ≥ 27/30", "/30"),
+             ("game", "acs", 20, 220, "최근 20판 ACS ≥ 220"), ("rank", "hold", "Diamond 1", 14, "다이아 1 · 14일 유지"), ("rank", "recap", 8)],
+            [("aim", "energy", 650, True), ("game", "hs", 27, "HS% ≥ 27", False), ("game", "acs", 20, 230, "ACS ≥ 230"),
+             ("game", "win", 40, 53, "최근 40판 승률 ≥ 53%"), ("rank", "hold", "Ascendant 1", 30, "어센던트 1 · 30일 유지")],
+            [("aim", "energy", 700, False), ("game", "hs", 28, "HS% ≥ 28", False), ("game", "acs", 20, 240, "ACS ≥ 240"),
+             ("game", "win", 60, 55, "최근 60판 승률 ≥ 55%"), ("rank", "hold", "Immortal 1", 30, "불멸 1 · 30일 강등 없음")]],
+  "stage_plain": ["출발선 18판 · 훈련 10일 · 발로란트 15분 8번 · 랭크 카드 5번", "코박스 9갈래 골드 · 헤드샷 25% · 사격 24/30 · 플래 1 2주",
+                  "중급 표 500 · 헤드샷 30% · ACS 220 · 다이아 1 2주 · 결산 8주", "중급 표 650 · ACS 230 · 40판 승률 53% · 어센 1 30일", "중급 표 700 · ACS 240 · 60판 승률 55% · 불멸 1 30일"],
+  "coach": {"section": "[발로란트로 연결]", "goal_obj": "불멸을", "probe_names": "1w4ts·Pasu·Popcorn·EddieTS·DriftTS·ControlTS"},
+  "tags": "에임 훈련, 코박스, KovaaK's, 발로란트, Valorant, 골드, 불멸, Road to Immortal, 볼테익, Voltaic, aim training, 에임 연습, 매일 훈련",
+ },
+ "ow2": {
+  "key": "ow2", "name": "오버워치 2", "en": "Overwatch 2", "short": "옵치", "exe": "AimDesk-OW2", "title": "에임 데스크 · 오버워치 2", "brand": "에임 데스크",
+  "port": 47654, "repo": "aimdesk-data-ow2", "day_word": "옵치 데이", "index": "oi", "api": False,
+  "series": {"title": "Road to Grandmaster", "tier": "골드 3", "goal": "그랜드마스터"},
+  "ranks": ["Bronze", "Silver", "Gold", "Platinum", "Diamond", "Master", "Grandmaster", "Champion"],
+  "rank_ko": {"Bronze": "브론즈", "Silver": "실버", "Gold": "골드", "Platinum": "플래티넘", "Diamond": "다이아몬드", "Master": "마스터",
+              "Grandmaster": "그랜드마스터", "Champion": "챔피언", "Unranked": "언랭"},
+  "rank_rev": {"플래": "Platinum", "다이아": "Diamond", "그마": "Grandmaster", "그랜마": "Grandmaster", "챔프": "Champion", "언랭": "Unranked"},
+  "div_low_is_high": True,                                               # 골드 5 < 골드 4 < … < 골드 1 (오버워치)
+  "rr": {"label": "진행률 변화 %", "line": "진행률 {:+d}%", "after": "{:+d}%"},
+  "why": (("aim", "에임"), ("pos", "위치·거리"), ("dec", "정보·판단"), ("util", "궁·협동")),
+  "probe": ["aether", "raw", "snake", "pasu", "eddie", "cts"],            # 측정 6개 — 히트스캔에 닿는 트래킹 3(리액티브·컨트롤·프리시전) + 클리킹 1 + 스위칭 2 (웜업 ground·float 와 겹치지 않게)
+  "weak_cats": ("트래킹", "스위칭"), "trk_desc": "붙어서 따라가는 손 — 히트스캔의 핵심",
+  "cycle": ["trk", "swt", "clk", "mix", "weak", "swt", "trk", "weak", "flk", "clk"],
+  "block": {"title": "오버워치 2 · 15분", "word": "옵치 블록", "skip": "옵치 블록 건너뜀",
+            "plan": "훈련장 트래킹 3분 → 훈련장 플릭 3분 → 데스매치 9분",
+            "lines": ("훈련장 트래킹 3 → 훈련장 플릭 3 → 데스매치 9",
+                      "3분 · 훈련장 · 솔저 76 — 움직이는 봇을 끊지 않고 따라가기 (트래킹)",
+                      "3분 · 훈련장 · 캐서디/애쉬 — 봇 머리에 한 발씩 · 스트레이프 뒤 정지 → 발사 (플릭)",
+                      "9분 · 데스매치 1판 · 히트스캔 한 명 고정 · 크로스헤어 머리 높이 → 처치 · 죽음 · 명중률 · 치명타 %"),
+            "fields": (("dm_k", "데스매치 처치", 3, "int"), ("dm_d", "죽음", 3, "int"), ("acc", "명중률 %", 4, "float"), ("crit", "치명타 %", 4, "float")),
+            "done": ("dm_k", "acc"),
+            "fmt": (("dm", ""), ("acc", "명중 {:.0f}%"), ("crit", "치명타 {:.0f}%")),
+            "week": (("acc", "명중 중앙 {:.0f}%"), ("crit", "치명타 {:.0f}%")),
+            "coach_link": "데스매치 처치/죽음 · 명중률 % · 치명타 %"},
+  "stages": _OW_STAGES,
+  "gates": [_G0,
+            [("aim", "grad_n"), ("game", "med", "acc", 40, "명중률 14일 중앙 ≥ 40%", "%"), ("game", "med", "crit", 12, "치명타 명중률 ≥ 12%", "%"),
+             ("game", "aim_death", 40), ("rank", "hold", "Platinum 5", 14, "플래티넘 5 · 14일 강등 없음")],
+            [("aim", "sub500", 6), ("game", "med", "acc", 45, "명중률 ≥ 45%", "%"), ("game", "med", "crit", 15, "치명타 ≥ 15%", "%"),
+             ("game", "kd", 1.2, "데스매치 K/D 14일 중앙 ≥ 1.2"), ("rank", "hold", "Diamond 5", 14, "다이아 5 · 14일 유지"), ("rank", "recap", 8)],
+            [("aim", "energy", 650, True), ("game", "med", "acc", 48, "명중률 ≥ 48%", "%"), ("game", "med", "crit", 17, "치명타 ≥ 17%", "%"),
+             ("game", "kd", 1.3, "데스매치 K/D ≥ 1.3"), ("rank", "hold", "Master 5", 30, "마스터 5 · 30일 유지")],
+            [("aim", "energy", 700, False), ("game", "med", "acc", 50, "명중률 ≥ 50%", "%"), ("game", "med", "crit", 18, "치명타 ≥ 18%", "%"),
+             ("game", "kd", 1.4, "데스매치 K/D ≥ 1.4"), ("rank", "hold", "Grandmaster 5", 30, "그랜드마스터 5 · 30일 강등 없음")]],
+  "stage_plain": ["출발선 18판 · 훈련 10일 · 오버워치 15분 8번 · 랭크 카드 5번", "코박스 9갈래 골드 · 명중률 40% · 치명타 12% · 플래 5 2주",
+                  "중급 표 500 · 명중률 45% · 치명타 15% · K/D 1.2 · 다이아 5 2주 · 결산 8주", "중급 표 650 · 명중률 48% · K/D 1.3 · 마스터 5 30일",
+                  "중급 표 700 · 명중률 50% · K/D 1.4 · 그마 5 30일"],
+  "coach": {"section": "[오버워치로 연결]", "goal_obj": "그랜드마스터를", "probe_names": "Aether·Raw Control·Snake Track·Pasu·EddieTS·ControlTS"},
+  "tags": "에임 훈련, 코박스, KovaaK's, 오버워치 2, Overwatch 2, 히트스캔, 골드, 그랜드마스터, Road to Grandmaster, 볼테익, Voltaic, aim training, 에임 연습, 매일 훈련",
+ },
+}
+GAME = GAMES["valorant"]
+
+def game_default(data: dict = None) -> str:
+    """이 실행의 게임 — 환경변수 AIMDESK_GAME → 기록 파일의 game → exe 이름(AimDesk-OW2.exe) → 발로란트"""
+    g = (os.environ.get("AIMDESK_GAME") or "").strip().lower()
+    if g in GAMES: return g
+    g = str((data or {}).get("game") or "").strip().lower()
+    if g in GAMES: return g
+    try: stem = Path(sys.executable if getattr(sys, "frozen", False) else (sys.argv[0] or "")).stem.lower()
+    except Exception: stem = ""
+    return "ow2" if ("ow2" in stem or "overwatch" in stem) else "valorant"
+
+def set_game(key: str):
+    """게임 프로필을 고른다 — 모듈 상수를 그 게임의 것으로. load_data 가 부른다 (창을 만들기 전). 발로란트로 되돌리면 v8 과 같은 값"""
+    global GAME, STAGES, COACH_SECTIONS, COACH_SYSTEM, SYNC_REPO_DEFAULT
+    G = GAMES.get(key) or GAMES["valorant"]; GAME = G
+    STAGES = [dict(st) for st in G["stages"]]
+    SERIES["title"] = G["series"]["title"]
+    VAL_ORDER[:] = list(G["ranks"])
+    VAL_TIER_KO.clear(); VAL_TIER_KO.update(G["rank_ko"])
+    VAL_KO_REV.clear(); VAL_KO_REV.update({v: k for k, v in VAL_TIER_KO.items()}); VAL_KO_REV.update(G["rank_rev"])
+    WHY_KO.clear(); WHY_KO.update(dict(G["why"]))
+    COACH_SECTIONS = coach_sections(G); COACH_SYSTEM = coach_system_text(G)
+    SYNC_REPO_DEFAULT = G["repo"]
+    PROBE_BASE[:] = list(G["probe"]); CYCLE[:] = list(G["cycle"])
+    MAIN_THEMES_BASE[:] = [(t[0], t[1], (G["trk_desc"] if t[0] == "trk" else t[2]), t[3]) for t in MAIN_THEMES_BASE]
+    set_tier(CUR_TIER[0])                                        # PROBE · MAIN_THEMES 를 이 게임의 몸통 키로 다시 푼다
+    DTYPE_SHORT["v"] = G["short"]
+    HIST_TYPE_WORD.clear(); HIST_TYPE_WORD.update({G["short"]: "훈련", "약점": "약점", "벤치": "실력", "휴식": "쉼", "기준": "출발선"})
+    _refresh_colour_tables()                                     # DAY_TYPE 'v' 의 말 (발로 데이 · 옵치 데이)
+
+def probe_idx(row: dict):
+    """프로브 지수 한 값 — 발로란트는 클리킹·스위칭(v) 갈래의 vi, 오버워치는 트래킹(o) 갈래의 oi"""
+    return (row or {}).get(GAME["index"])
+
+def probe_ma(row: dict):
+    return (row or {}).get("maV" if GAME["index"] == "vi" else "maO")
+
+def fmt_rr_line(n) -> str:
+    """주간 결산의 'RR +12' · 오버워치는 '진행률 +35%'"""
+    return GAME["rr"]["line"].format(int(n))
+
+def rr_after(n) -> str:
+    """티어 뒤에 붙는 '37RR' · 오버워치는 '+35%'"""
+    return GAME["rr"]["after"].format(int(n))
+
+COACH_SECTIONS = coach_sections(GAMES["valorant"])
+COACH_SYSTEM = coach_system_text(GAMES["valorant"])
 
 def ai_coach_context(data: dict, dkey: str, ask: str = "") -> str:
     """보고서 뒤에 붙이는 맥락 — 지난 코치 노트(이어서 코칭) · 이번 주 결산(지금까지) · 선수가 코치에게 쓴 말"""
@@ -3848,20 +4032,21 @@ def routine_complete(day: dict, dt: str, dkey: str = None, pb: dict = None) -> b
             and all(day.get("first", {}).get(k) is not None for k in PROBE))
 
 def val_done(day: dict) -> bool:
-    """발로란트 블록 숫자가 적혔는가 (사격 + DM). 루틴 완료 조건은 아니다 — 리본 칸과 주인공 줄의 '발로 ✓' 에만 쓴다"""
+    """15분 블록 숫자가 적혔는가 (GAME["block"]["done"] 의 칸 — 발로: 사격 + DM · 옵치: DM + 명중률). 루틴 완료 조건은 아니다 — 리본 칸과 주인공 줄의 '✓' 에만 쓴다"""
     v = day.get("val") or {}
-    return bool(v.get("skip")) or (v.get("range") is not None and v.get("dm_k") is not None)
+    return bool(v.get("skip")) or all(v.get(k_) is not None for k_ in GAME["block"]["done"])
 
 def fmt_val(day: dict) -> str:
-    """'사격 27/30 · 드릴 ✓ · DM 24/18 (K/D 1.33) · HS 31%' — 적힌 것만"""
+    """'사격 27/30 · DM 24/18 (K/D 1.33) · HS 31%' (발로) · 'DM 24/18 (K/D 1.33) · 명중 45% · 치명타 15%' (옵치) — 적힌 것만"""
     v = day.get("val") or {}
-    if v.get("skip"): return "발로 블록 건너뜀"
+    if v.get("skip"): return GAME["block"]["skip"]
     parts = []
-    if v.get("range") is not None: parts.append(f"사격 {v['range']}/30")
-    if v.get("dm_k") is not None:
-        kd = f" (K/D {v['dm_k'] / v['dm_d']:.2f})" if v.get("dm_d") else ""
-        parts.append(f"DM {v['dm_k']}/{v.get('dm_d') if v.get('dm_d') is not None else '—'}{kd}")
-    if v.get("dm_hs") is not None: parts.append(f"HS {v['dm_hs']:.0f}%")
+    for f_, fm in GAME["block"]["fmt"]:
+        if f_ == "dm":
+            if v.get("dm_k") is not None:
+                kd = f" (K/D {v['dm_k'] / v['dm_d']:.2f})" if v.get("dm_d") else ""
+                parts.append(f"DM {v['dm_k']}/{v.get('dm_d') if v.get('dm_d') is not None else '—'}{kd}")
+        elif v.get(f_) is not None: parts.append(fm.format(v[f_]))
     return " · ".join(parts)
 
 def next_step(data: dict, dkey: str, plays, avg: dict) -> str:
@@ -3957,7 +4142,7 @@ def weekly_recap(data: dict, dkey: str):
     if len(ser) >= 2:
         last = ser[-1]; prev = next((p_ for p_ in reversed(ser) if p_["date"] <= (date.fromisoformat(last["date"]) - timedelta(days=7)).isoformat()), None)
         f = lambda v: "—" if v is None else f"{v:+.1f}"
-        if prev: out.append((f"지수 7일선 발로 {f(prev['maV'])}→{f(last['maV'])}", "sub"))
+        if prev: out.append((f"지수 7일선 {GAME['short']} {f(probe_ma(prev))}→{f(probe_ma(last))}", "sub"))
     a, b, n1, n2 = sleep_effect(data)
     if a is not None: out.append((f"수면 7h 이상 {n1}일 지수 {a:+.1f} · 미만 {n2}일 {b:+.1f}", "gold" if a > b else "sub"))
     else: out.append((f"수면 입력 {n1 + n2}일 — 10일부터 관계가 보입니다", "hint"))
@@ -4571,11 +4756,11 @@ RANKC_BROADCAST = ["#B6C0CA", "#F0A257", "#DCE6F0", "#FFD36B"]
 C.update(VERDICT_C)                                   # 기본 팔레트에 판정 색 (방송 모드는 apply_broadcast 가 덮어씀)
 BC = dict(THEME_DARK); BC.update(VERDICT_C); BC.update(C_BROADCAST); BC.update(VERDICT_C_BROADCAST)   # 방송창 — 테마와 무관하게 늘 어두운 고대비 (OBS 캡처 대상)
 RANKC_BC = list(RANKC_BROADCAST)
-DAY_TYPE = {"v": ("발로 데이", C["ow"]), "w": ("약점 데이", C["swt"]), "b": ("벤치마크", C["gold"]), "r": ("휴식", C["dim"])}
+DAY_TYPE = {"v": (GAME["day_word"], C["ow"]), "w": ("약점 데이", C["swt"]), "b": ("벤치마크", C["gold"]), "r": ("휴식", C["dim"])}
 CATC = {}                                             # v8 분류 색 (클리킹·트래킹·스위칭) — apply_theme/apply_broadcast 가 채운다. 빨강은 오류·하락 전용
 def _refresh_colour_tables():
     """색을 직접 들고 있는 표(DAY_TYPE·CATC)를 지금 C 로 다시 채운다 — 읽는 쪽은 이름만 쓰므로 순서·키는 그대로"""
-    DAY_TYPE.update({"v": ("발로 데이", C["ow"]), "w": ("약점 데이", C["swt"]), "b": ("벤치마크", C["gold"]), "r": ("휴식", C["dim"])})
+    DAY_TYPE.update({"v": (GAME["day_word"], C["ow"]), "w": ("약점 데이", C["swt"]), "b": ("벤치마크", C["gold"]), "r": ("휴식", C["dim"])})
     CATC.update({"클리킹": C["cat_click"], "트래킹": C["ow"], "스위칭": C["swt"]})
 _refresh_colour_tables()
 
@@ -4602,7 +4787,7 @@ def single_instance_lock(tries: int = 1):
     for i in range(max(1, tries)):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            s.bind(("127.0.0.1", int(os.environ.get("AIMDESK_LOCK_PORT") or 47653))); s.listen(1)   # 테스트가 여러 개 동시에 뜰 때 포트를 달리한다
+            s.bind(("127.0.0.1", int(os.environ.get("AIMDESK_LOCK_PORT") or GAMES[game_default()]["port"]))); s.listen(1)   # 게임마다 포트 (v9.0 — 두 exe 를 같이 켤 수 있게)   # 테스트가 여러 개 동시에 뜰 때 포트를 달리한다
             return s
         except OSError:
             s.close()
@@ -4643,7 +4828,7 @@ def main():
     root._aimdesk_lock = lock
     if not os.environ.get("AIMDESK_NO_MAINLOOP"): start_stall_watch(root)      # v8.0.1 — '(응답 없음)' 이 뜨면 aim_desk.log 에 메인 스레드 스택
     root.report_callback_exception = lambda t, v, tb: _hook(t, v, tb)
-    root.title("에임 데스크"); root.configure(bg=C["bg"])
+    root.title(GAME["title"]); root.configure(bg=C["bg"])
     env_scale = float(os.environ.get("AIMDESK_SCALE") or 0)
     try: auto_scale = max(1.0, round(root.winfo_fpixels("1i") / 96, 2))
     except Exception: auto_scale = 1.0
@@ -5203,7 +5388,8 @@ def main():
 
     # 레일 위: 브랜드 · DAY n · 연속 · 오늘 종류 칩
     rail_top = tk.Frame(rail, bg=C["card"]); rail_top.pack(fill="x", padx=px(16), pady=(px(16), px(6)))
-    tk.Label(rail_top, text="에임 데스크", font=FRAIL, bg=C["card"], fg=C["txt"], anchor="w").pack(fill="x")
+    tk.Label(rail_top, text=GAME["brand"], font=FRAIL, bg=C["card"], fg=C["txt"], anchor="w").pack(fill="x")
+    if GAME["key"] != "valorant": tk.Label(rail_top, text=GAME["name"], font=FS, bg=C["card"], fg=C["gold"], anchor="w").pack(fill="x")   # v9.0 — 어느 게임용인지 (발로란트는 기본이라 표시 없음)
     hdr_day = tk.Label(rail_top, text="", font=FS, bg=C["card"], fg=C["sub"], anchor="w"); hdr_day.pack(fill="x", pady=(px(2), 0))
     day_chip = chip(rail_top, "", "neutral"); day_chip.pack(anchor="w", pady=(SP8, 0))
 
@@ -5369,14 +5555,13 @@ def main():
     # 이번 주 줄 — 칩 (FB width=14) · 코치 한 줄이 없을 때의 문장 (§5.4). 계획 페이지에만 있는 글이라 원문에서 바꿨다
     WK_CHIP = {"measure": ("출발선 재기", "gold"), "boss": ("실력 재는 날", "gold"), "rest": ("쉬는 날", "dim"), "train": ("훈련", "ow"), "before": ("—", "dim")}
     WK_WHAT = {"measure": "18개를 한 판씩 — 이 점수가 앞으로의 0점이에요", "boss": "18판 실력 재기 — 출발선과 비교해요 · 방송 화면은 점수 보드",
-               "rest": "쉬는 날 — 앱을 켜면 주간 결산이 저장돼요", "train": "손 풀기 2 → 오늘 점수 재기 6 → 본훈련 12 → 발로란트 15분", "before": ""}
-    STAGE_PLAIN = ["출발선 18판 · 훈련 10일 · 발로란트 15분 8번 · 랭크 카드 5번", "코박스 9갈래 골드 · 헤드샷 25% · 사격 24/30 · 플래 1 2주",
-                   "중급 표 500 · 헤드샷 30% · ACS 220 · 다이아 1 2주 · 결산 8주", "중급 표 650 · ACS 230 · 40판 승률 53% · 어센 1 30일", "중급 표 700 · ACS 240 · 60판 승률 55% · 불멸 1 30일"]
+               "rest": "쉬는 날 — 앱을 켜면 주간 결산이 저장돼요", "train": f"손 풀기 2 → 오늘 점수 재기 6 → 본훈련 12 → {GAME['name']} 15분", "before": ""}
+    STAGE_PLAIN = list(GAME["stage_plain"])                                    # 게임 프로필의 쉬운 말 (v9.0)
     HP_LINES = ("코박스(에임 연습 게임)가 저장하는 점수 파일을 2초마다 읽어 자동으로 기록해요 — 직접 적는 건 하루 숫자 몇 개뿐",
                 "노란 버튼 → 코박스에서 AIMDESK 재생 목록 ▶ — 한 판 끝나면 앱이 다음 판을 넘겨요",
                 "판정 세 개 — 오늘(어제보다?) · 요즘(흐름) · 성장(몇 주 추세). 자료가 모자라면 꾸미지 않고 비워 둬요",
                 "루틴이 끝나면 오늘 한 장 · 유튜브 제목·설명·챕터 · 썸네일 페이지가 기록 폴더에 저장돼요",
-                "코박스 종합 점수의 Iron·Bronze·Silver·Gold는 코박스 랭크예요 — 발로란트 랭크가 아니에요",
+                f"코박스 종합 점수의 Iron·Bronze·Silver·Gold는 코박스 랭크예요 — {GAME['name']} 랭크가 아니에요",
                 "쉬는 날은 월요일 — 앱을 켜면 지난 주(월~일) 결산을 저장해요")
     def cal_kind(dk: str, tdays: set):
         """달력 한 칸의 종류 — (종류, 칩 글, 색). 종류: measure · boss · train · rest · before"""
@@ -5425,7 +5610,7 @@ def main():
     cc = card(left_); cc.pack(fill="x", pady=(CARD_GAP, 0)); cc_head = card_head(cc, "코치 노트")
     cc_body = tk.Frame(cc, bg=C["card"]); cc_body.pack(fill="x", pady=(SP8, 0))
     sg = card(rt); sg.pack(fill="x")
-    sg_head = card_head(sg, "골드 2 → 불멸 · 다섯 단계")
+    sg_head = card_head(sg, f"{GAME['series']['tier']} → {GAME['series']['goal']} · 다섯 단계")
     sg_hint = tk.Label(sg, text="조건은 전부 앱이 읽는 숫자예요 · 두 주 연속 다 차야 다음 단계", font=FS11, bg=C["card"], fg=C["hint"], anchor="w", justify="left")
     sg_hint.pack(fill="x", pady=(SP4, 0)); register_wrap(sg, sg_hint, px(420) - px(80))          # px(420) 열에선 제목 옆에 안 들어가 머리 아래 한 줄 (§1.5 도움말 자리)
     hp = card(rt); hp.pack(fill="x", pady=(CARD_GAP, 0))
@@ -5459,7 +5644,7 @@ def main():
         lg = tk.Frame(mr if _lg_row else cal_top, bg=C["bg"])
         if _lg_row: lg.pack(side="right", anchor="s", padx=(SP16, 0))
         else: lg.pack(fill="x", pady=(0, SP8))
-        for t_, k_ in (("출발선 · 실력 재는 날 18판 (27분)", "gold"), ("훈련 20판 + 발로란트 15분 (48분)", "blue"), ("쉬는 날 · 주간 결산", "dim")):
+        for t_, k_ in (("출발선 · 실력 재는 날 18판 (27분)", "gold"), (f"훈련 20판 + {GAME['name']} 15분 (48분)", "blue"), ("쉬는 날 · 주간 결산", "dim")):
             chip(lg, t_, k_).pack(side="left", padx=(SP8, 0) if _lg_row else (0, SP8))
         grid = tk.Frame(cal_top, bg=C["bg"]); grid.pack(fill="x")
         for i, dow in enumerate("월화수목금토일"):
@@ -5662,7 +5847,7 @@ def main():
     foot = tk.Frame(page, bg=C["bg"]); foot.pack(fill="x", pady=(SP8, 0))
     toggle_lbl = link(foot, "자세히 ▾", lambda: set_routine_open(not data["win"].get("routine_open"))); toggle_lbl.pack(side="left")
     day_state["toggle"] = toggle_lbl
-    foot_hint = tk.Label(foot, text="시나리오별 점수 · 오늘 곡선 · 코치 메모 · 발로란트 랭크", font=FS11, bg=C["bg"], fg=C["hint"]); foot_hint.pack(side="left", padx=(SP12, 0))   # NARROW 아래에선 숨김 (stack_rules)
+    foot_hint = tk.Label(foot, text=f"시나리오별 점수 · 오늘 곡선 · 코치 메모 · {GAME['name']} 랭크", font=FS11, bg=C["bg"], fg=C["hint"]); foot_hint.pack(side="left", padx=(SP12, 0))   # NARROW 아래에선 숨김 (stack_rules)
     cond_row = tk.Frame(foot, bg=C["bg"]); cond_row.pack(side="right")
     cond_chip = tk.Label(cond_row, text="", font=FCAP, bg=C["down_bg"], fg=C["down"], padx=px(6))
     # 자세히 — 왼쪽: 도전 · 시나리오별 점수 · 코치 메모 · 오늘 세션 / 오른쪽: 발로란트 랭크 · 트레이너. set_routine_open 이 pack/forget.
@@ -5735,7 +5920,7 @@ def main():
                 ("tcd_reply", tcol2, "트레이너 답장", "사람 트레이너에게 기록 파일을 보내고"),
                 ("vc_screen", tcol2, "화면", "바꾸면 저장하고 앱이 다시 켜져요 (2초)"),
                 ("sc_", tcol2, "방송 화면", lambda row: link(row, "열기 (Ctrl+B · F11 전체)", lambda: open_broadcast())),
-                ("vc_valo", tcol2, "발로란트 전적 연동 (선택)", None)]
+                ("vc_valo", tcol2, (f"{GAME['name']} 전적 연동 (선택)" if GAME["api"] else f"{GAME['name']} 전적"), None)]
     grp, heads, goto_focus, colof = {}, {}, {}, {}
     for _k, _col, _t, _r in TOOLS_IA:
         _c = card(_col); _c.pack(fill="x", pady=(0 if not _col.pack_slaves() else CARD_GAP, 0))
@@ -6899,18 +7084,16 @@ def main():
             # ④ 발로란트 — 헤더 한 줄 + '적기 ▾' 를 열면 순서 한 줄 · 세 줄 안내 · 숫자 4칸
             val_row = tk.Frame(todo_host, bg=C["card"]); val_row.pack(fill="x", pady=(px(2), 0)); day_state["val_row"] = val_row
             vh = tk.Frame(val_row, bg=C["card"]); vh.pack(fill="x")
-            tk.Label(vh, text="④ 발로란트 · 15분", font=FROW, bg=C["card"], fg=C["txt"], anchor="w").pack(side="left")
+            tk.Label(vh, text=f"④ {GAME['block']['title']}", font=FROW, bg=C["card"], fg=C["txt"], anchor="w").pack(side="left")
             open_lnk = link(vh, "적기 ▾"); open_lnk.pack(side="right")
             val_status = tk.Label(vh, text="시작 전", font=FRCNT, bg=C["card"], fg=C["sub"]); val_status.pack(side="right", padx=(0, px(14)))
             vbox = tk.Frame(val_row, bg=C["card"])
-            for _ln in ("사격장 3 → 카운터 스트레이프 3 → 데스매치 9",
-                        "3분 · 사격장 하드 · 스트레이핑 켬 · 30개 ×2회 → 맞힌 수",
-                        "3분 · 카운터 스트레이프 — A/D 이동 → 반대키 탭 → 정지 → 헤드 1발",
-                        "9분 · 데스매치 1판 · 밴달 · 크로스헤어 머리 높이 · 3발 초과 금지 → K · D · HS%"):
+            for _ln in GAME["block"]["lines"]:                                            # 게임 프로필의 안내 네 줄 (v9.0)
                 _vl = tk.Label(vbox, text=_ln, font=FS11, bg=C["card"], fg=C["hint"], justify="left", anchor="w"); _vl.pack(fill="x"); register_wrap(hero, _vl, initial=px(800))
             vrow = tk.Frame(vbox, bg=C["card"]); vrow.pack(anchor="w", pady=(px(6), 0))
             val_vars = {}
-            for _k, _lbl, _w in (("range", "사격장 맞힌 수 /30", 3), ("dm_k", "데스매치 킬", 3), ("dm_d", "데스", 3), ("dm_hs", "헤드샷 %", 4)):
+            _ftype = {k_: t_ for k_, _l, _w, t_ in GAME["block"]["fields"]}
+            for _k, _lbl, _w, _t in GAME["block"]["fields"]:                              # 게임 프로필의 숫자 4칸 (v9.0)
                 cell_ = tk.Frame(vrow, bg=C["card"]); cell_.pack(side="left", padx=(0, px(14)))
                 tk.Label(cell_, text=_lbl, font=FS11, bg=C["card"], fg=C["sub"]).pack(anchor="w")
                 _v = tk.StringVar(); val_vars[_k] = _v
@@ -6935,7 +7118,7 @@ def main():
                 v = data["days"].setdefault(today_key[0], blank_day()).setdefault("val", dict(blank_day()["val"]))
                 for _k, _v in val_vars.items():
                     t_ = _v.get().strip().replace("%", "")
-                    try: v[_k] = None if not t_ else (float(t_) if _k == "dm_hs" else int(t_))
+                    try: v[_k] = None if not t_ else (float(t_) if _ftype.get(_k) == "float" else int(t_))
                     except ValueError: pass
                 save_data(data); sync_val(); refresh()
             def toggle_skip(*_):
@@ -7003,7 +7186,7 @@ def main():
 
     # ── 랭크 피드백 (선택) — 루틴이 아니다. 랭크를 돌린 날만 펼쳐서 티어·RR·죽은 이유를 적는다 ──
     rk = card(rbody); rk.pack(fill="x", pady=(0, CARD_GAP))
-    rk_hd = card_head(rk, "발로란트 랭크 · 오늘", right="랭크 돌린 날만"); rk_head = rk_hd.title
+    rk_hd = card_head(rk, f"{GAME['name']} 랭크 · 오늘", right="랭크 돌린 날만"); rk_head = rk_hd.title
     def sync_rk_hint():
         """머리 오른쪽: 전적 연동이 있으면 '전적 연동 · Gold 2 37RR' (수동 티어 칸은 선택) · 없으면 '랭크 돌린 날만'"""
         _m = (data.get("valo") or {}).get("mmr") or {}
@@ -7021,7 +7204,7 @@ def main():
     tier_var = tk.StringVar(); rr_var = tk.StringVar()
     tier_ent = tk.Entry(rrow, textvariable=tier_var, width=9, font=FN, bg=C["card2"], fg=C["txt"], insertbackground=C["txt"], bd=0, justify="center")
     tier_ent.pack(side="left", padx=(6, 0), ipady=4)
-    tk.Label(rrow, text="RR 변화", font=FS, bg=C["card"], fg=C["sub"]).pack(side="left", padx=(10, 0))
+    tk.Label(rrow, text=GAME["rr"]["label"], font=FS, bg=C["card"], fg=C["sub"]).pack(side="left", padx=(10, 0))
     rr_ent = tk.Entry(rrow, textvariable=rr_var, width=5, font=FN, bg=C["card2"], fg=C["txt"], insertbackground=C["txt"], bd=0, justify="center")
     rr_ent.pack(side="left", padx=(6, 0), ipady=4)
     grow_ = tk.Frame(rk_body, bg=C["card"]); grow_.pack(fill="x", pady=(4, 2))
@@ -7035,7 +7218,7 @@ def main():
     tk.Label(rk_body, text="가장 많이 죽은 이유", font=FS, bg=C["card"], fg=C["sub"]).pack(anchor="w", pady=(6, 2))
     why_row = tk.Frame(rk_body, bg=C["card"]); why_row.pack(anchor="w")
     why_var = tk.StringVar(value=""); why_btns = {}
-    WHY = (("aim", "에임"), ("pos", "피크·위치"), ("dec", "정보·판단"), ("util", "유틸"))
+    WHY = tuple(GAME["why"])                                                   # 죽은 이유 네 가지 — 게임 프로필의 말 (v9.0)
     def set_why(k_):
         why_var.set("" if why_var.get() == k_ else k_); commit_rank()
         for kk, bb in why_btns.items(): bb.restyle(bg=C["gold"] if kk == why_var.get() else C["card2"], fg=C["onfill"] if kk == why_var.get() else C["txt"])
@@ -7152,6 +7335,19 @@ def main():
         _b = RBtn(trow_t, _l, (lambda n=_n: set_theme(n)), padx=10, pady=4); _b.pack(side="left", padx=(0, SP4)); theme_btns[_n] = _b
     theme_btns[data.get("theme", "light") if data.get("theme") in ("light", "dark") else "light"].restyle(bg=C["gold"], fg=C["onfill"])
     goto_focus["vc_screen"] = theme_btns["light"]
+    game_row = tk.Frame(vc_screen, bg=C["card"]); game_row.pack(fill="x", pady=(SP8, 0))      # v9.0 — 게임: 발로란트 · 오버워치 2 (바꾸면 다시 켜진다)
+    tk.Label(game_row, text="게임", font=FS, bg=C["card"], fg=C["sub"], width=7, anchor="w").pack(side="left")
+    game_btns = {}
+    def set_game_btn(k_):
+        if k_ == GAME["key"] or k_ not in GAMES: return
+        data["game"] = k_; data["win"].update(tab=cur_tab[0]); save_data(data)
+        if SAVE_ERROR[0]: show_toast("저장에 실패해 게임을 바꾸지 못했습니다", "warn"); return
+        if not restart_app(): show_toast(f"{GAMES[k_]['name']} — 앱을 껐다 켜면 바뀝니다")
+    for _gk, _g in GAMES.items():
+        _b = RBtn(game_row, _g["name"], (lambda k_=_gk: set_game_btn(k_)), padx=8, pady=4); _b.pack(side="left", padx=(0, SP4)); game_btns[_gk] = _b
+        _b.restyle(bg=C["gold"] if _gk == GAME["key"] else C["card2"], fg=C["onfill"] if _gk == GAME["key"] else C["txt"])
+    hint_("vc_screen", "발로란트용 · 오버워치 2용 — 측정 6개와 본훈련 주기 · 15분 블록의 네 칸 · 다섯 단계와 랭크 사다리가 바뀌어요 (기록 파일은 그대로)", pady=(SP4, 0))
+    _DBG["set_game_btn"] = set_game_btn; _DBG["game_btns"] = game_btns
     bc_row = tk.Frame(vc_screen, bg=C["card"]); bc_row.pack(fill="x", pady=(SP12, 0))
     def set_broadcast(v):
         if bool(data.get("broadcast")) == bool(v): return
@@ -7759,6 +7955,11 @@ def main():
         root.after(200, _val_poll)
     RBtn(valo_act, "지금 불러오기", val_sync_now, padx=12, pady=6).pack(side="left")
     _val_status()
+    if not GAME["api"]:                                                    # v9.0 — 오버워치 2: 공개 전적 API 가 없다 → 카드는 안내 한 줄
+        for _w in vc_valo.winfo_children()[1:]: _w.pack_forget()           # [0] 은 카드 머리
+        cfg(val_lbl, text=""); _val_status = lambda: None                  # 상태 줄은 비워 둔다 (_vis 가 빈 글은 숨긴다)
+        hint_("vc_valo", f"{GAME['name']} 는 공개 전적 API 가 없어요 — 랭크·진행률은 오늘 페이지의 랭크 카드에 손으로 적어요")
+        goto_focus["vc_valo"] = None
 
     # ── 8 방송 화면 (grp['sc_']) ── 방송창이 곧 녹화되는 화면이다. 열기는 머리 링크 (Ctrl+B · F11 전체) 와 레일 행
     sc_ = grp["sc_"]
@@ -8241,7 +8442,7 @@ def main():
             vals = list(fmt_history_row(r))
             vals[1] = HIST_TYPE_WORD.get(vals[1], vals[1])                       # 발로·약점·벤치·휴식·기준 → 훈련·약점·실력·쉼·출발선 (화면에서만)
             rest_ = r["dtype"] == "r" and not r["trained"]
-            if r["vi"] is not None and r["trained"]: vals[5] = fmt_delta(r["vi"], pct=True)[:-1]   # +1.2 · −0.4 (지수는 소수 한 자리 · % 없음)
+            if probe_idx(r) is not None and r["trained"]: vals[5] = fmt_delta(probe_idx(r), pct=True)[:-1]   # +1.2 · −0.4 (지수는 소수 한 자리 · % 없음)
             if not r["trained"]:
                 if not rest_: vals[1] = "—"
                 vals[2:] = [""] * (len(vals) - 2)
@@ -8499,7 +8700,7 @@ def main():
             cfg(est_lbl, text=f"{n}판" + (f" · 신기록 {V['day'].get('n_pb')}개" if V["day"].get("n_pb") else "") + (f" · {_sl}" if _sl else ""))
             _btn("오늘 끝 ✓ · 오늘 한 장 보기", C["ok_bg2"], C["ok"], lambda: open_card())
         elif complete:
-            cfg(cur_lbl, text="코박스 끝 ✓ · 발로란트 15분"); cfg(est_lbl, text="사격장 3분 → 카운터 스트레이프 3분 → 데스매치 9분 · 끝나면 숫자 4개만")
+            cfg(cur_lbl, text=f"코박스 끝 ✓ · {GAME['name']} 15분"); cfg(est_lbl, text=f"{GAME['block']['plan']} · 끝나면 숫자 4개만")
             _btn("오늘 끝 ✓ · 오늘 한 장 보기", C["ok_bg2"], C["ok"], lambda: open_card())
             if day_state.get("val_open") and not day_state.get("val_auto_opened"):
                 day_state["val_auto_opened"] = True; day_state["val_open"](True)
@@ -8512,7 +8713,7 @@ def main():
             else:
                 _w, _pr, _m = plan_parts(dkey, data["pb"]); _nw, _nm = sum(n for _, n in _w), sum(n for _, n in _m); _pl = ADAPT_PLAN.get(dkey) if ADAPT["on"] else None
                 if _pl and _pl.get("short"): cfg(cur_lbl, text=f"오늘 할 일 · 코박스 {pn}판 (짧은 날)"); cfg(est_lbl, text=f"손 풀기 {_nw} → 오늘 점수 재기 6 · 약 {int(round(pn * 33 / 20))}분 — 3일 연속 미완이라 오늘은 여기까지")
-                else: cfg(cur_lbl, text=f"오늘 할 일 · 코박스 {pn}판"); cfg(est_lbl, text=f"손 풀기 {_nw} → 오늘 점수 재기 6 → 본훈련 {_nm} → 발로란트 15분 · 약 {int(round(pn * 33 / 20)) + 15}분")
+                else: cfg(cur_lbl, text=f"오늘 할 일 · 코박스 {pn}판"); cfg(est_lbl, text=f"손 풀기 {_nw} → 오늘 점수 재기 6 → 본훈련 {_nm} → {GAME['name']} 15분 · 약 {int(round(pn * 33 / 20)) + 15}분")
             _btn("▶ 벤치 18개 실행" if dt_ == "b" else "▶ 오늘 루틴 실행", C["gold"], C["onfill"], lambda: run_playlist(pl_))
         # 숫자 · 버튼 줄 · 방금 판 · 띠 — 있을 때만
         if show_cnt:
@@ -8715,9 +8916,9 @@ def main():
         last = s[-1] if s and s[-1]["date"] == dkey else None
         vi = last["vi"] if last else None; oi = last["oi"] if last else None
         HDR_STATE.update(vi=vi, oi=oi)
-        if vi is not None or oi is not None:
-            parts = []
-            if vi is not None: parts.append(f"발로 {vi:+.1f}")
+        _pi = oi if GAME["index"] == "oi" else vi
+        if _pi is not None:
+            parts = [f"{GAME['short']} {_pi:+.1f}"]
 
             hdr_idx.configure(text=" · ".join(parts), fg=C["txt"])
         else:
@@ -8784,7 +8985,7 @@ def main():
         if wl:
             if not advice_box.winfo_manager(): advice_box.pack(fill="x", pady=(0, CARD_GAP), before=ben_body)
         else: advice_box.pack_forget()
-        t_ = CUR_TIER[0]; cfg(ben_tier_lbl, text=f"코박스 종합 점수 · {TIER_WORD[t_]} 표 · 9갈래 평균 — 코박스 랭크예요 (발로란트 랭크 아님)")
+        t_ = CUR_TIER[0]; cfg(ben_tier_lbl, text=f"코박스 종합 점수 · {TIER_WORD[t_]} 표 · 9갈래 평균 — 코박스 랭크예요 ({GAME['name']} 랭크 아님)")
         ok_, short_, dk_ = tier_ready(data); gs_ = gate_status(data["pb"]); gw_, gn_, gc_ = fmt_gate(gs_)
         nt_ = TIER_ORDER[min(TIER_ORDER.index(t_) + 1, len(TIER_ORDER) - 1)]
         cfg(grad_title, text=(screen_word(f"{gw_} · {gn_}") if BASE_DATE[0] else "졸업 조건 — 출발선 18판 뒤에 재요"))
@@ -10144,6 +10345,35 @@ if __name__ == "__main__":
         assert kovaaks_running() is True if sys.platform != "win32" else isinstance(kovaaks_running(), bool)
         assert slow_cb_line("tick:8931", 2.34) == "slow callback tick:8931 2.3s"
         assert STALL_AFTER_S < 5.0 and SLOW_CB_S < STALL_AFTER_S                       # 윈도우는 5초에 (응답 없음)
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK · v7.3 coach-note OK · v7.4 cal-coach OK · v7.5 adaptive OK · v7.6 sync OK · v8 shell OK · v8.0.2 kovaaks OK")
+        # ── v9.0: 게임 프로필 — 오버워치 2 로 바꿨다가 발로란트로 되돌리면 v8 과 같은 값 ──
+        _snap = (json.dumps(STAGES, ensure_ascii=False), COACH_SYSTEM, tuple(COACH_SECTIONS), list(VAL_ORDER), dict(VAL_TIER_KO), list(PROBE), list(CYCLE), dict(DTYPE_SHORT), dict(WHY_KO), SYNC_REPO_DEFAULT, json.dumps(blank_day()["val"], sort_keys=True))
+        assert GAME["key"] == "valorant" and game_default({}) in GAMES and game_default({"game": "ow2"}) == "ow2" and game_default({"game": "x"}) in ("valorant", "ow2")
+        set_game("ow2")
+        assert GAME["key"] == "ow2" and STAGES[4]["name"] == "마스터 → 그랜드마스터" and SERIES["title"] == "Road to Grandmaster" and SYNC_REPO_DEFAULT == "aimdesk-data-ow2"
+        assert norm_val_tier("그마 1") == "Grandmaster 1" and norm_val_tier("골드 5") == "Gold 5" and norm_val_tier("Immortal 1") is None and ko_tier("Champion") == "챔피언"
+        assert val_rank_ord("골드 5") < val_rank_ord("골드 1") < val_rank_ord("플래 5") and val_rank_ord("Platinum 5") == 31 and val_rank_ord("Master 3") == 53   # 5 가 낮다
+        assert PROBE == ["aether", "raw", "snake", "pasu", "eddie", "cts"] and len(PROBE) == 6 and not (set(PROBE) & {k_ for k_, _n in WARMUP}) and CYCLE[0] == "trk" and DAY_TYPE["v"][0] == "옵치 데이" and DTYPE_SHORT["v"] == "옵치"
+        assert HIST_TYPE_WORD["옵치"] == "훈련" and "[오버워치로 연결]" in COACH_SECTIONS and "오버워치 2 에임 코치" in COACH_SYSTEM and "Aether·Raw Control·Snake Track" in COACH_SYSTEM
+        assert list(blank_day()["val"]) == ["dm_k", "dm_d", "acc", "crit", "skip"] and THEME_BY_ID["trk"][2] == "붙어서 따라가는 손 — 히트스캔의 핵심"
+        for _i in range(10): assert CYCLE[_i] != CYCLE[(_i + 1) % 10] and CYCLE[_i] != CYCLE[(_i + 5) % 10]      # 이틀 연속 없음 · 같은 요일 2주 연속 없음
+        assert len(set(CYCLE[:5])) == 5 and len(set(CYCLE[5:])) == 5
+        _ow = dict(blank_day(), val={"dm_k": 20, "dm_d": 15, "acc": 45.0, "crit": 15.0, "skip": False})
+        assert fmt_val(_ow) == "DM 20/15 (K/D 1.33) · 명중 45% · 치명타 15%" and val_done(_ow) and not val_done(dict(blank_day(), val={"dm_k": 3, "dm_d": 1, "acc": None, "crit": None, "skip": False}))
+        assert fmt_val(dict(blank_day(), val={"skip": True})) == "옵치 블록 건너뜀" and fmt_rr_line(35) == "진행률 +35%" and rr_after(-12) == "-12%"
+        _og = {"pb": {}, "days": {}, "series": {"ep_offset": 0}}
+        for _i in range(1, 15):
+            _dk = f"2026-09-{_i:02d}"
+            _og["days"][_dk] = dict(blank_day(), plays=[["w4", "12.00.00", 800]], count={"w4": 1}, first={"w4": 800}, best={"w4": 800},
+                                    val={"dm_k": 20, "dm_d": 10, "acc": 46.0, "crit": 16.0, "skip": False}, rank={"tier": "골드 3", "rr": 20, "games": 2, "why": "pos"})
+        _gg = {g_["label"]: g_ for g_ in stage_gates(_og, "2026-09-14", 2)}
+        assert _gg["명중률 ≥ 45%"]["ok"] is True and _gg["명중률 ≥ 45%"]["val"] == "46%" and _gg["치명타 ≥ 15%"]["ok"] is True and _gg["데스매치 K/D 14일 중앙 ≥ 1.2"]["val"] == "2.00", _gg
+        assert _gg["다이아 5 · 14일 유지"]["ok"] is False and [g_["k"] for g_ in stage_gates(_og, "2026-09-14", 0)] == ["aim", "aim", "game", "rank"] and stage_gates(_og, "2026-09-14", 0)[2]["label"] == "옵치 블록 8/10일"
+        _wp2 = week_pack(_og, "2026-09-13"); assert "[Road to Grandmaster]" in _wp2 and "옵치 블록 7/7일 · 명중 중앙 46% · 치명타 16%" in _wp2 and "진행률 +140%" in _wp2 and "그랜드마스터 갈 때까지" in _wp2, _wp2
+        assert story_line(_og, "2026-09-14").startswith("DAY 14 · 골드 3 → 그랜드마스터") and "오버워치 2 블록: DM 20/10 (K/D 2.00) · 명중 46% · 치명타 16%" in daily_report(_og, "2026-09-14")
+        assert "오버워치 2, Overwatch 2" in upload_pack(_og, "2026-09-14") and "목표 그랜드마스터" in upload_pack(_og, "2026-09-14")
+        set_game("valorant")
+        assert (json.dumps(STAGES, ensure_ascii=False), COACH_SYSTEM, tuple(COACH_SECTIONS), list(VAL_ORDER), dict(VAL_TIER_KO), list(PROBE), list(CYCLE), dict(DTYPE_SHORT), dict(WHY_KO), SYNC_REPO_DEFAULT, json.dumps(blank_day()["val"], sort_keys=True)) == _snap
+        assert val_rank_ord("Gold 2") == 32 and DAY_TYPE["v"][0] == "발로 데이" and GAMES["valorant"]["port"] != GAMES["ow2"]["port"]
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK · v7.3 coach-note OK · v7.4 cal-coach OK · v7.5 adaptive OK · v7.6 sync OK · v8 shell OK · v8.0.2 kovaaks OK · v9.0 games OK")
         sys.exit(0)
     main()

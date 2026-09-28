@@ -225,7 +225,7 @@ check("skip → NEXT pressed immediately", len(fired) == 3)
 check("skipped row labelled 건너뜀", any(r[5].cget("text") == "건너뜀" for r in D["seq_win"]["rows"]))
 pump(6500)
 check("stall → 프리 플레이 warning", any("⚠" in t and "도전 과제" in t for t in texts(top)))
-csv("VT Popcorn Novice S5", "10.03.00", 500); scan(); wait_fired(4)
+csv(ad.SCEN[ad.PROBE[2]][0], "10.03.00", 500); scan(); wait_fired(4)          # 측정 3번째 (발로: Popcorn · 옵치: Snake Track)
 check("CSV → NEXT (4), warning cleared", len(fired) == 4 and not any("⚠" in t for t in texts(top)))
 # 게임 창이 앞에 없을 때: 건너뛰기 → 전송 실패 → 안내, 창을 되찾으면(focus 성공) 다시 시도해서 보냄. 그 사이 토글을 껐다 켜도 재시도가 살아 있어야 한다
 ad.kovaaks_foreground = lambda: False; ad.focus_kovaaks = lambda: False
@@ -237,15 +237,15 @@ ad.focus_kovaaks = lambda: True
 scan(); wait_fired(5); pump(200)
 check("retry after focus regained → key sent, pending cleared", len(fired) == 5 and fired[-1] == "KEY:F10" and D["auto"]["pending"] is None, str(fired[-2:]))
 ad.kovaaks_foreground = lambda: True
-btn(top, "자동 진행").cmd(); csv("VT 1w4ts Novice S5", "10.05.00", 900); scan(); pump(1300); scan()
+btn(top, "자동 진행").cmd(); csv(ad.SCEN[ad.PROBE[0]][0], "10.05.00", 900); scan(); pump(1300); scan()   # 측정 1번째
 check("auto OFF: no key", len(fired) == 5)
-check("skipped 1w4ts row revived by its own CSV (Pasu stays skipped)", D["seq_win"]["skipped"] == {3}, str(D["seq_win"]["skipped"]))
+check("skipped first-probe row revived by its own CSV (second probe stays skipped)", D["seq_win"]["skipped"] == {3}, str(D["seq_win"]["skipped"]))
 D["seq_win"]["rows"][3][3].event_generate("<Button-1>"); pump(50)
 check("click on '–' un-skips the row", D["seq_win"]["skipped"] == set() and "건너뜀" not in D["seq_win"]["prog"].cget("text"), D["seq_win"]["prog"].cget("text"))
 D["seq_win"]["skipped"].add(3); D["update_sequence"]()          # 아래 검사들은 Pasu 가 건너뛴 상태를 전제로 한다
 btn(top, "자동 진행").cmd(); check("auto ON (key) presses nothing", len(fired) == 5)
-btn(top, "딥링크 방식").cmd(); csv("VT Pasu Novice S5", "10.06.00", 700); scan(); wait_fired(6)
-check("link mode → deeplink for EddieTS (Pasu revived by its CSV, next probe)", len(fired) == 6 and fired[-1] == ad.scenario_uri("VT EddieTS Novice S5"), str(fired[-1:]))
+btn(top, "딥링크 방식").cmd(); csv(ad.SCEN[ad.PROBE[1]][0], "10.06.00", 700); scan(); wait_fired(6)   # 측정 2번째
+check("link mode → deeplink for the 4th probe (2nd probe revived by its CSV, next probe)", len(fired) == 6 and fired[-1] == ad.scenario_uri(ad.SCEN[ad.PROBE[3]][0]), str(fired[-1:]))
 top.geometry("+1180+60"); pump(100)          # 스크린샷에서 본창을 가리지 않게 오른쪽으로
 
 # ── v3: 정보·코치·기록 탭·단축키 ──
@@ -282,7 +282,7 @@ check("v7: while auto-running nothing is gold and the button reads 자동 진행
 check("v7: count reads 5/20 in the hero", D["cnt_lbl"].cget("text") == "5/20" and D["cnt_lbl"].winfo_viewable(), D["cnt_lbl"].cget("text"))
 check("v8 (b): rail badge on 오늘 reads 5/20", D["nav_badge"]["today"].cget("text") == "5/20" and D["nav_badge"]["today"].winfo_ismapped(), D["nav_badge"]["today"].cget("text"))
 D["set_routine_open"](False); pump(300)
-check("v7: three todo rows + 발로란트 row inside the hero, 자세히 closed", len(D["section_labels"]) == 3 and D["day_state"]["val_row"].winfo_viewable() and not D["cols"].winfo_ismapped(), f"{len(D['section_labels'])} {D['cols'].winfo_ismapped()}")
+check("v7: three todo rows + the game's 15-minute row inside the hero, 자세히 closed", len(D["section_labels"]) == 3 and D["day_state"]["val_row"].winfo_viewable() and not D["cols"].winfo_ismapped(), f"{len(D['section_labels'])} {D['cols'].winfo_ismapped()}")
 D["set_routine_open"](True); pump(300)
 check("v7: 자세히 open → hero keeps headline·count·button, rows move to the detail card", D["cols"].winfo_ismapped() and not D["todo_host"].winfo_ismapped() and D["cnt_lbl"].winfo_viewable() and D["run_btn"].winfo_viewable(), f"{D['cols'].winfo_ismapped()} {D['todo_host'].winfo_ismapped()}")
 check("v7: headline names the next scenario", D["cur_lbl"].cget("text").startswith("다음 판 · "), D["cur_lbl"].cget("text"))
@@ -290,7 +290,7 @@ check("v7: header shows DAY n and the settings link, tab bar has 5 tabs", D["hdr
 _tt = texts(root)
 check("week theme line lists five weekday themes", any(x.startswith("이번 주 · 화 ") and x.count("·") == 5 and " 일 " in x for x in _tt), str([x for x in _tt if x.startswith("이번 주")])[:120])
 _V = D["verdicts"](); check("hero verdict is honest with 5 plays (측정 중, hollow)", _V["day"]["state"] == "wait" and _V["day"]["word"] == "측정 중" and D["band_cv"].itemcget("hero", "fill") == ad.C["card2"], str(_V["day"]))
-check("live strip shows the last score and its scenario", D["cur_score"].cget("text") == "700" and "Pasu" in D["cur_word"].cget("text"), D["cur_score"].cget("text") + " " + D["cur_word"].cget("text"))
+check("live strip shows the last score and its scenario", D["cur_score"].cget("text") == "700" and ad.sname(ad.PROBE[1]) in D["cur_word"].cget("text"), D["cur_score"].cget("text") + " " + D["cur_word"].cget("text"))
 check("live strip mirrors the auto-progress hint", "코박스" in D["auto_mini"].cget("text") or "다음" in D["auto_mini"].cget("text") or D["auto_mini"].cget("text") == "", D["auto_mini"].cget("text")[:80])
 _cl = D["day_state"].get("chal_lbl")
 check("daily challenge is either a real rank target or absent", _cl is None or ("넘으면" in _cl.cget("text") and "칸" in _cl.cget("text")), _cl.cget("text") if _cl else "none")
@@ -298,7 +298,7 @@ D["open_card"](); pump(250)
 cw = D["card_win"]["win"]
 check("session card opens with real content", cw is not None and cw.winfo_exists() and len(D["card_win"]["cv"].find_all()) > 5, str(len(D["card_win"]["cv"].find_all())))
 _ct = [D["card_win"]["cv"].itemcget(i, "text") for i in D["card_win"]["cv"].find_all() if D["card_win"]["cv"].type(i) == "text"]
-check("card names the day, theme and play count", any("발로 데이" in x for x in _ct) and any(x.startswith("5판") for x in _ct), str(_ct[:4]))
+check("card names the day, theme and play count", any(ad.DAY_TYPE["v"][0] in x for x in _ct) and any(x.startswith("5판") for x in _ct), str(_ct[:4]))
 _cvw, _cvh = int(D["card_win"]["cv"].cget("width")), int(D["card_win"]["cv"].cget("height"))
 check("card is 16:9 with the story line first", abs(_cvw * 9 / 16 - _cvh) <= 1 and any(x.startswith("DAY ") for x in _ct) and any(x.startswith("관문 노비스 졸업") for x in _ct), f"{_cvw}x{_cvh} {_ct[:3]}")
 shot("0_card"); cw.destroy(); pump(80)
@@ -381,9 +381,17 @@ check("v7.2: back to default moves the files home", D["apply_out_dir"](None) is 
 D["rec_now"](); pump(100)
 rec = data["days"][TODAY.isoformat()].get("rec") or {}
 check("rec_now stamps today's recording start", rec.get("src") == "manual" and len(rec.get("start") or "") == 8, str(rec))
-D["rid_var"].set("YouKnowJo#YK1"); D["val_sync_now"](); pump(1500)
-check("valo sync without a key fails softly", "키" in D["val_lbl"].cget("text") or "불러온 적 없음" in D["val_lbl"].cget("text") or "실패" in D["val_lbl"].cget("text"), D["val_lbl"].cget("text"))
-check("valo config persisted", data["valo_cfg"]["rid"] == "YouKnowJo#YK1" and data["valo_cfg"]["region"] in ("ap", "kr", "na", "eu"))
+if ad.GAME["api"]:                                              # v9.0: 전적 API 는 발로란트 프로필에만 있다
+    D["rid_var"].set("YouKnowJo#YK1"); D["val_sync_now"](); pump(1500)
+    check("valo sync without a key fails softly", "키" in D["val_lbl"].cget("text") or "불러온 적 없음" in D["val_lbl"].cget("text") or "실패" in D["val_lbl"].cget("text"), D["val_lbl"].cget("text"))
+    check("valo config persisted", data["valo_cfg"]["rid"] == "YouKnowJo#YK1" and data["valo_cfg"]["region"] in ("ap", "kr", "na", "eu"))
+else:
+    check("v9.0: no-API game hides the 전적 inputs and says so", not any(isinstance(w, tk.Entry) and w.winfo_ismapped() for w in walk(D["grp"]["vc_valo"])) and "공개 전적 API" in " ".join(texts(D["grp"]["vc_valo"])), " ".join(texts(D["grp"]["vc_valo"]))[:80])
+    check("v9.0: no-API game keeps the rank card usable", D["tier_var"] is not None)
+check("v9.0: window title and rail brand follow the game", root.title() == ad.GAME["title"] and any(x == ad.GAME["brand"] for x in texts(root)), root.title())
+check("v9.0: the hero's ④ row names the game's 15-minute block", any(x == "④ " + ad.GAME["block"]["title"] for x in texts(D["day_state"]["val_row"])), str(texts(D["day_state"]["val_row"])[:3]))
+check("v9.0: settings 화면 card has a game switch with the current game gold", ad.GAME["key"] in D["game_btns"] and D["game_btns"][ad.GAME["key"]].itemcget(D["game_btns"][ad.GAME["key"]].shape, "fill") == ad.C["gold"], str(list(D["game_btns"])))
+check("v9.0: data file remembers the game", data.get("game") == ad.GAME["key"], str(data.get("game")))
 D["show"]("today"); pump(150)
 D["set_drawer"](True); pump(80); check("rank card is always open (tier entry mapped)", D["tier_var"] is not None and D["steppers"] == [])
 D["tier_var"].set("실버 2"); D["rr_var"].set("+18"); D["commit_rank"](); check("rank tier / RR saved", data["days"][TODAY.isoformat()]["rank"].get("tier") == "실버 2" and data["days"][TODAY.isoformat()]["rank"].get("rr") == 18, str(data["days"][TODAY.isoformat()]["rank"]))
@@ -414,7 +422,7 @@ check("v8 (g): 죽음 column removed from the 14-day table (12 cells per row, co
 _types = [r_[1].cget("text") for r_ in D["hist_cells"]]
 check("v8 (h): every 유형 cell uses the screen words 훈련·약점·실력·쉼·출발선", all(t_ in ("훈련", "약점", "실력", "쉼", "출발선", "", "—") for t_ in _types) and "훈련" in _types and "출발선" in _types, str(_types))
 D["select_day"](0); pump(50)
-check("detail shows today's Pasu", D["det_lines"][0].cget("text").startswith("Pasu") and "700" in D["det_lines"][0].cget("text"), D["det_lines"][0].cget("text"))
+check("detail shows today's 2nd probe with its 700", any(l_.cget("text").startswith(ad.sname(ad.PROBE[1])) and "700" in l_.cget("text") for l_ in D["det_lines"]), D["det_lines"][0].cget("text"))
 check("growth card title", "총 에너지" in D["grow_title"].cget("text"), D["grow_title"].cget("text"))
 check("v8 (i): with a baseline the growth table shows and the empty line is hidden", not D["grow_empty"].winfo_ismapped() and D["grow_grid"].winfo_ismapped())
 _bl = ad.BASELINE[0]; ad.BASELINE[0] = None; ad.bump_ver(); D["dirty"]["log"] = True; D["refresh_tab"]("log"); pump(200)     # growth 표는 DATA_VER 메모 — 자료가 바뀌면 늘 bump_ver
@@ -452,12 +460,13 @@ check("UI scale applied to daych", D["daych"].winfo_reqwidth() == ad.px(70), f"{
 check("window fits screen", root.winfo_width() <= root.winfo_screenwidth())
 # ── v3.4 트레이너: 답장 붙여넣기 → 목표·도전·테마·메모 · 하루 기록 텍스트 저장 ──
 D["show"]("today"); pump(100)
-D["trainer_txt"].insert("1.0", "목표 Ground 3000\n도전 Pasu 900\n테마 내일 트래킹\n메모 첫 판 전에 손 풀기\n이상한 줄")
+_k1, _p1 = ad.PROBE[1], ad.sname(ad.PROBE[1])                    # 오늘 700 을 친 측정 2번째 (발로: Pasu · 옵치: Raw Control) — 트레이너 줄은 이름을 띄어쓰기 없이도 알아본다
+D["trainer_txt"].insert("1.0", f"목표 Ground 3000\n도전 {_p1} 900\n테마 내일 트래킹\n메모 첫 판 전에 손 풀기\n이상한 줄")
 D["apply_trainer"](); pump(450)
-check("trainer reply applied: targets + challenge + theme saved", data["trainer"]["targets"] == {"ground": 3000, "pasu": 900} and data["trainer"]["challenge"] == "pasu" and data["trainer"]["themes"] == {"2026-09-04": "trk"}, str(data.get("trainer")))
-_cl = D["day_state"]["chal_lbl"]; check("challenge box shows the trainer target", _cl is not None and "Pasu 900점" in _cl.cget("text") and "트레이너 목표" in _cl.cget("text") and "200 남음" in _cl.cget("text"), _cl.cget("text") if _cl else "none")
+check("trainer reply applied: targets + challenge + theme saved", data["trainer"]["targets"] == {"ground": 3000, _k1: 900} and data["trainer"]["challenge"] == _k1 and data["trainer"]["themes"] == {"2026-09-04": "trk"}, str(data.get("trainer")))
+_cl = D["day_state"]["chal_lbl"]; check("challenge box shows the trainer target", _cl is not None and f"{_p1} 900점" in _cl.cget("text") and "트레이너 목표" in _cl.cget("text") and "200 남음" in _cl.cget("text"), _cl.cget("text") if _cl else "none")
 _gr = next(r for r in D["routine_rows"] if r[1] == "ground"); check("ground row: 3000 meets 목표 3000 ✓ (green)", _gr[5].cget("text").endswith("목표 3000 ✓") and _gr[5].cget("fg") in (ad.C["ok"], ad.C["gold"]), _gr[5].cget("text"))
-_pr = next(r for r in D["routine_rows"] if r[1] == "pasu"); check("pasu row: 700 vs 목표 900 not met", _pr[5].cget("text").startswith("700") and _pr[5].cget("text").endswith("목표 900"), _pr[5].cget("text"))
+_pr = next(r for r in D["routine_rows"] if r[1] == _k1); check("2nd-probe row: 700 vs 목표 900 not met", _pr[5].cget("text").startswith("700") and _pr[5].cget("text").endswith("목표 900"), _pr[5].cget("text"))
 _st = D["trainer_lbl"].cget("text"); check("trainer status lists targets, theme, memo and the unread line", "목표 2개" in _st and "09/04 트래킹 집중" in _st and "손 풀기" in _st and "읽지 못한 줄 1" in _st, _st)
 check("paste box cleared after apply", D["trainer_txt"].get("1.0", "end").strip() == "")
 check("routine card shows the trainer memo", any(x.startswith("트레이너 메모 · 첫 판 전에 손 풀기") for x in texts(root)))
@@ -516,8 +525,8 @@ class FakeGH:
     def __call__(s, method, path, token, body=None):
         if token != "tok": return 401, {"message": "Bad credentials"}
         if path == "/user": return 200, {"login": "joyunho"}
-        if path == "/repos/joyunho/aimdesk-data": return 200, {"private": True, "permissions": {"push": True}}
-        pre = "/repos/joyunho/aimdesk-data/contents/"
+        if path == f"/repos/joyunho/{ad.SYNC_REPO_DEFAULT}": return 200, {"private": True, "permissions": {"push": True}}
+        pre = f"/repos/joyunho/{ad.SYNC_REPO_DEFAULT}/contents/"
         if not path.startswith(pre): return 404, {"message": "Not Found"}
         nm = path[len(pre):]; cur = s.files.get(nm)
         if method == "GET":
@@ -535,7 +544,7 @@ check("v7.6: sync card starts disconnected", "연결 안 됨" in D["sync_lbl"].c
 D["sync_tok_var"].set("tok"); D["sync_repo_var"].set("")
 check("v7.6: connect runs in the background", D["sync_connect_now"]() is True and D["sync_busy"][0]); wait_sync()
 _rf = _fg.files.get(ad.SYNC_FILE)
-check("v7.6: connect finds <id>/aimdesk-data, uploads, remembers the token", _rf is not None and D["sync_cfg"]["repo"] == "joyunho/aimdesk-data" and D["sync_cfg"]["token"] == "tok" and "연결됨" in D["sync_lbl"].cget("text") and TODAY.isoformat() in ad.sync_decode(_rf[0])["days"], D["sync_lbl"].cget("text"))
+check("v7.6: connect finds <id>/aimdesk-data, uploads, remembers the token", _rf is not None and D["sync_cfg"]["repo"] == f"joyunho/{ad.SYNC_REPO_DEFAULT}" and D["sync_cfg"]["token"] == "tok" and "연결됨" in D["sync_lbl"].cget("text") and TODAY.isoformat() in ad.sync_decode(_rf[0])["days"], D["sync_lbl"].cget("text"))
 _up = ad.sync_decode(_rf[0])
 check("v7.6: folder paths · window · token · API keys are not uploaded", all(k not in _up for k in ("stats_dir", "win", "sync", "out_dir")) and not (_up.get("coach") or {}).get("ai_key") and not (_up.get("valo_cfg") or {}).get("key"), sorted(_up)[:20])
 _o = ad.sync_decode(_rf[0]); _o["days"]["2026-08-20"] = {"plays": [["penta", "20.00.00", 300]], "count": {"penta": 1}, "first": {"penta": 300}, "best": {"penta": 300}}
@@ -566,7 +575,7 @@ check("v7.6: the token is not written to the data file on a public PC", (saved.g
 check("on_close saved win.geo/tab/seq", saved["win"].get("tab") == "today" and "geo" in saved["win"] and saved["win"].get("seq", "").startswith("+"), str(saved["win"]))
 check("auto_mode persisted", saved.get("auto_mode") == "key")
 check("on_close wrote the bench-day report", (TMP / "기록" / "에임데스크_2026-09-05.txt").exists() and "벤치마크" in (TMP / "기록" / "에임데스크_2026-09-05.txt").read_text(encoding="utf-8-sig"))
-check("trainer targets survive in the saved file", saved.get("trainer", {}).get("targets") == {"ground": 3000, "pasu": 900})
+check("trainer targets survive in the saved file", saved.get("trainer", {}).get("targets") == {"ground": 3000, ad.PROBE[1]: 900})
 log = (TMP / "aim_desk.log").read_text() if (TMP / "aim_desk.log").exists() else ""
 _log_rest = "\n".join(l for l in log.splitlines() if "] start ok " not in l)          # v8.0.2: 켤 때마다 남는 한 줄은 오류가 아니다
 check("no exceptions logged (start ok line aside)", _log_rest.strip() == "", _log_rest[-600:])

@@ -2,8 +2,9 @@ name: Build AimDesk.exe
 
 # main 에 푸시될 때마다 Windows 에서 exe 를 빌드해
 #  1) Actions 아티팩트로 올리고
-#  2) "latest" 릴리스에 AimDesk.exe 를 덮어써서 항상 같은 주소로 받을 수 있게 한다:
+#  2) "latest" 릴리스에 AimDesk.exe(발로란트용)와 AimDesk-OW2.exe(오버워치 2용)를 덮어써서 항상 같은 주소로 받을 수 있게 한다:
 #     https://github.com/joyunho/AIM_PROGRAM/releases/latest/download/AimDesk.exe
+#     https://github.com/joyunho/AIM_PROGRAM/releases/latest/download/AimDesk-OW2.exe
 on:
   push:
     branches: ["**"]                   # 모든 브랜치에서 테스트·빌드 (릴리스 갱신은 main 만)
@@ -25,6 +26,7 @@ jobs:
         run: |
           AIMDESK_DATA_DIR=/tmp/aimdesk_smoke xvfb-run -a -s "-screen 0 1700x1000x24" python3 -u smoke_test.py
           AIMDESK_DATA_DIR=/tmp/aimdesk_smoke15 AIMDESK_SCALE=1.5 xvfb-run -a -s "-screen 0 2400x1400x24" python3 -u smoke_test.py
+          AIMDESK_DATA_DIR=/tmp/aimdesk_smoke_ow2 AIMDESK_GAME=ow2 xvfb-run -a -s "-screen 0 1700x1000x24" python3 -u smoke_test.py
 
   build:
     runs-on: windows-latest
@@ -47,13 +49,16 @@ jobs:
         run: |
           ICON=""; [ -f app.ico ] && ICON="--icon app.ico"
           python -m PyInstaller --noconfirm --clean --onefile --windowed $ICON --name AimDesk aim_desk.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed $ICON --name AimDesk-OW2 aim_desk.py   # 같은 파일 — exe 이름이 게임을 정한다 (v9.0)
           ls -la dist
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: AimDesk-exe
-          path: dist/AimDesk.exe
+          path: |
+            dist/AimDesk.exe
+            dist/AimDesk-OW2.exe
 
       - name: Publish to "latest" release
         if: github.ref == 'refs/heads/main'
@@ -64,5 +69,5 @@ jobs:
           git tag -f latest
           git push -f origin latest
           gh release view latest >/dev/null 2>&1 \
-            || gh release create latest --title "AimDesk 최신 빌드" --notes "main 브랜치에서 자동 빌드된 AimDesk.exe 입니다. 다운로드 후 SmartScreen 경고가 뜨면 '추가 정보 → 실행'."
-          gh release upload latest dist/AimDesk.exe --clobber
+            || gh release create latest --title "AimDesk 최신 빌드" --notes "main 브랜치에서 자동 빌드된 AimDesk.exe(발로란트용) · AimDesk-OW2.exe(오버워치 2용) 입니다. 다운로드 후 SmartScreen 경고가 뜨면 '추가 정보 → 실행'."
+          gh release upload latest dist/AimDesk.exe dist/AimDesk-OW2.exe --clobber

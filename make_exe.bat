@@ -34,6 +34,7 @@ if exist app.ico (
 
 echo  2/3  빌드 중... (창이 멈춘 듯 보여도 기다리세요)
 %PY% -m PyInstaller --noconfirm --clean --onefile --windowed %ICON% --name AimDesk aim_desk.py >build_log.txt 2>&1
+%PY% -m PyInstaller --noconfirm --clean --onefile --windowed %ICON% --name AimDesk-OW2 aim_desk.py >>build_log.txt 2>&1
 
 if not exist dist\AimDesk.exe (
   echo.
