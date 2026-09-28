@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v9.0 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
+에임 데스크 v9.1 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
@@ -56,6 +56,9 @@
   다섯 단계와 관문 · 랭크 사다리 · 측정 6개와 본훈련 주기 · 코치 프롬프트 · 업로드 팩 태그 · 방송 문구)는 전부 GAMES 표에서 읽고,
   exe 이름(또는 기록 파일의 game · 설정 → 화면의 게임 칸)이 프로필을 정한다 (set_game). 오버워치 2 는 트래킹 위주 측정·주기, 명중률·치명타 관문,
   브론즈~챔피언 사다리(5→1), 훈련장·데스매치 15분 블록. 발로란트 쪽 출력은 v8.0.2 와 같다
+· v9.1: 오버워치 2 전적 연동 — OverFast API(공개 · 키 없음)로 배틀태그의 역할별 랭크 · 주력 영웅(셋까지) 시즌 명중률·치명타·10분당 죽음·목숨당 처치·승률을
+  읽어 관문(ow_acc · ow_crit · ow_deaths · ow_epl · ow_win — 대상: main · 역할 · 영웅)과 랭크 카드 머리에 넣는다 · 오버워치 프로필을 YouKnow#31605 의
+  전적(딜러 다이아 5 · 트래킹이 병목 · 죽음 8.9/10분)에 맞춰 다시 짰다: 시에라·캐서디·솔저 셋, 다이아 5 → 마스터 사다리, 캐서디 데스매치 계기판
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
 from __future__ import annotations
@@ -1192,7 +1195,7 @@ def log_line(msg: str):
 
 # ── v8.0.1 멈춤 감시 — Tk 메인 스레드가 3초 넘게(v8.0.2 · 윈도우는 5초에 '(응답 없음)') after 콜백을 못 돌리면 그 순간의 메인 스레드 스택을 로그에 남긴다 ──
 STALL_AFTER_S, STALL_EVERY_S, STALL_HB_MS = 3.0, 30.0, 1000
-APP_VERSION = "9.0"                   # 시작 로그 한 줄에 (머리 주석의 버전과 같이 올린다)
+APP_VERSION = "9.1"                   # 시작 로그 한 줄에 (머리 주석의 버전과 같이 올린다)
 SLOW_CB_S = 1.5                       # v8.0.2 — after 콜백 하나가 이보다 오래 걸리면 'slow callback' 한 줄
 
 def slow_cb_line(name: str, seconds: float) -> str:
@@ -3034,6 +3037,130 @@ def val_sync(data: dict):
     rc = data["valo"].get("recent") or {}
     return True, f"{mmr['tier']} {mmr['rr']}RR" + (f" · 최근 {rc['n']}판 승률 {rc['win']:.0f}%" if rc.get("win") is not None else "")
 
+# ══════════════════ 오버워치 2 전적 (v9.1 · 선택) ══════════════════
+# OverFast API (공개 · 키 없음 · overfast-api.tekrop.fr) — 블리자드 공개 프로필을 읽는다 (프로필이 '공개'여야 한다).
+# 판마다가 아니라 시즌 누적 영웅별 숫자만 있다 — 그래서 '주력 영웅(1~3명)'의 명중률 · 치명타 · 10분당 죽음 · 목숨당 처치 · 승률을
+# 시간 가중 평균으로 뭉쳐 관문(ow_acc · ow_crit · ow_deaths · ow_epl · ow_win)의 재료로 쓴다. 역할 랭크는 그날 스냅샷(days[d]["ow"]["tier"])으로 남아 티어 유지 관문이 읽는다.
+OW_API = "https://overfast-api.tekrop.fr"
+OW_ROLE_KO = {"damage": "딜러", "tank": "탱커", "support": "힐러"}
+OW_HERO_KO = {"cassidy": "캐서디", "soldier-76": "솔저 76", "ashe": "애쉬", "widowmaker": "위도우메이커", "tracer": "트레이서", "sojourn": "소전", "hanzo": "한조",
+              "reaper": "리퍼", "genji": "겐지", "echo": "에코", "mei": "메이", "pharah": "파라", "bastion": "바스티온", "junkrat": "정크랫", "symmetra": "시메트라",
+              "torbjorn": "토르비욘", "sombra": "솜브라", "venture": "벤처", "freja": "프레야", "ana": "아나", "illari": "일라리", "kiriko": "키리코", "mercy": "메르시",
+              "zenyatta": "젠야타", "lucio": "루시우", "moira": "모이라", "baptiste": "바티스트", "brigitte": "브리기테", "lifeweaver": "라이프위버", "juno": "주노",
+              "reinhardt": "라인하르트", "dva": "D.Va", "winston": "윈스턴", "orisa": "오리사", "sigma": "시그마", "zarya": "자리야", "roadhog": "로드호그",
+              "wrecking-ball": "레킹볼", "doomfist": "둠피스트", "junker-queen": "정커퀸", "ramattra": "라마트라", "mauga": "마우가", "hazard": "해저드"}
+OW_MIN_GAMES = 10                  # 주력 영웅 시즌 판 수가 이보다 적으면 관문은 '자료 없음'
+
+def ow_hero_name(k: str) -> str:
+    return OW_HERO_KO.get(k) or " ".join(w.capitalize() for w in str(k).replace("-", " ").split())
+
+def ow_tag(s: str):
+    """'YouKnow#31605' → 'YouKnow-31605' (URL 형). 모양이 아니면 None"""
+    s = (s or "").strip()
+    if "#" not in s: return None
+    name, num = s.rsplit("#", 1)
+    return f"{name.strip()}-{num.strip()}" if name.strip() and num.strip().isdigit() else None
+
+def ow_get(path: str, timeout: float = 10.0):
+    """GET → (json | None, 오류 문구 | None). 키가 없는 공개 API — 네트워크·형식 오류를 문구로"""
+    req = urllib.request.Request(OW_API + path, headers={"User-Agent": "AimDesk", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r: return json.loads(r.read().decode("utf-8")), None
+    except urllib.error.HTTPError as e:
+        return None, {404: "프로필을 못 찾았어요 — 배틀태그(이름#숫자)와 블리자드 프로필이 '공개'인지 확인", 422: "배틀태그 모양이 아니에요 (이름#숫자)",
+                      429: "요청이 너무 잦아요 — 잠시 뒤 다시", 500: "OverFast 서버 오류 — 잠시 뒤 다시", 504: "블리자드 응답이 늦어요 — 잠시 뒤 다시"}.get(e.code, f"HTTP {e.code}")
+    except (urllib.error.URLError, TimeoutError, OSError) as e: return None, f"연결 실패 — {getattr(e, 'reason', e)}"
+    except ValueError: return None, "응답 형식 오류"
+
+def parse_ow_summary(j: dict):
+    """/players/{tag}/summary → {'season', 'ranks': {'damage': 'Diamond 5', …}, 'name'} (경쟁전 PC 만). 랭크가 없으면 ranks 는 빈 dict"""
+    try:
+        pc = ((j.get("competitive") or {}).get("pc") or {})
+        ranks = {}
+        for role in ("damage", "tank", "support"):
+            r_ = pc.get(role) or {}
+            if r_.get("division") and r_.get("tier"): ranks[role] = f"{str(r_['division']).capitalize()} {int(r_['tier'])}"
+        return {"season": pc.get("season"), "ranks": ranks, "name": j.get("username")}
+    except (AttributeError, TypeError, ValueError): return None
+
+def parse_ow_career(j: dict):
+    """/players/{tag}/stats/career?gamemode=competitive&platform=pc → {영웅: {'games','won','win','time','acc','crit','d10','epl','fb10','dmg10'}} (시즌 누적 · 판이 있는 영웅만)"""
+    out = {}
+    for hero, c in (j or {}).items():
+        if not isinstance(c, dict): continue
+        g = c.get("game") or {}; av = c.get("average") or {}; cb = c.get("combat") or {}; hs = c.get("hero_specific") or {}
+        try:
+            tp = int(g.get("time_played") or 0)
+            if tp <= 0: continue
+            games = int(g.get("games_played") or 0); won = int(g.get("games_won") or 0)
+            out[hero] = {"games": games, "won": won, "win": (100.0 * won / games) if games else None, "time": tp,
+                         "acc": cb.get("weapon_accuracy"), "crit": cb.get("critical_hit_accuracy"),
+                         "d10": av.get("deaths_avg_per_10_min"), "epl": av.get("eliminations_per_life"),
+                         "fb10": av.get("final_blows_avg_per_10_min"), "dmg10": av.get("hero_damage_done_avg_per_10_min"),
+                         "scoped": hs.get("scoped_accuracy"), "scoped_crit": hs.get("scoped_critical_hit_accuracy")}
+        except (TypeError, ValueError): continue
+    return out
+
+def parse_ow_roles(j: dict):
+    """/players/{tag}/stats/summary?gamemode=competitive&platform=pc → {'damage': {'games','won','win','time','d10','epl','elim10'}, …} (시즌 누적 · 역할별)"""
+    out = {}
+    for role, v in ((j or {}).get("roles") or {}).items():
+        if not isinstance(v, dict): continue
+        try:
+            games = int(v.get("games_played") or 0); won = int(v.get("games_won") or 0); av = v.get("average") or {}; tot = v.get("total") or {}
+            d_ = int(tot.get("deaths") or 0); e_ = int(tot.get("eliminations") or 0)
+            out[role] = {"games": games, "won": won, "win": (100.0 * won / games) if games else None, "time": int(v.get("time_played") or 0),
+                         "d10": av.get("deaths"), "elim10": av.get("eliminations"), "epl": (e_ / d_) if d_ else None, "acc": None, "crit": None}
+        except (TypeError, ValueError): continue
+    return out
+
+OW_MIN_HERO_MIN = 30               # 영웅 하나를 관문 대상으로 볼 때 최소 시즌 플레이 시간(분)
+
+def ow_target_stats(ow: dict, target: str, heroes_cfg=None):
+    """관문 대상의 시즌 숫자 — 'main'(설정한 주력 영웅들 가중 평균) · 역할('damage'·'tank'·'support') · 영웅 키. 자료가 모자라면 None"""
+    ow = ow or {}
+    if target == "main": return ow_main_stats(ow, heroes_cfg or [])
+    if target in OW_ROLE_KO:
+        r_ = (ow.get("roles") or {}).get(target)
+        return dict(r_, heroes=[target]) if r_ and int(r_.get("games") or 0) >= OW_MIN_GAMES else None
+    h_ = (ow.get("heroes") or {}).get(target)
+    if not h_ or int(h_.get("time") or 0) < OW_MIN_HERO_MIN * 60: return None
+    return dict(h_, heroes=[target])
+
+def ow_main_stats(ow: dict, heroes, min_games: int = OW_MIN_GAMES):
+    """주력 영웅들의 시즌 숫자를 시간 가중 평균으로 — {'games','win','acc','crit','d10','epl','heroes'}. 판이 min_games 보다 적으면 None"""
+    hs = ((ow or {}).get("heroes") or {}); picks = [(k, hs[k]) for k in (heroes or []) if k in hs and hs[k].get("time")]
+    if not picks: return None
+    games = sum(int(v.get("games") or 0) for _k, v in picks); won = sum(int(v.get("won") or 0) for _k, v in picks)
+    if games < min_games: return None
+    def wavg(field):
+        pairs = [(float(v[field]), float(v["time"])) for _k, v in picks if v.get(field) is not None]
+        return (sum(x * w for x, w in pairs) / sum(w for _x, w in pairs)) if pairs else None
+    return {"games": games, "win": (100.0 * won / games) if games else None, "acc": wavg("acc"), "crit": wavg("crit"), "d10": wavg("d10"), "epl": wavg("epl"),
+            "heroes": [k for k, _v in picks]}
+
+def ow_sync(data: dict):
+    """설정대로 불러와 data["ow"] 에 넣고 오늘 날짜에 역할 랭크 스냅샷을 남긴다. (성공 여부, 안내 문구). 네트워크를 타므로 GUI 는 스레드로 부른다"""
+    cfg = data.get("ow_cfg") or {}
+    tag = ow_tag(cfg.get("tag") or "")
+    if not tag: return False, "설정 → 오버워치 2 전적에 배틀태그(이름#숫자)를 넣어 주세요"
+    role = cfg.get("role") if cfg.get("role") in OW_ROLE_KO else "damage"
+    j, err = ow_get(f"/players/{urllib.parse.quote(tag, safe='')}/summary")
+    sm = parse_ow_summary(j) if j else None
+    if sm is None: return False, err or "프로필을 못 읽었어요"
+    jc, err2 = ow_get(f"/players/{urllib.parse.quote(tag, safe='')}/stats/career?gamemode=competitive&platform=pc")
+    heroes = parse_ow_career(jc) if jc else {}
+    jr, _err3 = ow_get(f"/players/{urllib.parse.quote(tag, safe='')}/stats/summary?gamemode=competitive&platform=pc")
+    roles = parse_ow_roles(jr) if jr else {}
+    data["ow"] = {"at": datetime.now().strftime("%Y-%m-%d %H:%M"), "season": sm.get("season"), "ranks": sm.get("ranks") or {}, "name": sm.get("name"),
+                  "heroes": {k: v for k, v in heroes.items() if k != "all-heroes"}, "overall": heroes.get("all-heroes"), "roles": roles}
+    tier = (sm.get("ranks") or {}).get(role)
+    if tier: data.setdefault("days", {}).setdefault(today_date().isoformat(), blank_day())["ow"] = {"tier": tier, "role": role}
+    st = ow_main_stats(data["ow"], cfg.get("heroes") or [])
+    msg = (f"{OW_ROLE_KO[role]} {ko_tier(tier)}" if tier else f"{OW_ROLE_KO[role]} 랭크 없음") + (f" · 주력 {st['games']}판 명중 {st['acc']:.0f}% 치명타 {st['crit']:.0f}%" if st and st.get("acc") is not None and st.get("crit") is not None else "")
+    if not heroes and err2: msg += f" · 영웅 통계 못 읽음 ({err2})"
+    return True, msg
+
 # ══════════════════ 에피소드 · 녹화 오프셋 · 명장면 · 챕터 (v6.0) ══════════════════
 # 매일 올리는 시리즈의 한 편 = 훈련 하루. 앱은 세션 시작 시각과 판마다 끝난 시각을 이미 알고 있으니,
 # 녹화 시작 시각 하나만 있으면 신기록·최대 상승·마지막 판이 영상 안 어디인지(mm:ss) 바로 나온다.
@@ -3180,7 +3307,7 @@ def day_val_tier(data: dict, dkey: str):
     e = (data.get("days") or {}).get(dkey) or {}
     r = e.get("rank") or {}
     if r.get("tier"): return (r["tier"], r.get("rr"))
-    v = e.get("valo") or {}
+    v = e.get("valo") or e.get("ow") or {}                 # 그날 불러온 스냅샷 (발로: valo · 옵치: ow — v9.1)
     return (v.get("tier"), v.get("rr")) if v.get("tier") else (None, None)
 
 def prev_val_tier(data: dict, dkey: str):
@@ -3560,6 +3687,12 @@ def stage_gates(data: dict, dkey: str, idx: int = None):
             nr_, th, label = a; r_ = _api_recent(data, nr_); win = r_["win"] if r_ else None; G.append(_gate_item(k, label, ge(win, th), fv(win, "%")))
         elif kind == "kd":
             th, label = a; kd, _n = _val_kd_med(data, dkey); G.append(_gate_item(k, label, ge(kd, th), fv(kd, "", 2)))
+        elif kind in ("ow_acc", "ow_crit", "ow_deaths", "ow_epl", "ow_win"):            # v9.1 — 오버워치 전적 (시즌 누적): (갈래, 종류, 대상, 문턱, 라벨) · 대상 = main · 역할 · 영웅 키
+            target, th, label = a; st_ = ow_target_stats(data.get("ow"), target, (data.get("ow_cfg") or {}).get("heroes") or [])
+            f_ = {"ow_acc": "acc", "ow_crit": "crit", "ow_deaths": "d10", "ow_epl": "epl", "ow_win": "win"}[kind]
+            v_ = st_.get(f_) if st_ else None
+            unit = "%" if kind in ("ow_acc", "ow_crit", "ow_win") else ""
+            G.append(_gate_item(k, label, (le if kind == "ow_deaths" else ge)(v_, th), fv(v_, unit, 2 if kind == "ow_epl" else (1 if kind == "ow_deaths" else 0)) + (f" ({st_['games']}판)" if st_ else "")))
     return G
 
 def stage_status(data: dict, dkey: str) -> dict:
@@ -3711,7 +3844,7 @@ _G0 = [("aim", "base"), ("aim", "train_days", 10), ("game", "block_days", 8, 10)
 GAMES = {
  "valorant": {
   "key": "valorant", "name": "발로란트", "en": "Valorant", "short": "발로", "exe": "AimDesk", "title": "에임 데스크", "brand": "에임 데스크",
-  "port": 47653, "repo": "aimdesk-data", "day_word": "발로 데이", "index": "vi", "api": True,
+  "port": 47653, "repo": "aimdesk-data", "day_word": "발로 데이", "index": "vi", "api": "valo",
   "series": {"title": "Road to Immortal", "tier": "골드 2", "goal": "불멸"},
   "ranks": ["Iron", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Ascendant", "Immortal", "Radiant"],
   "rank_ko": {"Iron": "아이언", "Bronze": "브론즈", "Silver": "실버", "Gold": "골드", "Platinum": "플래티넘", "Diamond": "다이아몬드",
@@ -3751,7 +3884,7 @@ GAMES = {
  },
  "ow2": {
   "key": "ow2", "name": "오버워치 2", "en": "Overwatch 2", "short": "옵치", "exe": "AimDesk-OW2", "title": "에임 데스크 · 오버워치 2", "brand": "에임 데스크",
-  "port": 47654, "repo": "aimdesk-data-ow2", "day_word": "옵치 데이", "index": "oi", "api": False,
+  "port": 47654, "repo": "aimdesk-data-ow2", "day_word": "옵치 데이", "index": "oi", "api": "ow",
   "series": {"title": "Road to Grandmaster", "tier": "골드 3", "goal": "그랜드마스터"},
   "ranks": ["Bronze", "Silver", "Gold", "Platinum", "Diamond", "Master", "Grandmaster", "Champion"],
   "rank_ko": {"Bronze": "브론즈", "Silver": "실버", "Gold": "골드", "Platinum": "플래티넘", "Diamond": "다이아몬드", "Master": "마스터",
@@ -7191,7 +7324,9 @@ def main():
     def sync_rk_hint():
         """머리 오른쪽: 전적 연동이 있으면 '전적 연동 · Gold 2 37RR' (수동 티어 칸은 선택) · 없으면 '랭크 돌린 날만'"""
         _m = (data.get("valo") or {}).get("mmr") or {}
+        _or = ((data.get("ow") or {}).get("ranks") or {}).get((data.get("ow_cfg") or {}).get("role") or "damage")   # v9.1 옵치 역할 랭크
         if _m.get("tier"): cfg(rk_hd.right, text=f"전적 연동 · {_m['tier']} {_m.get('rr', 0)}RR", fg=C["sub"])
+        elif _or: cfg(rk_hd.right, text=f"전적 연동 · {ko_tier(_or)}", fg=C["sub"])
         else: cfg(rk_hd.right, text="랭크 돌린 날만", fg=C["hint"])
     rk_body = tk.Frame(rk, bg=C["card"])
     drawer = {"open": False}
@@ -7956,11 +8091,95 @@ def main():
         root.after(200, _val_poll)
     RBtn(valo_act, "지금 불러오기", val_sync_now, padx=12, pady=6).pack(side="left")
     _val_status()
-    if not GAME["api"]:                                                    # v9.0 — 오버워치 2: 공개 전적 API 가 없다 → 카드는 안내 한 줄
+    ow_tag_var = None; ow_sync_now = None; ow_lbl = None; ow_hero_btns = {}
+    if GAME["api"] != "valo":                                              # v9.0 — 발로란트 칸은 발로란트 프로필에만
         for _w in vc_valo.winfo_children()[1:]: _w.pack_forget()           # [0] 은 카드 머리
         cfg(val_lbl, text=""); _val_status = lambda: None                  # 상태 줄은 비워 둔다 (_vis 가 빈 글은 숨긴다)
-        hint_("vc_valo", f"{GAME['name']} 는 공개 전적 API 가 없어요 — 랭크·진행률은 오늘 페이지의 랭크 카드에 손으로 적어요")
         goto_focus["vc_valo"] = None
+    if GAME["api"] == "ow":                                                # v9.1 — 오버워치 2: OverFast (공개 · 키 없음)
+        hint_("vc_valo", "OverFast API (무료 · 키 없음) — 블리자드 공개 프로필에서 역할별 랭크 · 주력 영웅의 시즌 명중률 · 치명타 · 10분당 죽음 · 승률을 읽어요 · 프로필이 '공개'여야 해요")
+        _ocfg = data.setdefault("ow_cfg", {"tag": "", "role": "damage", "heroes": list(GAME.get("main_heroes") or [])})
+        _ocfg.setdefault("tag", ""); _ocfg.setdefault("role", "damage"); _ocfg.setdefault("heroes", list(GAME.get("main_heroes") or []))
+        ow_tag_var = tk.StringVar(value=_ocfg.get("tag") or "")
+        ow_row = tk.Frame(vc_valo, bg=C["card"]); ow_row.pack(fill="x", pady=(SP8, 0))
+        tk.Label(ow_row, text="배틀태그", font=FS, bg=C["card"], fg=C["sub"], width=7, anchor="w").pack(side="left")
+        ow_ent = tk.Entry(ow_row, textvariable=ow_tag_var, font=FS, bg=C["card2"], fg=C["txt"], insertbackground=C["txt"], relief="flat")
+        ow_ent.pack(side="left", fill="x", expand=True, ipady=px(3)); goto_focus["vc_valo"] = ow_ent
+        tk.Label(ow_row, text="이름#숫자", font=FS11, bg=C["card"], fg=C["dim"]).pack(side="left", padx=(SP8, 0))
+        ow_row2 = tk.Frame(vc_valo, bg=C["card"]); ow_row2.pack(fill="x", pady=(SP8, 0))
+        tk.Label(ow_row2, text="역할", font=FS, bg=C["card"], fg=C["sub"], width=7, anchor="w").pack(side="left")
+        ow_role_btns = {}
+        def set_ow_role(r_):
+            _ocfg["role"] = r_
+            for k_, b_ in ow_role_btns.items(): b_.restyle(bg=C["gold"] if k_ == r_ else C["card2"], fg=C["onfill"] if k_ == r_ else C["txt"])
+        for r_, rl_ in OW_ROLE_KO.items():
+            b_ = RBtn(ow_row2, rl_, (lambda r_=r_: set_ow_role(r_)), padx=8, pady=4); b_.pack(side="left", padx=(0, SP4)); ow_role_btns[r_] = b_
+        set_ow_role(_ocfg.get("role") if _ocfg.get("role") in OW_ROLE_KO else "damage")
+        tk.Label(ow_row2, text="랭크 카드가 따라가는 역할", font=FS11, bg=C["card"], fg=C["dim"]).pack(side="left", padx=(SP8, 0))
+        ow_row3 = tk.Frame(vc_valo, bg=C["card"]); ow_row3.pack(fill="x", pady=(SP8, 0))
+        tk.Label(ow_row3, text="주력 영웅", font=FS, bg=C["card"], fg=C["sub"], width=7, anchor="w").pack(side="left", anchor="n")
+        ow_heroes_box = tk.Frame(ow_row3, bg=C["card"]); ow_heroes_box.pack(side="left", fill="x", expand=True)
+        def _paint_hero_btns():
+            for k_, b_ in ow_hero_btns.items():
+                on_ = k_ in (_ocfg.get("heroes") or [])
+                b_.restyle(bg=C["gold"] if on_ else C["card2"], fg=C["onfill"] if on_ else C["txt"])
+        def toggle_hero(k_):
+            hs_ = list(_ocfg.get("heroes") or [])
+            if k_ in hs_: hs_.remove(k_)
+            elif len(hs_) < 3: hs_.append(k_)
+            else: show_toast("주력 영웅은 셋까지예요 — 하나를 빼고 고르세요", "warn"); return
+            _ocfg["heroes"] = hs_; save_data(data); _paint_hero_btns(); refresh()
+        def build_hero_btns():
+            for w_ in ow_heroes_box.winfo_children(): w_.destroy()
+            ow_hero_btns.clear()
+            hs_ = ((data.get("ow") or {}).get("heroes") or {})
+            keys = sorted(hs_, key=lambda k_: -(hs_[k_].get("time") or 0))[:8]
+            for k_ in (_ocfg.get("heroes") or []):
+                if k_ not in keys: keys.append(k_)
+            if not keys:
+                tk.Label(ow_heroes_box, text="불러오면 이번 시즌 영웅이 여기 나와요 — 셋까지 골라요 (관문의 명중률·치명타·죽음이 이 영웅들 기준)", font=FS11, bg=C["card"], fg=C["dim"], anchor="w", justify="left").pack(fill="x")
+                return
+            row_ = None
+            for i_, k_ in enumerate(keys):
+                if i_ % 4 == 0: row_ = tk.Frame(ow_heroes_box, bg=C["card"]); row_.pack(fill="x", pady=(0, SP4))
+                v_ = hs_.get(k_) or {}
+                txt_ = ow_hero_name(k_) + (f" {int((v_.get('time') or 0) / 60)}분" if v_.get("time") else "")
+                b_ = RBtn(row_, txt_, (lambda k_=k_: toggle_hero(k_)), padx=8, pady=3); b_.pack(side="left", padx=(0, SP4)); ow_hero_btns[k_] = b_
+            _paint_hero_btns()
+        build_hero_btns()
+        ow_act = tk.Frame(vc_valo, bg=C["card"]); ow_act.pack(fill="x", pady=(SP12, 0))
+        ow_lbl = hint_("vc_valo", "", fg="dim")
+        def _ow_status():
+            o_ = data.get("ow") or {}
+            if not o_.get("at"): cfg(ow_lbl, text="아직 불러온 적 없음", fg=C["dim"]); _vis(ow_lbl); return
+            rk_ = o_.get("ranks") or {}; st_ = ow_main_stats(o_, _ocfg.get("heroes") or [])
+            parts_ = [o_["at"]] + [f"{OW_ROLE_KO[r_]} {ko_tier(t_)}" for r_, t_ in rk_.items()]
+            if st_: parts_.append(f"주력 {st_['games']}판" + (f" 명중 {st_['acc']:.0f}%" if st_.get("acc") is not None else "") + (f" 치명타 {st_['crit']:.0f}%" if st_.get("crit") is not None else "")
+                                  + (f" 죽음 {st_['d10']:.1f}/10분" if st_.get("d10") is not None else "") + (f" 승률 {st_['win']:.0f}%" if st_.get("win") is not None else ""))
+            elif _ocfg.get("heroes"): parts_.append(f"주력 영웅 시즌 판이 {OW_MIN_GAMES}판이 안 돼요 — 관문은 '자료 없음'")
+            cfg(ow_lbl, text=" · ".join(parts_), fg=C["sub"]); _vis(ow_lbl)
+        ow_q = queue.Queue(); ow_busy = [False]
+        def _ow_poll():
+            try: ok, msg = ow_q.get_nowait()
+            except queue.Empty: root.after(200, _ow_poll); return
+            ow_busy[0] = False
+            if ok: save_data(data); build_hero_btns(); refresh()
+            _ow_status(); sync_rk_hint(); show_toast(("오버워치 2 전적 · " if ok else "오버워치 2 연동 실패 — ") + msg, "ok" if ok else "warn")
+        def ow_sync_now():
+            if ow_busy[0]: return
+            _ocfg["tag"] = ow_tag_var.get().strip(); save_data(data)
+            cfg(ow_lbl, text="불러오는 중…", fg=C["hint"]); _vis(ow_lbl); ow_busy[0] = True
+            def work():
+                try: ow_q.put(ow_sync(data))
+                except Exception as e: log_exc("ow_sync"); ow_q.put((False, f"{type(e).__name__}: {e}"))
+            threading.Thread(target=work, daemon=True).start()
+            root.after(200, _ow_poll)
+        RBtn(ow_act, "지금 불러오기", ow_sync_now, padx=12, pady=6).pack(side="left")
+        _ow_status()
+    elif GAME["api"] != "valo":
+        hint_("vc_valo", f"{GAME['name']} 는 공개 전적 API 가 없어요 — 랭크·진행률은 오늘 페이지의 랭크 카드에 손으로 적어요")
+
+    _DBG.update(ow_tag_var=ow_tag_var, ow_sync_now=ow_sync_now, ow_lbl=ow_lbl, ow_hero_btns=ow_hero_btns, rk_head_right_text=lambda: rk_hd.right.cget("text"))   # v9.1 (발로란트 프로필에선 None)
 
     # ── 8 방송 화면 (grp['sc_']) ── 방송창이 곧 녹화되는 화면이다. 열기는 머리 링크 (Ctrl+B · F11 전체) 와 레일 행
     sc_ = grp["sc_"]
@@ -10376,6 +10595,49 @@ if __name__ == "__main__":
         set_game("valorant")
         assert (json.dumps(STAGES, ensure_ascii=False), COACH_SYSTEM, tuple(COACH_SECTIONS), list(VAL_ORDER), dict(VAL_TIER_KO), list(PROBE), list(CYCLE), dict(DTYPE_SHORT), dict(WHY_KO), SYNC_REPO_DEFAULT, json.dumps(blank_day()["val"], sort_keys=True)) == _snap
         assert val_rank_ord("Gold 2") == 32 and DAY_TYPE["v"][0] == "발로 데이" and GAMES["valorant"]["port"] != GAMES["ow2"]["port"]
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK · v7.3 coach-note OK · v7.4 cal-coach OK · v7.5 adaptive OK · v7.6 sync OK · v8 shell OK · v8.0.2 kovaaks OK · v9.0 games OK")
+        # ── v9.1: 오버워치 전적 (OverFast) — 파서 · 주력 영웅 가중 평균 · 동기화(가짜 GET) · 관문 ──
+        assert ow_tag("YouKnow#31605") == "YouKnow-31605" and ow_tag("no-hash") is None and ow_tag("a#b") is None and ow_hero_name("soldier-76") == "솔저 76" and ow_hero_name("jetpack-cat") == "Jetpack Cat"
+        _sumj = {"username": "YouKnow", "competitive": {"pc": {"season": 23, "tank": {"division": "platinum", "tier": 5}, "damage": {"division": "diamond", "tier": 5}, "support": {"division": "platinum", "tier": 4}, "open": None}, "console": None}}
+        _sm = parse_ow_summary(_sumj); assert _sm == {"season": 23, "ranks": {"damage": "Diamond 5", "tank": "Platinum 5", "support": "Platinum 4"}, "name": "YouKnow"}, _sm
+        _carj = {"all-heroes": {"game": {"time_played": 11873, "games_played": 21, "games_won": 12}, "average": {"deaths_avg_per_10_min": 8.39}, "combat": {}},
+                 "cassidy": {"game": {"time_played": 1622, "games_played": 4, "games_won": 2}, "average": {"eliminations_per_life": 1.14, "deaths_avg_per_10_min": 10.36, "final_blows_avg_per_10_min": 5.18, "hero_damage_done_avg_per_10_min": 8039}, "combat": {"weapon_accuracy": 44, "critical_hit_accuracy": 18}, "hero_specific": {}},
+                 "soldier-76": {"game": {"time_played": 1866, "games_played": 8, "games_won": 5}, "average": {"eliminations_per_life": 2.83, "deaths_avg_per_10_min": 7.41}, "combat": {"weapon_accuracy": 39, "critical_hit_accuracy": 10}, "hero_specific": {"helix_rocket_accuracy": 48}},
+                 "ashe": {"game": {"time_played": 0, "games_played": 0}, "combat": {}}}
+        _hs = parse_ow_career(_carj); assert set(_hs) == {"all-heroes", "cassidy", "soldier-76"} and _hs["cassidy"]["acc"] == 44 and _hs["cassidy"]["win"] == 50.0 and _hs["soldier-76"]["d10"] == 7.41, _hs
+        _ow = {"heroes": {k_: v_ for k_, v_ in _hs.items() if k_ != "all-heroes"}}
+        _st = ow_main_stats(_ow, ["cassidy", "soldier-76"]); assert _st["games"] == 12 and abs(_st["acc"] - (44 * 1622 + 39 * 1866) / (1622 + 1866)) < 1e-6 and _st["heroes"] == ["cassidy", "soldier-76"], _st
+        assert ow_main_stats(_ow, ["cassidy"]) is None and ow_main_stats(_ow, ["cassidy"], min_games=4)["acc"] == 44 and ow_main_stats({}, ["cassidy"]) is None
+        _og2 = {"pb": {}, "days": {}, "series": {"ep_offset": 0}, "ow_cfg": {"tag": "YouKnow#31605", "role": "damage", "heroes": ["cassidy", "soldier-76"]}}
+        _real_get = ow_get
+        _rolj = {"roles": {"damage": {"games_played": 15, "games_won": 8, "time_played": 9331, "total": {"eliminations": 230, "deaths": 139}, "average": {"eliminations": 14.79, "deaths": 8.94}},
+                           "support": {"games_played": 2, "games_won": 2, "time_played": 1004, "total": {"eliminations": 23, "deaths": 10}, "average": {"eliminations": 13.75, "deaths": 5.98}}}}
+        def _fake_get(path, timeout=10.0):
+            if path.endswith("/summary"): return _sumj, None
+            if "stats/career" in path: return _carj, None
+            if "stats/summary" in path: return _rolj, None
+            return None, "HTTP 404"
+        globals()["ow_get"] = _fake_get
+        try:
+            _ok, _msg = ow_sync(_og2)
+            assert _ok and _msg.startswith("딜러 다이아몬드 5 · 주력 12판 명중 41% 치명타 14%"), _msg
+            assert _og2["ow"]["ranks"]["damage"] == "Diamond 5" and _og2["days"][today_date().isoformat()]["ow"] == {"tier": "Diamond 5", "role": "damage"} and "all-heroes" not in _og2["ow"]["heroes"]
+            assert day_val_tier(_og2, today_date().isoformat()) == ("Diamond 5", None)
+            assert _og2["ow"]["roles"]["damage"]["games"] == 15 and abs(_og2["ow"]["roles"]["damage"]["win"] - 53.333) < 0.01 and _og2["ow"]["roles"]["damage"]["d10"] == 8.94 and "support" in _og2["ow"]["roles"]
+            assert ow_target_stats(_og2["ow"], "damage")["games"] == 15 and ow_target_stats(_og2["ow"], "support") is None and ow_target_stats(_og2["ow"], "soldier-76")["acc"] == 39 and ow_target_stats(_og2["ow"], "cassidy") is None   # 캐서디 27분 < 30분
+            assert ow_target_stats(_og2["ow"], "main", ["cassidy", "soldier-76"])["games"] == 12 and ow_target_stats(_og2["ow"], "widowmaker") is None
+            assert ow_sync({"ow_cfg": {"tag": "nope"}})[0] is False
+        finally: globals()["ow_get"] = _real_get
+        set_game("ow2")
+        try:
+            _gg2 = {g_["label"]: g_ for g_ in [_gate_item("game", "x", None, "")]}
+            _spec_bak = GAMES["ow2"]["gates"]; GAMES["ow2"]["gates"] = [[("game", "ow_acc", "main", 40, "주력 명중률 ≥ 40%"), ("game", "ow_crit", "main", 16, "주력 치명타 ≥ 16%"), ("game", "ow_deaths", "damage", 9.0, "주력 죽음 ≤ 9/10분"), ("game", "ow_epl", "soldier-76", 2.0, "목숨당 처치 ≥ 2.0"), ("game", "ow_win", "main", 50, "승률 ≥ 50%")]] * 5
+            _gg2 = {g_["label"]: g_ for g_ in stage_gates(_og2, today_date().isoformat(), 1)}
+            assert _gg2["주력 명중률 ≥ 40%"]["ok"] is True and _gg2["주력 명중률 ≥ 40%"]["val"] == "41% (12판)" and _gg2["주력 치명타 ≥ 16%"]["ok"] is False and _gg2["주력 죽음 ≤ 9/10분"]["ok"] is True and _gg2["주력 죽음 ≤ 9/10분"]["val"] == "8.9 (15판)", _gg2
+            assert _gg2["목숨당 처치 ≥ 2.0"]["ok"] is True and _gg2["목숨당 처치 ≥ 2.0"]["val"] == "2.83 (8판)" and _gg2["승률 ≥ 50%"]["ok"] is True and _gg2["승률 ≥ 50%"]["val"] == "58% (12판)", _gg2
+            _og2["ow_cfg"]["heroes"] = ["ashe"]; _gg3 = {g_["label"]: g_ for g_ in stage_gates(_og2, today_date().isoformat(), 1)}
+            assert _gg3["주력 명중률 ≥ 40%"]["ok"] is None and _gg3["주력 명중률 ≥ 40%"]["val"] == "자료 없음"
+        finally: GAMES["ow2"]["gates"] = _spec_bak; set_game("valorant")
+        assert GAMES["valorant"]["api"] == "valo" and GAMES["ow2"]["api"] == "ow"
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK · v7.3 coach-note OK · v7.4 cal-coach OK · v7.5 adaptive OK · v7.6 sync OK · v8 shell OK · v8.0.2 kovaaks OK · v9.0 games OK · v9.1 overfast OK")
         sys.exit(0)
     main()

@@ -381,10 +381,21 @@ check("v7.2: back to default moves the files home", D["apply_out_dir"](None) is 
 D["rec_now"](); pump(100)
 rec = data["days"][TODAY.isoformat()].get("rec") or {}
 check("rec_now stamps today's recording start", rec.get("src") == "manual" and len(rec.get("start") or "") == 8, str(rec))
-if ad.GAME["api"]:                                              # v9.0: 전적 API 는 발로란트 프로필에만 있다
+if ad.GAME["api"] == "valo":                                    # v9.0: 발로란트 전적 API 는 발로란트 프로필에만 있다
     D["rid_var"].set("YouKnowJo#YK1"); D["val_sync_now"](); pump(1500)
     check("valo sync without a key fails softly", "키" in D["val_lbl"].cget("text") or "불러온 적 없음" in D["val_lbl"].cget("text") or "실패" in D["val_lbl"].cget("text"), D["val_lbl"].cget("text"))
     check("valo config persisted", data["valo_cfg"]["rid"] == "YouKnowJo#YK1" and data["valo_cfg"]["region"] in ("ap", "kr", "na", "eu"))
+elif ad.GAME["api"] == "ow":                                    # v9.1: 오버워치 2 는 OverFast (키 없음) — 가짜 GET 으로 동기화까지
+    check("v9.1: OW2 card has a battletag entry and names OverFast", D["ow_tag_var"] is not None and any(isinstance(w, tk.Entry) and w.winfo_ismapped() for w in walk(D["grp"]["vc_valo"])) and "OverFast" in " ".join(texts(D["grp"]["vc_valo"])), " ".join(texts(D["grp"]["vc_valo"]))[:80])
+    _sumj = {"username": "YouKnow", "competitive": {"pc": {"season": 23, "damage": {"division": "diamond", "tier": 5}, "tank": {"division": "platinum", "tier": 5}, "support": None, "open": None}, "console": None}}
+    _carj = {"cassidy": {"game": {"time_played": 3000, "games_played": 8, "games_won": 5}, "average": {"eliminations_per_life": 1.5, "deaths_avg_per_10_min": 9.0}, "combat": {"weapon_accuracy": 46, "critical_hit_accuracy": 15}, "hero_specific": {}},
+             "soldier-76": {"game": {"time_played": 2000, "games_played": 6, "games_won": 3}, "average": {"eliminations_per_life": 2.5, "deaths_avg_per_10_min": 7.0}, "combat": {"weapon_accuracy": 40, "critical_hit_accuracy": 10}, "hero_specific": {}}}
+    ad.ow_get = lambda path, timeout=10.0: ((_sumj, None) if path.endswith("/summary") else ((_carj, None) if "stats/career" in path else (None, "HTTP 404")))
+    D["ow_tag_var"].set("YouKnow#31605"); D["ow_sync_now"](); pump(1500)
+    check("v9.1: OW2 sync stores role ranks, hero stats and today's tier snapshot", (data.get("ow") or {}).get("ranks", {}).get("damage") == "Diamond 5" and set((data.get("ow") or {}).get("heroes", {})) == {"cassidy", "soldier-76"} and (data["days"][TODAY.isoformat()].get("ow") or {}).get("tier") == "Diamond 5", str((data.get("ow") or {}).get("ranks")))
+    check("v9.1: OW2 status line and hero chips appear after sync", "다이아몬드 5" in D["ow_lbl"].cget("text") and set(D["ow_hero_btns"]) >= {"cassidy", "soldier-76"}, D["ow_lbl"].cget("text")[:80])
+    check("v9.1: rank card head shows the fetched role rank", D["rk_head_right_text"]() .startswith("전적 연동 · 다이아몬드 5"), D["rk_head_right_text"]())
+    check("v9.1: battletag persisted", data["ow_cfg"]["tag"] == "YouKnow#31605" and data["ow_cfg"]["role"] == "damage")
 else:
     check("v9.0: no-API game hides the 전적 inputs and says so", not any(isinstance(w, tk.Entry) and w.winfo_ismapped() for w in walk(D["grp"]["vc_valo"])) and "공개 전적 API" in " ".join(texts(D["grp"]["vc_valo"])), " ".join(texts(D["grp"]["vc_valo"]))[:80])
     check("v9.0: no-API game keeps the rank card usable", D["tier_var"] is not None)
