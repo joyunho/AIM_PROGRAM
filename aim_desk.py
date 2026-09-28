@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v8.0 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
+에임 데스크 v8.0.1 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
@@ -47,6 +47,8 @@
 · v8.0: 설정 9카드 — 코박스 · 클라우드 · 훈련 규칙 · 기록 · 코치 · 트레이너 · 화면 · 방송 · 발로란트, 카드마다 머리 · 도움 한 줄 · 조작 · 동작 줄 · 상태 라벨(글이 없으면 자리도 없음) · 머리 점프 링크(tools_goto)
 · v8.0: 숫자 표기 통일 — ▲▼ 대신 부호(fmt_delta: +30 · −15 · ±0 · +3.4%), 진행은 n/N(fmt_frac), 시각은 HH:MM(fmt_clock), 상태줄은 '마지막 판 HH:MM' · 어휘 통일 — 본창 낱말 하나로(screen_word: 프로브→오늘 점수 재기 · 관문→졸업 조건 · 노비스→입문 · 벤치마크→실력 재기 · 휴식일→쉬는 날 · 에너지→종합 점수 · ~해요체), 파일·방송창·순서창·messagebox 문구는 그대로
 · v8.0: 계획/성장/벤치/기록 재구성 — 계획(달력 · 이번 주 줄 · 코치 노트 · 다섯 단계 · 이 앱이 하는 일) · 성장(타일 두 장 + 곡선 카드, chart_frame 빈 상태 문장) · 벤치(점수 카드 · 졸업 카드 · 조언 콜아웃 · 9갈래 카드) · 기록(최근 14일 표 12칸 · 시작 대비 표 · 상세 카드, 죽음 열 없음)
+· v8.0.1: 멈춤 감시 + 레이아웃 방어 — 메인 스레드가 6초 넘게 멈추면 aim_desk.log 에 스택(stall_block) · <Configure>→wraplength 는 6px 문턱 + 위젯당 초당 30번(set_wrap) ·
+  1초에 400번 넘는 레이아웃 폭풍은 로그 한 줄 뒤 2초 정지(lay_tick) · 촘촘함 판단은 body <Configure> 높이 하나로(body_h) · ! 배지 pack/forget 은 60ms 뒤 · VScroll 은 값이 바뀔 때만 · tasklist 는 스레드에서
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
 from __future__ import annotations
@@ -1179,6 +1181,50 @@ def log_line(msg: str):
             f.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n")
     except OSError:
         pass
+
+# ── v8.0.1 멈춤 감시 — Tk 메인 스레드가 6초 넘게 after 콜백을 못 돌리면(창 제목 '(응답 없음)') 그 순간의 메인 스레드 스택을 로그에 남긴다 ──
+STALL_AFTER_S, STALL_EVERY_S, STALL_HB_MS = 6.0, 30.0, 1000
+def stall_block(stack_text: str, seconds: float, recent=(), when=None) -> str:
+    """로그 한 덩어리 — '[시각] stall Ns — main thread stack:' + 스택 + (있으면) 마지막 after 콜백 이름들. 순수 함수 (--selftest)"""
+    when = when or datetime.now()
+    head = f"\n[{when:%Y-%m-%d %H:%M:%S}] stall {seconds:.0f}s — main thread stack:\n"
+    body = stack_text if stack_text.endswith("\n") else stack_text + "\n"
+    tail = ("  last after callbacks: " + " > ".join(str(r) for r in recent) + "\n") if recent else ""
+    return head + body + tail
+
+def start_stall_watch(root):
+    """main() 이 root 를 만든 직후 부른다 — root.after 심장박동(1초) + 데몬 스레드(2초마다 확인). 스레드는 Tk 를 절대 건드리지 않고 파일에만 쓴다.
+    한 멈춤에 한 번, 계속 멈춰 있으면 30초마다 다시. root.after 를 얇게 감싸 마지막 콜백 이름 5개를 같이 남긴다"""
+    import threading, collections
+    hb = [time.monotonic()]; recent = collections.deque(maxlen=5); main_id = threading.get_ident()
+    _after = root.after
+    def after(ms, func=None, *args):
+        if func is None or ms == "idle": return _after(ms, func, *args)
+        name = f"{getattr(func, '__qualname__', None) or getattr(func, '__name__', None) or type(func).__name__}:{getattr(getattr(func, '__code__', None), 'co_firstlineno', '?')}"
+        def run(*a, _f=func, _n=name):
+            recent.append(_n); return _f(*a)
+        run.__qualname__ = getattr(func, "__qualname__", "after"); return _after(ms, run, *args)
+    root.after = after
+    def beat():
+        hb[0] = time.monotonic()
+        try: _after(STALL_HB_MS, beat)
+        except Exception: pass
+    _after(STALL_HB_MS, beat)
+    def watch():
+        episode = None; last = 0.0
+        while True:
+            time.sleep(2.0)
+            age = time.monotonic() - hb[0]
+            if age < STALL_AFTER_S: episode = None; continue
+            now = time.monotonic()
+            if episode is not None and now - last < STALL_EVERY_S: continue
+            episode = episode or now; last = now
+            try:
+                fr = sys._current_frames().get(main_id)
+                stack = "".join(traceback.format_stack(fr)) if fr is not None else "(main thread frame unavailable)\n"
+                with LOG_FILE.open("a", encoding="utf-8") as f: f.write(stall_block(stack, age, list(recent)))
+            except Exception: pass
+    threading.Thread(target=watch, name="aimdesk-stall-watch", daemon=True).start()
 
 # ══════════════════ 데이터 ══════════════════
 BACKUP_KEEP = 8                 # 날짜별 백업 보관 개수
@@ -4540,6 +4586,7 @@ def main():
         except Exception: pass
     root = tk.Tk(); root.withdraw()
     root._aimdesk_lock = lock
+    if not os.environ.get("AIMDESK_NO_MAINLOOP"): start_stall_watch(root)      # v8.0.1 — '(응답 없음)' 이 뜨면 aim_desk.log 에 메인 스레드 스택
     root.report_callback_exception = lambda t, v, tb: _hook(t, v, tb)
     root.title("에임 데스크"); root.configure(bg=C["bg"])
     env_scale = float(os.environ.get("AIMDESK_SCALE") or 0)
@@ -4586,6 +4633,77 @@ def main():
     def page_padx(name, body_w):
         """페이지 가운데 맞춤: 내용 폭이 MAXW 를 넘으면 남는 폭을 양쪽으로 나눈다 (최소 GUT)"""
         return max(GUT, (int(body_w) - MAXW.get(name, MAXW["cal"])) // 2)
+
+    # ── v8.0.1 레이아웃 폭풍 차단기 — <Configure> 로 움직이는 핸들러(wraplength · 맞춤 · VScroll · 본문 크기)의 공통 관문 ──
+    # 창 크기를 끌 때(root <Configure> 뒤 0.5초)는 세지 않는다 — 진짜 되먹임 고리는 창 크기가 그대로인데 이벤트가 쏟아지는 것
+    LAY_STORM_N, LAY_STORM_OFF_S = 400, 2.0
+    _lay = {"n": 0, "t0": time.monotonic(), "off": 0.0, "who": {}, "root_t": -9.0, "root_wh": None, "deferred": set(), "trips": 0}
+    _lay_recover = []                                  # 정지가 풀릴 때 한 번씩 부르는 함수들 (VScroll.resync 등)
+    def lay_tick(name):
+        """핸들러 하나가 돌 때마다 — 1초 창에 LAY_STORM_N 번을 넘으면 로그 한 줄 + LAY_STORM_OFF_S 초 정지. True 면 지금 정지 중(핸들러는 바로 return)"""
+        now = time.monotonic()
+        if now < _lay["off"]: return True
+        if now - _lay["root_t"] < 0.5: return False                     # 창 크기 변경 중 — 정상 폭풍
+        if now - _lay["t0"] >= 1.0: _lay["n"] = 0; _lay["t0"] = now; _lay["who"] = {}
+        _lay["n"] += 1; _lay["who"][name] = _lay["who"].get(name, 0) + 1
+        if _lay["n"] >= LAY_STORM_N:
+            top = sorted(_lay["who"].items(), key=lambda kv: -kv[1])[:5]
+            log_line("layout storm: " + " ".join(f"{k}={v}" for k, v in top) + f" (n={_lay['n']}/s, handlers paused {LAY_STORM_OFF_S:.0f}s)")
+            _lay["off"] = now + LAY_STORM_OFF_S; _lay["n"] = 0; _lay["who"] = {}; _lay["trips"] += 1
+            root.after(int(LAY_STORM_OFF_S * 1000) + 100, _lay_resume)
+            return True
+        return False
+    def _lay_resume():
+        """정지가 풀린 뒤 — 정지 중에 버린 wraplength 값과 VScroll 크기를 한 번씩 다시 맞춘다"""
+        for l_ in list(_lay["deferred"]):
+            try: _wrap_late(l_)
+            except Exception: pass
+        _lay["deferred"].clear()
+        for fn_ in list(_lay_recover):
+            try: fn_()
+            except Exception: pass
+    def _on_root_cfg(e):
+        if e.widget is not root: return
+        wh = (e.width, e.height)
+        if wh != _lay["root_wh"]: _lay["root_wh"] = wh; _lay["root_t"] = time.monotonic()
+    root.bind("<Configure>", _on_root_cfg, add="+")
+    WRAP_STEP, WRAP_PER_S = px(6), 30
+    def _wrap_late(lbl):
+        st = getattr(lbl, "_wrap_st", None)
+        if not st: return
+        st["pend"] = None
+        try:
+            if lbl.winfo_exists() and st.get("want") is not None and st["want"] != st["last"]:
+                st["last"] = st["want"]; cfg(lbl, wraplength=st["want"])
+        except tk.TclError: pass
+    def set_wrap(lbl, w, name="wrap", lo=None):
+        """wraplength 를 바꾸되 |새 − 지난| ≤ WRAP_STEP 이면 건너뛰고, 위젯당 초당 WRAP_PER_S 번을 넘는 이벤트는 버린다(마지막 값만 120ms 뒤 한 번).
+        폭풍 정지 중엔 값을 기억만 하고 정지가 풀릴 때 적용한다"""
+        w = max(lo if lo is not None else px(120), int(w))
+        st = getattr(lbl, "_wrap_st", None)
+        if st is None: st = lbl._wrap_st = {"last": None, "ts": [], "pend": None, "want": None}
+        if st["last"] is not None and abs(w - st["last"]) <= WRAP_STEP: return
+        now = time.monotonic()
+        if now < _lay["off"]: st["want"] = w; _lay["deferred"].add(lbl); return
+        ts = [t_ for t_ in st["ts"] if now - t_ < 1.0]
+        if len(ts) >= WRAP_PER_S:
+            st["ts"] = ts; st["want"] = w
+            if st["pend"] is None: st["pend"] = root.after(120, lambda: _wrap_late(lbl))
+            return
+        ts.append(now); st["ts"] = ts; st["last"] = w
+        if lbl.winfo_exists(): cfg(lbl, wraplength=w)
+    def bind_wrap(host, lbl, calc, name, add="+"):
+        """host 의 <Configure> → lbl 의 wraplength = calc(e). 모든 '<Configure> → wraplength' 는 이 문으로만"""
+        def _h(e):
+            if lay_tick(name): return
+            set_wrap(lbl, calc(e), name)
+        host.bind("<Configure>", _h, add=add)
+    def _unpacked(w):
+        """pack_forget 은 pack 되어 있을 때만 (이미 빠진 위젯을 다시 건드리지 않는다)"""
+        try:
+            if w.winfo_manager(): w.pack_forget()
+        except tk.TclError: pass
+    _DBG.update(lay=_lay, lay_tick=lay_tick, set_wrap=set_wrap)
 
     def win_dark():
         try:
@@ -4721,31 +4839,59 @@ def main():
             self.cv.configure(yscrollcommand=self._on_yview)
             self.shown = False; self.fit = False
             self._ty = (0, 0); self._drag = None
+            self._ww = self._wh = self._cvh = None; self._sr = None; self._flips = []; self._hold = 0.0   # 마지막으로 보낸 값 — 같으면 보내지 않는다 (v8.0.1)
+            _lay_recover.append(self.resync)
             self.thumb.bind("<Button-1>", self._press)
             self.thumb.bind("<B1-Motion>", self._motion)
             self.thumb.bind("<ButtonRelease-1>", lambda e: setattr(self, "_drag", None))
+        def _win(self, w=None, h=None):
+            """캔버스 창 아이템의 폭·높이 — 정수로 비교해 실제로 바뀔 때만 itemconfigure (되먹임 고리 방지)"""
+            kw = {}
+            if w is not None and int(w) != self._ww: self._ww = int(w); kw["width"] = self._ww
+            if h is not None and int(h) != self._wh: self._wh = int(h); kw["height"] = self._wh
+            if kw: self.cv.itemconfigure(self.win, **kw)
+            return bool(kw)
+        def _cv_h(self, h):
+            h = max(1, int(h))
+            if h != self._cvh: self._cvh = h; self.cv.configure(height=h)
         def set_fit(self, b: bool):
             """맞춤 모드 — 오른쪽 열이 왼쪽 아래로 내려앉을 때: 캔버스가 내용만큼 커져서 바깥 스크롤이 대신 움직인다"""
             b = bool(b)
             if b == self.fit: return
             self.fit = b
-            if b: self.cv.configure(height=max(1, self.body.winfo_reqheight()))
-            else: self.cv.configure(height=px(80))
+            self._cv_h(self.body.winfo_reqheight() if b else px(80))
             self._on_yview(*self.cv.yview())
         def _on_body(self, e):
+            if lay_tick("vscroll_body"): return
             if self.stretch:
                 h_ = max(self.cv.winfo_height(), self.body.winfo_reqheight())
-                if h_ != e.height: self.cv.itemconfigure(self.win, height=h_); return          # <Configure> 가 한 번 더 온다
-            self.cv.configure(scrollregion=(0, 0, e.width, e.height))
-            if self.fit: self.cv.configure(height=max(1, e.height))
+                if h_ != int(e.height) and self._win(h=h_): return          # <Configure> 가 한 번 더 온다 (값이 바뀌었을 때만)
+            sr = (0, 0, int(e.width), int(e.height))
+            if sr != self._sr: self._sr = sr; self.cv.configure(scrollregion=sr)
+            if self.fit: self._cv_h(e.height)
             self._on_yview(*self.cv.yview())
         def _on_cv(self, e):
-            if self.stretch: self.cv.itemconfigure(self.win, width=e.width, height=max(e.height, self.body.winfo_reqheight()))
-            else: self.cv.itemconfigure(self.win, width=e.width)
+            if lay_tick("vscroll_cv"): return
+            if self.stretch: self._win(w=e.width, h=max(int(e.height), self.body.winfo_reqheight()))
+            else: self._win(w=e.width)
             self._on_yview(*self.cv.yview())
+        def resync(self):
+            """폭풍 정지가 풀린 뒤 — 지금 크기로 한 번 다시 맞춘다"""
+            try:
+                if not self.cv.winfo_exists(): return
+                cw, ch = self.cv.winfo_width(), self.cv.winfo_height()
+                if cw > 1: self._win(w=cw, h=max(ch, self.body.winfo_reqheight()) if self.stretch else None)
+                self._on_yview(*self.cv.yview())
+            except tk.TclError: pass
         def _on_yview(self, lo, hi):
             lo, hi = float(lo), float(hi)
             need = (not self.fit) and needs_scroll(self.body.winfo_reqheight(), self.cv.winfo_height())
+            if need != self.shown:
+                now = time.monotonic()
+                if now < self._hold: need = self.shown                              # 썸 켜짐/꺼짐이 1초에 6번 넘게 튀면 2초 동안 지금 상태로 고정 (줄바꿈 ↔ 썸 폭 핑퐁)
+                else:
+                    self._flips = [t_ for t_ in self._flips if now - t_ < 1.0] + [now]
+                    if len(self._flips) > 6: self._hold = now + 2.0; self._flips = []; need = self.shown; log_line("layout storm: vscroll thumb ping-pong held 2s")
             if need != self.shown:
                 self.shown = need
                 if need: self.thumb.pack(side="right", fill="y")
@@ -4857,7 +5003,7 @@ def main():
             if f.open: f.long.pack(fill="x", pady=(SP4, 0))
             else: f.long.pack_forget()
         f.more = link(top, "자세히 ▾", toggle); f.more.pack(side="left", padx=(SP8, 0))
-        f.bind("<Configure>", lambda e: cfg(f.long, wraplength=max(px(120), e.width - px(4))))
+        bind_wrap(f, f.long, lambda e: e.width - px(4), "helper", add=None)
         f.toggle = toggle
         return f
 
@@ -4867,9 +5013,10 @@ def main():
         if lst is None:
             lst = col._wrap = []
             def _on_col(e, _c=col):
+                if lay_tick("register_wrap"): return
                 w = max(px(120), e.width - px(44))
                 for l in list(_c._wrap):
-                    if l.winfo_exists(): cfg(l, wraplength=w)
+                    if l.winfo_exists(): set_wrap(l, w, "register_wrap")
             col.bind("<Configure>", _on_col, add="+")
         lst.append(lbl)
         cfg(lbl, wraplength=initial if initial is not None else MAXW["tools"] // 2 - px(80))
@@ -4976,11 +5123,15 @@ def main():
     body = tk.Frame(root, bg=C["bg"]); body.pack(side="left", fill="both", expand=True)
     page_host[0] = body
 
+    _sok = {"k": None, "t": -9.0, "v": False}
     def stats_ok():
-        """코박스 stats 폴더가 있는가 — 8단계의 setup_state()['s1'] 자리 (레일 ! 배지 · 시작 토스트가 본다)"""
-        sd_ = data.get("stats_dir")
-        try: return bool(sd_) and Path(sd_).is_dir()
-        except Exception: return False
+        """코박스 stats 폴더가 있는가 — 8단계의 setup_state()['s1'] 자리 (레일 ! 배지 · 시작 토스트가 본다).
+        v8.0.1: 같은 경로는 1초 동안 캐시 (refresh 한 번에 네댓 번 불린다 — 잠든 외장 디스크에서 매번 stat 하지 않게)"""
+        sd_ = data.get("stats_dir"); now = time.monotonic()
+        if _sok["k"] == sd_ and now - _sok["t"] < 1.0: return _sok["v"]
+        try: v_ = bool(sd_) and Path(sd_).is_dir()
+        except Exception: v_ = False
+        _sok.update(k=sd_, t=now, v=v_); return v_
     setup_skip = [False]                       # 처음 시작 ② 건너뛰기 — 이 세션만 (저장 안 함, §0.4)
     def setup_state():
         """처음 시작 상태 — 계산만, 저장 없음 (§3.1): s1 stats 폴더 · s2 클라우드 연결 · s3 출발선. needed 가 False 면 카드는 없다"""
@@ -5017,10 +5168,19 @@ def main():
         underls[n].configure(bg=C["gold"] if on else rb)
         ws_ = _row_widgets(n)
         for w_ in ws_[:1] + ws_[3:]: w_.configure(bg=rb)
-        if n == "tools":
-            if not setup_state()["s1"]:
-                if not nav_badge[n].winfo_manager(): nav_badge[n].pack(side="right", padx=(0, px(14)))
-            else: nav_badge[n].pack_forget()
+        if n == "tools": _badge_sync()
+    badge_job = [None]
+    def _badge_sync():
+        """⚙ 설정 행의 ! 배지 — 필요(폴더 없음)와 지금 pack 상태가 다를 때만, 60ms 뒤에 (Enter/Leave·paint_row 안에서 pack/forget 하지 않는다 — v8.0.1)"""
+        if (not setup_state()["s1"]) == bool(nav_badge["tools"].winfo_manager()): return
+        if badge_job[0] is None: badge_job[0] = root.after(60, _badge_apply)
+    def _badge_apply():
+        badge_job[0] = None; b_ = nav_badge["tools"]
+        try:
+            want = not setup_state()["s1"]
+            if want and not b_.winfo_manager(): b_.pack(side="right", padx=(0, px(14)))
+            elif not want and b_.winfo_manager(): b_.pack_forget()
+        except tk.TclError: pass
     def hover_row(n, on):
         if cur_tab[0] == n: return
         rb = C["nav_hover"] if on else C["card"]
@@ -5098,7 +5258,7 @@ def main():
             lb = tk.Label(row, text=msg, font=FB, bg=bg_, fg=fg_, anchor="w", justify="left", wraplength=max(px(120), tw - px(56)))
             lb.pack(side="left", fill="x", expand=True)
             x_ = tk.Label(row, text="✕", font=FS, bg=bg_, fg=fg_, padx=px(4)); x_.pack(side="right", anchor="n")
-            row.bind("<Configure>", lambda e, lb=lb: lb.configure(wraplength=max(px(120), e.width - px(56))))
+            bind_wrap(row, lb, lambda e: e.width - px(56), "toast", add=None)
             for w_ in (row, lb, x_): w_.bind("<Button-1>", lambda e, i=i: (tq.dismiss(i), render_toasts()))
         toast.place(in_=body, relx=1.0, rely=1.0, x=-px(16), y=-px(12), anchor="se", width=tw)
         toast.lift()
@@ -6736,7 +6896,7 @@ def main():
         # 계획 밖 판 / 어제 플레이리스트 경고 — 콜아웃 안의 라벨 (내용이 있을 때만 보인다, refresh_today 가 종류·표시를 정한다)
         off_box = callout(todo_host, "gold", pad=(px(12), px(8))); day_state["off_box"] = off_box
         day_state["off_lbl"] = tk.Label(off_box, text="", font=FROW, bg=off_box["bg"], fg=C["gold"], justify="left", anchor="w", wraplength=px(900)); day_state["off_lbl"].pack(fill="x")
-        off_box.bind("<Configure>", lambda e, _l=day_state["off_lbl"]: cfg(_l, wraplength=max(px(120), e.width - px(12) * 2 - px(6))))   # 콜아웃 안쪽 폭에서 (테두리·pad 제외)
+        bind_wrap(off_box, day_state["off_lbl"], lambda e: e.width - px(12) * 2 - px(6), "off_box", add=None)   # 콜아웃 안쪽 폭에서 (테두리·pad 제외)
         if dt == "b": off_box.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(px(4), 0)); off_box.grid_remove()
         # 자세히 안: 상세 줄(det) 뒤에 날 종류별 한 줄 · 코치 메모 · 오늘 세션
         if dt == "b":
@@ -6997,7 +7157,7 @@ def main():
     ai_help.pack(fill="x", pady=(SP4, 0))
     ai_help.more.pack_configure(side="right", padx=(SP8, 0)); ai_help.short.pack_configure(side="left", fill="x", expand=True)
     cfg(ai_help.short, wraplength=MAXW["tools"] // 2 - px(160), justify="left")          # 처음 값 — uniform 열이 라벨 폭에 끌려가지 않게
-    ai_help.bind("<Configure>", lambda e: cfg(ai_help.short, wraplength=max(px(120), e.width - ai_help.more.winfo_reqwidth() - SP12)), add="+")
+    bind_wrap(ai_help, ai_help.short, lambda e: e.width - ai_help.more.winfo_reqwidth() - SP12, "ai_help")
     akrow = tk.Frame(tcd, bg=C["card"]); akrow.pack(fill="x", pady=(SP8, 0))
     tk.Label(akrow, text="API 키", font=FS, bg=C["card"], fg=C["sub"], width=7, anchor="w").pack(side="left")
     ai_key_var = tk.StringVar(value=coach_cfg.get("ai_key") or "")
@@ -7229,7 +7389,7 @@ def main():
     fopen_lnk = link(frow, "폴더 열기", lambda: open_uri(str(DATA_FILE.parent))); fopen_lnk.pack(side="right")
     path_lbl = tk.Label(frow, text=mask_user_path(str(DATA_FILE)), font=(MONO, 10), bg=C["card"], fg=C["sub"], justify="left", anchor="w")
     path_lbl.pack(side="left", fill="x", expand=True); cfg(path_lbl, wraplength=MAXW["tools"] // 2 - px(160))
-    frow.bind("<Configure>", lambda e: cfg(path_lbl, wraplength=max(px(120), e.width - fopen_lnk.winfo_reqwidth() - SP12)))
+    bind_wrap(frow, path_lbl, lambda e: e.width - fopen_lnk.winfo_reqwidth() - SP12, "path_lbl", add=None)
     # 저장 위치 — 기록 텍스트 · 업로드 팩 · 썸네일 · 주간 결산이 가는 폴더 (기본: 기록 파일 옆 '기록')
     orow_head = tk.Frame(fc, bg=C["card"]); orow_head.pack(fill="x", pady=(SP16, 0))
     tk.Label(orow_head, text="저장 위치", font=FSEC, bg=C["card"], fg=C["txt"], anchor="w").pack(side="left")
@@ -7263,7 +7423,11 @@ def main():
     sync_out_lbl()
     goto_focus["fc"] = out_pick_btn
     stray_box = callout(fc, "gold")                                    # 다른 폴더에서 찾은 기록 — strays 가 있을 때만 pack (빈 금색 상자는 절대 보이지 않는다)
-    stray_box.bind("<Configure>", lambda e: [cfg(w_, wraplength=max(px(120), e.width - px(40))) for w_ in stray_box.winfo_children() if isinstance(w_, tk.Label)])
+    def _stray_fit(e):
+        if lay_tick("stray_box"): return
+        for w_ in stray_box.winfo_children():
+            if isinstance(w_, tk.Label): set_wrap(w_, e.width - px(40), "stray_box")
+    stray_box.bind("<Configure>", _stray_fit)
 
     def refresh_files():
         n_d = len(training_days(data)); n_p = total_xp(data) - 5 * total_pbs(data)
@@ -7564,6 +7728,26 @@ def main():
     # 상태 라벨의 자리 잡기 — 카드가 다 만들어진 뒤 한 번 _vis: 빈 글이면 숨기고, 다시 쓸 때 원래 자리(다음 형제 앞)로 돌아온다 (§1.5)
     for _l in (coach_lbl, ai_lbl, sync_lbl, val_lbl, trainer_lbl, fstat, adapt_lbl): _vis(_l)
 
+    pl_chk = [None]
+    def _pl_check_kovaaks(msg):
+        """코박스가 켜진 채로 플레이리스트를 썼는지 — kovaaks_running(tasklist) 을 스레드에서 돌리고 250ms 마다 결과를 본다 (Tk 는 메인 스레드만)"""
+        import queue as _q, threading as _th
+        q_ = _q.Queue(); pl_chk[0] = q_
+        def work():
+            try: q_.put(bool(kovaaks_running()))
+            except Exception: q_.put(False)
+        _th.Thread(target=work, name="aimdesk-tasklist", daemon=True).start()
+        def poll(n_=0):
+            if pl_chk[0] is not q_: return                                  # 그 사이 다시 설치했다 — 옛 답은 버린다
+            try: r_ = q_.get_nowait()
+            except _q.Empty:
+                if n_ < 40: root.after(250, lambda: poll(n_ + 1))
+                return
+            try:
+                if r_ and pl_lbl.cget("text") == msg:
+                    pl_lbl.configure(text=msg + "\n⚠ 코박스가 켜진 채로 설치됨 — 목록에 안 보이면 코박스를 껐다 켜세요", fg=C["gold"])
+            except tk.TclError: pass
+        root.after(250, poll)
     def install_playlists():
         sd = data.get("stats_dir")
         if not sd:
@@ -7572,10 +7756,8 @@ def main():
         if n:
             msg = f"플레이리스트 {n}개 설치 ✓ → 코박스 샌드박스 브라우저 네 번째 탭 '로컬 재생 목록'에 AIMDESK Day · Probe · Bench"
             if PL_STATE["tpl"]: msg += f" (파일 형식은 코박스가 만든 '{PL_STATE['tpl']}' 을 따름)"
-            col = C["ok"]
-            if wrote and kovaaks_running():
-                msg += "\n⚠ 코박스가 켜진 채로 설치됨 — 목록에 안 보이면 코박스를 껐다 켜세요"; col = C["gold"]
-            pl_lbl.configure(text=msg, fg=col)
+            pl_lbl.configure(text=msg, fg=C["ok"])
+            if wrote: _pl_check_kovaaks(msg)                             # v8.0.1 — tasklist 는 5초까지 걸릴 수 있다: 메인 스레드 밖에서 묻고 답이 오면 ⚠ 한 줄
         else: pl_lbl.configure(text="설치 실패 — Playlists 폴더를 못 찾았어요 (stats 폴더가 …\\FPSAimTrainer\\FPSAimTrainer\\stats 인지 확인)", fg=C["val"])
         pl_open_btn.set_enabled(bool(PL_STATE.get("dir")))
     def sync_stats_lbl():
@@ -7624,10 +7806,11 @@ def main():
         ssl = tk.Label(sc, text="☁ 연결 안 됨", font=FS11, bg=bgc, fg=C["hint"], anchor="w", justify="left")
         r3 = _row(3, "출발선 재기 18판")
         def _fit(e):                                                      # 설명 줄바꿈 폭 = 줄 폭 − 칩 − 제목 − 동작 (열 폭이 아니라 줄 폭에서 온다)
+            if lay_tick("setup_fit"): return
             w_ = e.width - 2 * int(sc["padx"])
             for r_ in setup_rows.values():
                 wl_ = w_ - r_.chip.winfo_reqwidth() - r_.title.winfo_reqwidth() - r_.act.winfo_reqwidth() - SP8 - SP12 - px(8)
-                cfg(r_.desc, wraplength=max(px(120), wl_))
+                set_wrap(r_.desc, wl_, "setup_fit")
         sc.bind("<Configure>", _fit, add="+")
         wn = tk.Frame(sc, bg=bgc)                                        # F3 뒤 폴더가 사라졌을 때 — 같은 카드가 warn 한 줄이 된다 (머리·②③ 숨김)
         tk.Label(wn, text="⚠ 코박스 stats 폴더를 찾을 수 없어요", font=FROW, bg=bgc, fg=C["val"], anchor="w").pack(side="left")
@@ -7648,8 +7831,15 @@ def main():
         _walk(setup_card)
     _DBG["setup_sync_lbl"] = setup_sync_lbl                              # sync_show 가 여기로 ☁ 줄을 쓴다
     setup_compact = [None]; SETUP_COMPACT_H = px(800)                  # 1100×780 의 본문(≈px(725)) 은 촘촘히 — 카드 + 히어로 + 발밑 줄이 한 화면에
+    body_h = [0]                                                        # 본문 높이 — body <Configure> 가 적는 단 하나의 출처 (_setup_on_h 와 sync_setup 이 같은 값을 본다, v8.0.1)
+    def body_height():
+        if body_h[0] > 1: return body_h[0]
+        try: return body.winfo_height()
+        except tk.TclError: return 0
     def _step_chip(r, state, num):
-        """칩 색: current gold/onfill · done ok_bg/ok ✓ · future card2/dim"""
+        """칩 색: current gold/onfill · done ok_bg/ok ✓ · future card2/dim (같은 상태면 건드리지 않는다 — v8.0.1)"""
+        if getattr(r.chip, "_step", None) == (state, num): cfg(r.title, fg=C["dim"] if state == "done" else C["txt"]); return
+        r.chip._step = (state, num)
         if state == "done": r.chip.configure(text="✓"); r.chip.set_kind("ok")
         elif state == "current": r.chip.configure(text=str(num)); r.chip.set_kind("gold"); r.chip.configure(bg=C["gold"], fg=C["onfill"]); r.chip.kind = "cur"
         else: r.chip.configure(text=str(num)); r.chip.set_kind("dim")
@@ -7664,18 +7854,17 @@ def main():
         st = setup_state(); r1, r2, r3 = setup_rows[1], setup_rows[2], setup_rows[3]
         paint_row("tools", cur_tab[0] == "tools")
         if not st["needed"]:                                              # F3 · 다 됐다 — 카드가 없다
-            setup_card.pack_forget(); run_btn.set_enabled(True); return
+            _unpacked(setup_card); run_btn.set_enabled(True); return
         if st["s3"] and not st["s1"]:                                     # 출발선은 있는데 폴더가 사라졌다 — 같은 카드가 warn 한 줄 (⚠ … [폴더 선택…])
-            _setup_kind("warn"); setup_card.head.pack_forget()
-            for r_ in setup_rows.values(): r_.pack_forget()
-            setup_form.pack_forget(); setup_sync_lbl.pack_forget()
+            _setup_kind("warn"); _unpacked(setup_card.head)
+            for r_ in setup_rows.values(): _unpacked(r_)
+            _unpacked(setup_form); _unpacked(setup_sync_lbl)
             _packed(setup_warn, True, fill="x"); _packed(setup_card, True, fill="x", pady=(0, SP16), before=hero); run_btn.set_enabled(False); return
-        _setup_kind("gold"); setup_warn.pack_forget()
+        _setup_kind("gold"); _unpacked(setup_warn)
         _packed(setup_card.head, True, fill="x")
         for i_ in (1, 2, 3):
             if not setup_rows[i_].winfo_manager(): setup_rows[i_].pack(fill="x", pady=(0 if setup_compact[0] else px(3), 0), after=setup_card.head if i_ == 1 else setup_rows[i_ - 1])
-        try: h_ = body.winfo_height()
-        except tk.TclError: h_ = 0
+        h_ = body_height()                                                # body <Configure> 의 값 — _setup_on_h 와 같은 출처 (v8.0.1)
         compact = 1 < h_ < SETUP_COMPACT_H
         if compact != setup_compact[0]:
             setup_compact[0] = compact
@@ -7687,22 +7876,22 @@ def main():
             _step_chip(r1, "done", 1); p_ = mask_user_path(data.get("stats_dir") or "")
             if len(p_) > 40: p_ = "…" + p_[-39:]
             cfg(r1.desc, text=f"✓ 연결됨 · {p_}", fg=C["hint"])
-            r1.pick.pack_forget(); r1.find.pack_forget(); _packed(r1.chg, True, side="left")
+            _unpacked(r1.pick); _unpacked(r1.find); _packed(r1.chg, True, side="left")
         else:
             _step_chip(r1, "current", 1)
             cfg(r1.desc, text="코박스가 점수를 저장하는 폴더예요 — 보통 Steam\\steamapps\\common\\FPSAimTrainer\\FPSAimTrainer\\stats", fg=C["hint"])
-            r1.chg.pack_forget(); _packed(r1.pick, True, side="left"); _packed(r1.find, True, side="left", padx=(SP8, 0))
+            _unpacked(r1.chg); _packed(r1.pick, True, side="left"); _packed(r1.find, True, side="left", padx=(SP8, 0))
         # ② 클라우드 (선택) — 연결됨 / 건너뜀 / 폼
         if st["s2"]:
             _step_chip(r2, "done", 2); cfg(r2.desc, text=f"✓ 연결됨 · {sync_cfg.get('repo') or ''}", fg=C["hint"])
-            r2.again.pack_forget(); setup_form.pack_forget(); setup_sync_lbl.pack_forget()
+            _unpacked(r2.again); _unpacked(setup_form); _unpacked(setup_sync_lbl)
         elif setup_skip[0]:
             _step_chip(r2, "future", 2); cfg(r2.title, fg=C["dim"]); cfg(r2.desc, text="건너뜀 · 설정 › 클라우드에서 언제든 연결해요", fg=C["hint"])
-            _packed(r2.again, True, side="left"); setup_form.pack_forget(); setup_sync_lbl.pack_forget()
+            _packed(r2.again, True, side="left"); _unpacked(setup_form); _unpacked(setup_sync_lbl)
         else:
             _step_chip(r2, "current" if st["s1"] else "future", 2)
             cfg(r2.desc, text="다른 PC에서 쓰던 기록이 있으면 받아와요 · 없으면 건너뛰어도 돼요", fg=C["hint"])
-            r2.again.pack_forget()
+            _unpacked(r2.again)
             setup_form.get_btn.restyle(bg=C["ok_bg"] if st["s1"] else C["card2"], fg=C["ok"] if st["s1"] else C["txt"])   # ①이 먼저 — 그 전엔 보조색 (F0 에 확인색 버튼은 폴더 선택 하나)
             _packed(setup_form, True, fill="x", padx=(setup_form.indent, 0), pady=(px(2), 0), after=r2)
             _idle = setup_sync_lbl.cget("text").startswith("☁ 연결 안 됨")          # 촘촘할 땐 한가한 ☁ 줄은 생략 (폼의 '설정 방법' 이 같은 말)
@@ -7718,9 +7907,11 @@ def main():
         _packed(setup_card, True, fill="x", pady=(0, SP16), before=hero)
         run_btn.set_enabled(st["s1"])
     def _setup_on_h(e):
-        """본문 높이가 촘촘함 경계(SETUP_COMPACT_H = px(800))를 넘나들면 카드 간격을 다시"""
+        """본문 높이가 촘촘함 경계(SETUP_COMPACT_H = px(800))를 넘나들면 카드 간격을 다시 — 높이는 body_h 에 적어 sync_setup 이 같은 값을 쓴다"""
         if e.widget is not body: return
-        c_ = 1 < e.height < SETUP_COMPACT_H
+        body_h[0] = int(e.height)
+        if lay_tick("setup_h"): return
+        c_ = 1 < body_h[0] < SETUP_COMPACT_H
         if c_ != setup_compact[0] and setup_card.winfo_manager(): sync_setup()
     body.bind("<Configure>", _setup_on_h, add="+")
 
@@ -7870,6 +8061,7 @@ def main():
                 """이름 · 칩 · 점수가 한 줄에 안 들어가면 칩을 둘째 줄로 내리고, 그래도 좁으면 이름을 줄바꿈 (행 폭이 바뀌거나 칩이 바뀔 때)"""
                 w = r1.winfo_width() if e is None else e.width
                 if w <= 1: return
+                if e is not None and lay_tick("bench_fit"): return
                 gt_ = gap_lbl.cget("text"); used = sc_lbl.winfo_reqwidth() + SP8
                 if not gt_: gap_lbl.pack_forget()
                 elif w - used - gap_lbl.winfo_reqwidth() - SP8 >= name_w:
@@ -7877,7 +8069,7 @@ def main():
                     used += gap_lbl.winfo_reqwidth() + SP8
                 else:
                     if gap_lbl.pack_info().get("in") is not r2 if gap_lbl.winfo_manager() else True: gap_lbl.pack_forget(); gap_lbl.pack(in_=r2, side="right", pady=(px(2), 0))
-                cfg(bl_, wraplength=max(px(56), w - used), justify="left")
+                cfg(bl_, justify="left"); set_wrap(bl_, w - used, "bench_fit", lo=px(56))
             r1.bind("<Configure>", _fit_row); ben_fit[k] = _fit_row
             cvth = tk.Canvas(sc, height=px(20), bg=C["card"], highlightthickness=0)
             cvth.pack(fill="x")
@@ -8643,6 +8835,7 @@ def main():
         """본문 폭이 바뀌면: 페이지마다 가운데 맞춤 padx 를 다시 재고(바뀐 것만 pack_configure), 열 쌓기 규칙(stack_rules)을 돌리고,
         상태줄 안내 글 길이와 토스트 폭을 맞춘다. 오늘만 dirty 로 표시 (80ms 뒤 한 번 다시 그림)"""
         if e.widget is not body or e.width == body_w[0]: return
+        if lay_tick("body_resize"): return
         w = e.width; body_w[0] = w
         for name in list(page_pads):
             pad_ = page_padx(name, w)
@@ -9907,6 +10100,9 @@ if __name__ == "__main__":
         assert latest_note(_cdn)[0] == "2026-09-18" and latest_note(_cdn, "2026-09-17") == (None, None) and latest_note({"coach": {}}) == (None, None)
         TRAINER["note"] = "첫 판 전에 손 풀기"; assert coach_for_day({"coach": {}}, "2026-09-22", today="2026-09-22") == ("메모", "첫 판 전에 손 풀기") and coach_for_day({"coach": {}}, "2026-09-23", today="2026-09-22") is None; TRAINER["note"] = ""
         trainer_clear(_ac); bump_ver()
+        _sb = stall_block("  File \"x.py\", line 1, in f\n    pass", 7.4, ["tick:1", "refresh:2"], when=datetime(2026, 9, 28, 10, 2, 15))
+        assert _sb.startswith("\n[2026-09-28 10:02:15] stall 7s — main thread stack:\n  File \"x.py\"") and _sb.endswith("    pass\n  last after callbacks: tick:1 > refresh:2\n"), _sb
+        assert stall_block("", 6.0, when=datetime(2026, 9, 28)).count("\n") == 3 and "last after" not in stall_block("s\n", 6, [], when=datetime(2026, 9, 28))
         print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK · v7.3 coach-note OK · v7.4 cal-coach OK · v7.5 adaptive OK · v7.6 sync OK · v8 shell OK")
         sys.exit(0)
     main()
