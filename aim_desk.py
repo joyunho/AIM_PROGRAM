@@ -1192,6 +1192,7 @@ def log_line(msg: str):
 
 # ── v8.0.1 멈춤 감시 — Tk 메인 스레드가 3초 넘게(v8.0.2 · 윈도우는 5초에 '(응답 없음)') after 콜백을 못 돌리면 그 순간의 메인 스레드 스택을 로그에 남긴다 ──
 STALL_AFTER_S, STALL_EVERY_S, STALL_HB_MS = 3.0, 30.0, 1000
+APP_VERSION = "9.0"                   # 시작 로그 한 줄에 (머리 주석의 버전과 같이 올린다)
 SLOW_CB_S = 1.5                       # v8.0.2 — after 콜백 하나가 이보다 오래 걸리면 'slow callback' 한 줄
 
 def slow_cb_line(name: str, seconds: float) -> str:
@@ -9253,7 +9254,7 @@ def main():
             root.after(2100, lambda: show_toast(f"다른 폴더에도 기록이 있습니다 ({fmt_stray(_stray[0])}) — 설정 → 기록 파일에서 합칠 수 있어요"))
     root.after(300, tick)
     root.after(450, refresh)
-    log_line(f"start ok {time.monotonic() - _t_start:.1f}s — v8.0.2 · {sys.platform} · scale {UI_SCALE[0]}")     # v8.0.2 — 켤 때마다 한 줄 (멈추면 이 줄 다음에 stall/slow 가 온다)
+    log_line(f"start ok {time.monotonic() - _t_start:.1f}s — v{APP_VERSION} · {GAME['key']} · {sys.platform} · scale {UI_SCALE[0]}")     # v8.0.2 — 켤 때마다 한 줄 (멈추면 이 줄 다음에 stall/slow 가 온다)
     def on_close():
         remember_seq_pos(); remember_bcast()
         if cur_plays(): save_report_today()                 # 중간에 닫아도 오늘 판이 있으면 기록은 남긴다
@@ -10345,6 +10346,7 @@ if __name__ == "__main__":
         assert kovaaks_running() is True if sys.platform != "win32" else isinstance(kovaaks_running(), bool)
         assert slow_cb_line("tick:8931", 2.34) == "slow callback tick:8931 2.3s"
         assert STALL_AFTER_S < 5.0 and SLOW_CB_S < STALL_AFTER_S                       # 윈도우는 5초에 (응답 없음)
+        assert __doc__.splitlines()[1].startswith(f"에임 데스크 v{APP_VERSION} ")                 # 머리 주석과 시작 로그의 버전이 같다
         # ── v9.0: 게임 프로필 — 오버워치 2 로 바꿨다가 발로란트로 되돌리면 v8 과 같은 값 ──
         _snap = (json.dumps(STAGES, ensure_ascii=False), COACH_SYSTEM, tuple(COACH_SECTIONS), list(VAL_ORDER), dict(VAL_TIER_KO), list(PROBE), list(CYCLE), dict(DTYPE_SHORT), dict(WHY_KO), SYNC_REPO_DEFAULT, json.dumps(blank_day()["val"], sort_keys=True))
         assert GAME["key"] == "valorant" and game_default({}) in GAMES and game_default({"game": "ow2"}) == "ow2" and game_default({"game": "x"}) in ("valorant", "ow2")
