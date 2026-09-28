@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-에임 데스크 v8.0.1 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
+에임 데스크 v8.0.2 — 코박스 자동 기록 + 3초 판정 + 발로란트 루틴 + 자동 진행 + 트레이너 루프 + 매일 올리는 시리즈(업로드 팩 · 방송창 · 단계 사다리)
 · stats 폴더 2초 감시: 판 수/점수/신기록 실시간 자동
 · 프로브(첫 판) 지수, 볼테익 동일 수식 에너지·랭크
 · 루틴 실행 시 오늘 칠 시나리오 전체 순서창 (진행 자동 체크)
@@ -49,6 +49,9 @@
 · v8.0: 계획/성장/벤치/기록 재구성 — 계획(달력 · 이번 주 줄 · 코치 노트 · 다섯 단계 · 이 앱이 하는 일) · 성장(타일 두 장 + 곡선 카드, chart_frame 빈 상태 문장) · 벤치(점수 카드 · 졸업 카드 · 조언 콜아웃 · 9갈래 카드) · 기록(최근 14일 표 12칸 · 시작 대비 표 · 상세 카드, 죽음 열 없음)
 · v8.0.1: 멈춤 감시 + 레이아웃 방어 — 메인 스레드가 6초 넘게 멈추면 aim_desk.log 에 스택(stall_block) · <Configure>→wraplength 는 6px 문턱 + 위젯당 초당 30번(set_wrap) ·
   1초에 400번 넘는 레이아웃 폭풍은 로그 한 줄 뒤 2초 정지(lay_tick) · 촘촘함 판단은 body <Configure> 높이 하나로(body_h) · ! 배지 pack/forget 은 60ms 뒤 · VScroll 은 값이 바뀔 때만 · tasklist 는 스레드에서
+· v8.0.2: 코박스 확인(kovaaks_running)을 tasklist(외부 프로세스 · 최대 5초 · WMI 가 막히면 종료도 안 됨) 대신 kernel32 Toolhelp32 스냅샷(수 ms)으로 —
+  메인 스레드가 외부 프로세스를 기다리는 자리가 사라진다 (스냅샷이 안 되면 tasklist 는 스레드에서, 마지막 값만 쓴다) · after 콜백이 메인 스레드를 1.5초 넘게 붙잡으면
+  aim_desk.log 에 'slow callback' 한 줄 · 멈춤 감시 문턱 6초 → 3초 · 켤 때마다 'start ok Ns' 한 줄(창이 뜨기까지 걸린 시간)
 · 실행: python aim_desk.py  (파이썬 3.9+, 추가 설치 없음)
 """
 from __future__ import annotations
@@ -1182,8 +1185,13 @@ def log_line(msg: str):
     except OSError:
         pass
 
-# ── v8.0.1 멈춤 감시 — Tk 메인 스레드가 6초 넘게 after 콜백을 못 돌리면(창 제목 '(응답 없음)') 그 순간의 메인 스레드 스택을 로그에 남긴다 ──
-STALL_AFTER_S, STALL_EVERY_S, STALL_HB_MS = 6.0, 30.0, 1000
+# ── v8.0.1 멈춤 감시 — Tk 메인 스레드가 3초 넘게(v8.0.2 · 윈도우는 5초에 '(응답 없음)') after 콜백을 못 돌리면 그 순간의 메인 스레드 스택을 로그에 남긴다 ──
+STALL_AFTER_S, STALL_EVERY_S, STALL_HB_MS = 3.0, 30.0, 1000
+SLOW_CB_S = 1.5                       # v8.0.2 — after 콜백 하나가 이보다 오래 걸리면 'slow callback' 한 줄
+
+def slow_cb_line(name: str, seconds: float) -> str:
+    """'slow callback tick:8931 2.3s' — 순수 함수 (--selftest)"""
+    return f"slow callback {name} {seconds:.1f}s"
 def stall_block(stack_text: str, seconds: float, recent=(), when=None) -> str:
     """로그 한 덩어리 — '[시각] stall Ns — main thread stack:' + 스택 + (있으면) 마지막 after 콜백 이름들. 순수 함수 (--selftest)"""
     when = when or datetime.now()
@@ -1194,7 +1202,7 @@ def stall_block(stack_text: str, seconds: float, recent=(), when=None) -> str:
 
 def start_stall_watch(root):
     """main() 이 root 를 만든 직후 부른다 — root.after 심장박동(1초) + 데몬 스레드(2초마다 확인). 스레드는 Tk 를 절대 건드리지 않고 파일에만 쓴다.
-    한 멈춤에 한 번, 계속 멈춰 있으면 30초마다 다시. root.after 를 얇게 감싸 마지막 콜백 이름 5개를 같이 남긴다"""
+    한 멈춤에 한 번, 계속 멈춰 있으면 30초마다 다시. root.after 를 얇게 감싸 마지막 콜백 이름 5개를 같이 남기고, SLOW_CB_S 를 넘긴 콜백은 한 줄씩 적는다 (v8.0.2)"""
     import threading, collections
     hb = [time.monotonic()]; recent = collections.deque(maxlen=5); main_id = threading.get_ident()
     _after = root.after
@@ -1202,7 +1210,11 @@ def start_stall_watch(root):
         if func is None or ms == "idle": return _after(ms, func, *args)
         name = f"{getattr(func, '__qualname__', None) or getattr(func, '__name__', None) or type(func).__name__}:{getattr(getattr(func, '__code__', None), 'co_firstlineno', '?')}"
         def run(*a, _f=func, _n=name):
-            recent.append(_n); return _f(*a)
+            recent.append(_n); t0_ = time.monotonic()
+            try: return _f(*a)
+            finally:
+                dt_ = time.monotonic() - t0_
+                if dt_ >= SLOW_CB_S and hb[0] <= t0_: log_line(slow_cb_line(_n, dt_))   # v8.0.2 — 그동안 심장박동이 없었다 = 메인 스레드를 붙잡았다 (대화상자처럼 이벤트가 도는 동안은 아님)
         run.__qualname__ = getattr(func, "__qualname__", "after"); return _after(ms, run, *args)
     root.after = after
     def beat():
@@ -4464,17 +4476,59 @@ def focus_kovaaks() -> bool:
     except Exception:
         log_exc("focus_kovaaks"); return False
 
-def kovaaks_running() -> bool:
-    """코박스 프로세스가 떠 있는지 (Windows tasklist). 판단 불가면 True — 자동 진행을 괜히 막지 않기 위해"""
-    if sys.platform != "win32": return True
+def _proc_names_win():
+    """지금 떠 있는 프로세스의 exe 이름들(소문자) — kernel32 Toolhelp32 스냅샷. 외부 프로세스 없이 수 ms, 메인 스레드에서 불러도 안전.
+    윈도우가 아니거나 실패하면 None (v8.0.2)"""
+    if sys.platform != "win32": return None
     try:
-        import subprocess
-        r = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {KOVAAKS_EXE}", "/NH"],
-                           capture_output=True, timeout=5,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        return KOVAAKS_EXE.lower().encode() in r.stdout.lower()
-    except Exception:
-        return True
+        import ctypes, ctypes.wintypes as wt
+        class PE32W(ctypes.Structure):
+            _fields_ = [("dwSize", wt.DWORD), ("cntUsage", wt.DWORD), ("th32ProcessID", wt.DWORD),
+                        ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wt.DWORD),
+                        ("cntThreads", wt.DWORD), ("th32ParentProcessID", wt.DWORD), ("pcPriClassBase", wt.LONG),
+                        ("dwFlags", wt.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
+        k32 = ctypes.windll.kernel32
+        k32.CreateToolhelp32Snapshot.restype = wt.HANDLE; k32.CreateToolhelp32Snapshot.argtypes = [wt.DWORD, wt.DWORD]
+        k32.Process32FirstW.argtypes = k32.Process32NextW.argtypes = [wt.HANDLE, ctypes.POINTER(PE32W)]
+        k32.Process32FirstW.restype = k32.Process32NextW.restype = wt.BOOL
+        k32.CloseHandle.argtypes = [wt.HANDLE]
+        snap = k32.CreateToolhelp32Snapshot(0x2, 0)                      # TH32CS_SNAPPROCESS
+        if not snap or snap == ctypes.c_void_p(-1).value: return None    # INVALID_HANDLE_VALUE
+        try:
+            e = PE32W(); e.dwSize = ctypes.sizeof(PE32W); out = set()
+            if not k32.Process32FirstW(snap, ctypes.byref(e)): return None
+            while True:
+                out.add(e.szExeFile.lower())
+                if not k32.Process32NextW(snap, ctypes.byref(e)): break
+            return out
+        finally: k32.CloseHandle(snap)
+    except Exception: return None
+
+_KV_STATE = {"v": True, "t": 0.0, "busy": False}       # tasklist 폴백의 마지막 답 · 시각 · 스레드가 도는 중인지 (v8.0.2)
+def _kovaaks_tasklist_cached() -> bool:
+    """tasklist 폴백 — 메인 스레드에선 절대 기다리지 않는다: 2초에 한 번 스레드로 물어보고, 답이 오기 전엔 마지막 값(처음엔 True)"""
+    import threading
+    st = _KV_STATE
+    if time.monotonic() - st["t"] >= 2.0 and not st["busy"]:
+        st["busy"] = True
+        def work():
+            try:
+                import subprocess
+                r = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {KOVAAKS_EXE}", "/NH"], capture_output=True, timeout=5,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                st["v"] = KOVAAKS_EXE.lower().encode() in r.stdout.lower()
+            except Exception: st["v"] = True
+            finally: st["t"] = time.monotonic(); st["busy"] = False
+        threading.Thread(target=work, name="aimdesk-tasklist", daemon=True).start()
+    return st["v"]
+
+def kovaaks_running() -> bool:
+    """코박스 프로세스가 떠 있는지. 판단 불가면 True — 자동 진행을 괜히 막지 않기 위해.
+    v8.0.2: Toolhelp32 스냅샷(수 ms) → 안 되면 tasklist 를 스레드에서 (메인 스레드는 어떤 경우에도 외부 프로세스를 기다리지 않는다 — '(응답 없음)' 방지)"""
+    if sys.platform != "win32": return True
+    names = _proc_names_win()
+    if names is not None: return KOVAAKS_EXE.lower() in names
+    return _kovaaks_tasklist_cached()
 
 ICON_B64 = "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"
 # ══════════════════ GUI (v2 — 커스텀 위젯) ══════════════════
@@ -4584,6 +4638,7 @@ def main():
             try: ctypes.windll.shcore.SetProcessDpiAwareness(1)
             except Exception: ctypes.windll.user32.SetProcessDPIAware()
         except Exception: pass
+    _t_start = time.monotonic()
     root = tk.Tk(); root.withdraw()
     root._aimdesk_lock = lock
     if not os.environ.get("AIMDESK_NO_MAINLOOP"): start_stall_watch(root)      # v8.0.1 — '(응답 없음)' 이 뜨면 aim_desk.log 에 메인 스레드 스택
@@ -7728,26 +7783,6 @@ def main():
     # 상태 라벨의 자리 잡기 — 카드가 다 만들어진 뒤 한 번 _vis: 빈 글이면 숨기고, 다시 쓸 때 원래 자리(다음 형제 앞)로 돌아온다 (§1.5)
     for _l in (coach_lbl, ai_lbl, sync_lbl, val_lbl, trainer_lbl, fstat, adapt_lbl): _vis(_l)
 
-    pl_chk = [None]
-    def _pl_check_kovaaks(msg):
-        """코박스가 켜진 채로 플레이리스트를 썼는지 — kovaaks_running(tasklist) 을 스레드에서 돌리고 250ms 마다 결과를 본다 (Tk 는 메인 스레드만)"""
-        import queue as _q, threading as _th
-        q_ = _q.Queue(); pl_chk[0] = q_
-        def work():
-            try: q_.put(bool(kovaaks_running()))
-            except Exception: q_.put(False)
-        _th.Thread(target=work, name="aimdesk-tasklist", daemon=True).start()
-        def poll(n_=0):
-            if pl_chk[0] is not q_: return                                  # 그 사이 다시 설치했다 — 옛 답은 버린다
-            try: r_ = q_.get_nowait()
-            except _q.Empty:
-                if n_ < 40: root.after(250, lambda: poll(n_ + 1))
-                return
-            try:
-                if r_ and pl_lbl.cget("text") == msg:
-                    pl_lbl.configure(text=msg + "\n⚠ 코박스가 켜진 채로 설치됨 — 목록에 안 보이면 코박스를 껐다 켜세요", fg=C["gold"])
-            except tk.TclError: pass
-        root.after(250, poll)
     def install_playlists():
         sd = data.get("stats_dir")
         if not sd:
@@ -7757,7 +7792,8 @@ def main():
             msg = f"플레이리스트 {n}개 설치 ✓ → 코박스 샌드박스 브라우저 네 번째 탭 '로컬 재생 목록'에 AIMDESK Day · Probe · Bench"
             if PL_STATE["tpl"]: msg += f" (파일 형식은 코박스가 만든 '{PL_STATE['tpl']}' 을 따름)"
             pl_lbl.configure(text=msg, fg=C["ok"])
-            if wrote: _pl_check_kovaaks(msg)                             # v8.0.1 — tasklist 는 5초까지 걸릴 수 있다: 메인 스레드 밖에서 묻고 답이 오면 ⚠ 한 줄
+            if wrote and kovaaks_running():                              # v8.0.2 — Toolhelp32 스냅샷(수 ms): 켜진 채로 새로 썼으면 ⚠ 한 줄
+                pl_lbl.configure(text=msg + "\n⚠ 코박스가 켜진 채로 설치됨 — 목록에 안 보이면 코박스를 껐다 켜세요", fg=C["gold"])
         else: pl_lbl.configure(text="설치 실패 — Playlists 폴더를 못 찾았어요 (stats 폴더가 …\\FPSAimTrainer\\FPSAimTrainer\\stats 인지 확인)", fg=C["val"])
         pl_open_btn.set_enabled(bool(PL_STATE.get("dir")))
     def sync_stats_lbl():
@@ -9016,6 +9052,7 @@ def main():
             root.after(2100, lambda: show_toast(f"다른 폴더에도 기록이 있습니다 ({fmt_stray(_stray[0])}) — 설정 → 기록 파일에서 합칠 수 있어요"))
     root.after(300, tick)
     root.after(450, refresh)
+    log_line(f"start ok {time.monotonic() - _t_start:.1f}s — v8.0.2 · {sys.platform} · scale {UI_SCALE[0]}")     # v8.0.2 — 켤 때마다 한 줄 (멈추면 이 줄 다음에 stall/slow 가 온다)
     def on_close():
         remember_seq_pos(); remember_bcast()
         if cur_plays(): save_report_today()                 # 중간에 닫아도 오늘 판이 있으면 기록은 남긴다
@@ -10103,6 +10140,10 @@ if __name__ == "__main__":
         _sb = stall_block("  File \"x.py\", line 1, in f\n    pass", 7.4, ["tick:1", "refresh:2"], when=datetime(2026, 9, 28, 10, 2, 15))
         assert _sb.startswith("\n[2026-09-28 10:02:15] stall 7s — main thread stack:\n  File \"x.py\"") and _sb.endswith("    pass\n  last after callbacks: tick:1 > refresh:2\n"), _sb
         assert stall_block("", 6.0, when=datetime(2026, 9, 28)).count("\n") == 3 and "last after" not in stall_block("s\n", 6, [], when=datetime(2026, 9, 28))
-        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK · v7.3 coach-note OK · v7.4 cal-coach OK · v7.5 adaptive OK · v7.6 sync OK · v8 shell OK")
+        _pn = _proc_names_win(); assert (_pn is None) if sys.platform != "win32" else isinstance(_pn, (set, type(None))), _pn
+        assert kovaaks_running() is True if sys.platform != "win32" else isinstance(kovaaks_running(), bool)
+        assert slow_cb_line("tick:8931", 2.34) == "slow callback tick:8931 2.3s"
+        assert STALL_AFTER_S < 5.0 and SLOW_CB_S < STALL_AFTER_S                       # 윈도우는 5초에 (응답 없음)
+        print("selftest OK: seed energy =", e, "Silver · scan merge OK · deeplink OK · recent_stats OK · v3 base OK · v3 info OK · v3 coach OK · v3 log OK · v3 should OK · v3 ui OK · v3.1 key OK · v3.2 growth OK · v3.4 trainer OK · v4.0 verdict OK · v4.2 day-cutoff OK · v5.0 baseline OK · v6.0 tiers OK · v6.0 episode OK · v6.0 valo OK · v6.0 upload-pack OK · v6.0 thumb OK · v6.0 story OK · v6.0 hysteresis OK · v6.0 stale-pl OK · v6.0 stage OK · v6.0 week-pack OK · v6.3 theme OK · v6.3 coach OK · v7 sentence OK · v7.1 icon OK · v7.2 out-dir OK · v7.2 monday-rest OK · v7.3 coach-note OK · v7.4 cal-coach OK · v7.5 adaptive OK · v7.6 sync OK · v8 shell OK · v8.0.2 kovaaks OK")
         sys.exit(0)
     main()

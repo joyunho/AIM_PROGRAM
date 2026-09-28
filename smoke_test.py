@@ -187,6 +187,7 @@ al_ = D["seq_win"]["auto_lbl"]; check("start instruction (auto_lbl, gold) names 
 check("key line: read from KovaaK's ini", D["seq_win"]["key_lbl"].cget("text").startswith("코박스 설정에서 읽음") and "F10" in D["seq_win"]["key_lbl"].cget("text"))
 check("tab guide drawn before first play", bool(D["seq_win"]["guide"].winfo_manager()) and len(D["seq_win"]["guide"].find_all()) >= 9)
 check("install label points at the 4th tab", D["pl_lbl"].cget("text").startswith("플레이리스트 3개 설치 ✓ → 코박스 샌드박스 브라우저 네 번째 탭"), D["pl_lbl"].cget("text")[:80])
+check("v8.0.2: running-KovaaK's note is written in the same call (no tasklist thread)", "⚠ 코박스가 켜진 채로 설치됨" in D["pl_lbl"].cget("text"), D["pl_lbl"].cget("text")[-60:])
 def shot0(name):
     if os.environ.get("AIMDESK_SHOTS"):
         import subprocess; Path(os.environ["AIMDESK_SHOTS"]).mkdir(parents=True, exist_ok=True)
@@ -567,7 +568,8 @@ check("auto_mode persisted", saved.get("auto_mode") == "key")
 check("on_close wrote the bench-day report", (TMP / "기록" / "에임데스크_2026-09-05.txt").exists() and "벤치마크" in (TMP / "기록" / "에임데스크_2026-09-05.txt").read_text(encoding="utf-8-sig"))
 check("trainer targets survive in the saved file", saved.get("trainer", {}).get("targets") == {"ground": 3000, "pasu": 900})
 log = (TMP / "aim_desk.log").read_text() if (TMP / "aim_desk.log").exists() else ""
-check("no exceptions logged", log.strip() == "", log[-600:])
+_log_rest = "\n".join(l for l in log.splitlines() if "] start ok " not in l)          # v8.0.2: 켤 때마다 남는 한 줄은 오류가 아니다
+check("no exceptions logged (start ok line aside)", _log_rest.strip() == "", _log_rest[-600:])
 n_ok = sum(1 for _, ok in results if ok)
 print(f"SUMMARY: {n_ok} / {len(results)} passed")
 sys.exit(0 if n_ok == len(results) else 1)

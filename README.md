@@ -31,7 +31,7 @@ git clone https://github.com/joyunho/AIM_PROGRAM.git && cd AIM_PROGRAM && make_e
 | `aim_desk.py` | 프로그램 전체 (파이썬 3.9+, 표준 라이브러리만 사용) |
 | `make_exe.bat` | 더블클릭 → PyInstaller로 `AimDesk.exe` 생성 + 바탕화면 바로가기 |
 | `app.ico` | exe · 바탕화면 아이콘 (v7.1 — 금색 A 모노그램 + 조준점, 256~16px 6장). 창 아이콘(`ICON_B64`)도 같은 그림 |
-| `smoke_test.py` | Xvfb 헤드리스 GUI 스모크 테스트 214개 (exe 에 포함되지 않음). 동시에 여러 개 돌리려면 `AIMDESK_LOCK_PORT` 를 달리 |
+| `smoke_test.py` | Xvfb 헤드리스 GUI 스모크 테스트 215개 (exe 에 포함되지 않음). 동시에 여러 개 돌리려면 `AIMDESK_LOCK_PORT` 를 달리 |
 | `.github/workflows/build-exe.yml` | main 푸시 시 exe 자동 빌드 → `latest` 릴리스에 업로드, Linux 에서 GUI 스모크 테스트 |
 | `기록/에임데스크_YYYY-MM-DD.txt` | (실행하면 생김) 그날 기록 텍스트 — 트레이너에게 보내는 파일 |
 | `기록/EP014_YYYY-MM-DD_업로드.txt` | 그날 영상의 제목 후보 3 · 설명 · 명장면(mm:ss) · 챕터 · 태그 · 고정 댓글 — 복사해서 붙이면 끝 |
@@ -435,9 +435,9 @@ PC방·친구 PC에서도 **exe 만 받아 토큰을 넣으면** 기록이 이�
 3. 설정 → 코박스의 **플레이리스트 폴더 열기**로 `…\FPSAimTrainer\FPSAimTrainer\Saved\SaveGames\Playlists` 에 `AIMDESK Day.json` 등 3개가 있는지 확인. 코박스에서 플레이리스트를 하나 직접 만들어 저장하면 같은 폴더에 파일이 생기고, 그 뒤 "플레이리스트 재설치"를 누르면 앱이 그 파일의 형식(인코딩·키)을 그대로 따라 다시 씁니다.
 4. 그래도 안 되면 순서창의 **딥링크 방식** 토글을 켜세요 — 플레이리스트 없이 앱이 매 판 시나리오를 직접 보냅니다 (매 판 Steam 이 끼어들어 약간 렉이 있을 수 있음).
 
-## 멈추면 (v8.0.1)
+## 멈추면 (v8.0.1 · v8.0.2)
 
-창 제목에 `(응답 없음)` 이 뜨면 앱이 6초 넘게 멈춘 것입니다. v8.0.1 부터는 그 순간 메인 스레드가 어디에 있었는지를 감시 스레드가 `aim_desk.log`(`aim_desk_data.json` 옆)에 `stall Ns — main thread stack:` 블록으로 남깁니다 — 그 파일을 보내 주면 원인을 바로 찾을 수 있습니다. 같이 넣은 안전장치: 줄바꿈 폭 재계산·열 쌓기·스크롤 썸 같은 배치 이벤트가 1초에 400번을 넘으면 2초 쉬고 `layout storm:` 한 줄을 남기고, 코박스 실행 여부 확인(`tasklist`, 최대 5초)은 메인 스레드 밖에서 돕니다. 방송창 없이 켜서 갈라 보려면 exe 옆에 `.bat` 하나: `set AIMDESK_NO_BCAST=1` 다음 줄 `AimDesk.exe`.
+창 제목에 `(응답 없음)` 이 뜨면 앱이 5초 넘게 멈춘 것입니다. v8.0.1 부터는 그 순간 메인 스레드가 어디에 있었는지를 감시 스레드가 `aim_desk.log`(`aim_desk_data.json` 옆)에 `stall Ns — main thread stack:` 블록으로 남깁니다 (v8.0.2 부터 문턱 3초) — 그 파일을 보내 주면 원인을 바로 찾을 수 있습니다. v8.0.2 는 켤 때마다 `start ok Ns` 한 줄(창이 뜨기까지 걸린 시간)을, 메인 스레드를 1.5초 넘게 붙잡은 예약 작업이 있으면 `slow callback …` 한 줄을 같은 파일에 남깁니다. 같이 넣은 안전장치: 줄바꿈 폭 재계산·열 쌓기·스크롤 썸 같은 배치 이벤트가 1초에 400번을 넘으면 2초 쉬고 `layout storm:` 한 줄을 남기고, 코박스가 켜져 있는지는 v8.0.2 부터 `tasklist`(외부 프로세스 · 최대 5초 · 드물게 영영 안 끝남) 대신 윈도우 커널의 프로세스 스냅샷(Toolhelp32 · 수 ms)으로 확인하므로 메인 스레드가 외부 프로세스를 기다리는 자리가 없습니다. 방송창 없이 켜서 갈라 보려면 exe 옆에 `.bat` 하나: `set AIMDESK_NO_BCAST=1` 다음 줄 `AimDesk.exe`.
 
 ## 알아둘 것
 
